@@ -108,7 +108,7 @@ def query_vision(jpeg_bytes: bytes, prompt: str) -> str:
         return "google-genai library not installed in Python environment."
 
     client = genai.Client(api_key=api_key)
-    
+
     # Gather active Hyprland desktop context
     hypr_ctx = get_hyprland_context()
     context_prefix = ""
@@ -160,7 +160,7 @@ def _watch_loop(topic: str, interval: int = 4):
     print(f"[Kurek Vision Watcher] Started observing topic: '{topic}'", flush=True)
     xai_key = get_xai_key()
     tts = create_tts_player({"tts_engine": "xai", "tts_voice": "sal", "xai_api_key": xai_key})
-    
+
     tts.speak(f"Watching your screen now for {topic}. I will chime in when I notice something.")
 
     while _WATCH_RUNNING:

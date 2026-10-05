@@ -688,7 +688,7 @@ def query_deepseek(
         if not key:
             print("[DeepSeek] ⚠️ No DEEPSEEK_API_KEY found in .env or environment")
             return None
-        
+
         req_messages = []
         if messages:
             req_messages = list(messages)

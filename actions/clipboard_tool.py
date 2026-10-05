@@ -288,7 +288,7 @@ def manage_clipboard(parameters: dict, player=None, session_memory=None) -> str:
                 _GLOBAL_STORE.add_clip(live)
                 return f"Clipboard content: {live}"
             return "Your clipboard is currently empty."
-        
+
         status = " (pinned)" if clip.get("pinned") else ""
         title_str = f" [{clip['title']}]" if clip.get("title") else ""
         return f"Latest clipboard{title_str}{status}: {clip['text']}"
@@ -315,7 +315,7 @@ def manage_clipboard(parameters: dict, player=None, session_memory=None) -> str:
         pins = _GLOBAL_STORE.list_pinned()
         if not pins:
             return "You do not have any pinned snippets yet. You can say 'pin my clipboard as [title]' to pin any snippet."
-        
+
         lines = ["Pinned clips:"]
         for p in pins:
             title_part = f"[{p['title']}] " if p.get("title") else ""

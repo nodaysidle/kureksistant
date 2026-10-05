@@ -75,7 +75,7 @@ def _normalize(raw: str) -> str:
         if alias_key in key or key in alias_key:
             return os_map.get(_SYSTEM, raw)
 
-    return raw  
+    return raw
 
 def _launch_windows(app_name: str) -> bool:
 

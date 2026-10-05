@@ -8,7 +8,7 @@ def weather_action(
     session_memory=None,
 ) -> str:
     city     = parameters.get("city")
-    when     = parameters.get("time", "today")  
+    when     = parameters.get("time", "today")
 
     if not city or not isinstance(city, str) or not city.strip():
         msg = "Sir, the city is missing for the weather report."

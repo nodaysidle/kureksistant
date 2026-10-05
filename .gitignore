@@ -53,3 +53,10 @@ desktop.ini
 logs/
 downloads/
 screenshots/
+
+# polishpy backups
+.polishpy-backup/
+
+# Local workspace & scratch
+workspace/
+

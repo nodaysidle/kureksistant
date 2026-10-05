@@ -166,7 +166,7 @@ def web_search(parameters: dict, player=None, session_memory=None) -> str:
     print(f"[WebSearch] 🌐 Searching web for: '{query}'", flush=True)
 
     cleaned = _clean_query(query)
-    
+
     # 1. Primary: DuckDuckGo text search with cleaned query
     results = _ddg_text_search(cleaned, max_results=6)
 

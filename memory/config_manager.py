@@ -62,7 +62,9 @@ def load_api_keys() -> dict:
     for k, v in env_data.items():
         data[k] = v
         data[k.lower()] = v
-    for k in ["DEEPSEEK_API_KEY", "DEEPGRAM_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY"]:
+        if k == "TYPESAFE_API_KEY" and k not in os.environ:
+            os.environ[k] = v
+    for k in ["DEEPSEEK_API_KEY", "DEEPGRAM_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "TYPESAFE_API_KEY"]:
         if k in os.environ and os.environ[k]:
             data[k] = os.environ[k]
             data[k.lower()] = os.environ[k]
@@ -85,6 +87,11 @@ def get_xai_key() -> str | None:
     import os
     keys = load_api_keys()
     return keys.get("XAI_API_KEY") or keys.get("xai_api_key") or os.environ.get("XAI_API_KEY")
+
+def get_typesafe_key() -> str | None:
+    import os
+    keys = load_api_keys()
+    return keys.get("TYPESAFE_API_KEY") or keys.get("typesafe_api_key") or os.environ.get("TYPESAFE_API_KEY")
 
 def is_configured() -> bool:
     return bool(get_deepseek_key() or get_gemini_key())

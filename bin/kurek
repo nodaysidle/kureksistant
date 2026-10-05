@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Kurek CLI / App Launcher for Arch Linux / Omarchy
 
-DIR="/home/arch/dev/nodaysidle/kurekizmo"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ICON="/home/arch/.local/share/icons/kurek.png"
 DAEMON_URL="http://127.0.0.1:8790"
 

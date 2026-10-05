@@ -90,7 +90,7 @@ def _open_app(app_name: str) -> bool:
             time.sleep(2.5)
             return result.returncode == 0
 
-        else: 
+        else:
             launched = False
             for launcher in [
                 ["gtk-launch", app_name.lower()],
@@ -118,7 +118,7 @@ def _open_browser_url(url: str) -> bool:
     import webbrowser
     try:
         webbrowser.open(url)
-        time.sleep(4.0) 
+        time.sleep(4.0)
         return True
     except Exception as e:
         print(f"[SendMessage] ⚠️ Could not open browser: {e}")
@@ -174,7 +174,7 @@ def _send_instagram(receiver: str, message: str) -> str:
 
     pyautogui.press("down")
     time.sleep(0.3)
-    pyautogui.press("enter")   
+    pyautogui.press("enter")
     time.sleep(0.4)
 
     for _ in range(4):

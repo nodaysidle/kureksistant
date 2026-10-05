@@ -658,7 +658,7 @@ def _process_video(path: Path, action: str, params: dict, speak=None) -> str:
             return f"Extract frame failed: {e}"
 
     if action == "compress":
-        crf = int(params.get("quality", 28))  
+        crf = int(params.get("quality", 28))
         if not _ffmpeg_available():
             return "ffmpeg not found."
         out = _output_path(path, f"compressed_crf{crf}", ".mp4")
@@ -815,7 +815,7 @@ def file_processor(parameters: dict, player=None, speak=None) -> str:
         "csv":     lambda p, a, pm, s: _process_data(p, "csv",   a, pm, s),
         "excel":   lambda p, a, pm, s: _process_data(p, "excel", a, pm, s),
         "json":    _process_json,
-        "xml":     lambda p, a, pm, s: _process_json(p, a, pm, s),  
+        "xml":     lambda p, a, pm, s: _process_json(p, a, pm, s),
         "code":    _process_code,
         "audio":   _process_audio,
         "video":   _process_video,

@@ -653,7 +653,7 @@ def _watch_and_shutdown(steam_path: Path, speak=None,
                 speak(f"Download started for {names}. I'll shut down when done.")
             break
     else:
-        return  
+        return
 
     while time.time() < deadline:
         time.sleep(check_interval)
@@ -724,7 +724,7 @@ def _epic_manifests_path() -> Path | None:
         p = Path.home() / "Library" / "Application Support" \
             / "Epic" / "EpicGamesLauncher" / "Data" / "Manifests"
         return p if p.exists() else None
-    return None  
+    return None
 
 
 def _get_epic_games() -> list[dict]:

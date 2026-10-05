@@ -56,7 +56,7 @@ def _get_macos_wifi_interface() -> str:
                         return lines[j].split(":", 1)[1].strip()
     except Exception:
         pass
-    return "en0" 
+    return "en0"
 
 def volume_up():
     if _OS == "Windows":

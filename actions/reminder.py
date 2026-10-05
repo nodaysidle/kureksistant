@@ -45,7 +45,7 @@ def _sanitise(text: str, max_len: int = 200) -> str:
 
 def _write_notify_script(task_name: str, message: str, os_name: str) -> Path:
     script_path = _scripts_dir() / f"{task_name}.py"
-    msg_literal = json.dumps(message)  
+    msg_literal = json.dumps(message)
 
     if os_name == "windows":
         notify_block = f"""
@@ -194,7 +194,7 @@ def _schedule_windows(target_dt: datetime, task_name: str,
         script_path.unlink(missing_ok=True)
         err = (result.stderr or result.stdout).strip()
         print(f"[Reminder] ❌ schtasks: {err}")
-        return ""  
+        return ""
 
     return task_name
 

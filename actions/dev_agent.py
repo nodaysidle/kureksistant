@@ -70,7 +70,7 @@ def _classify_error(output: str) -> str:
 
     if "syntaxerror" in low or "invalid syntax" in low:
         return "syntax_error"
-    
+
     if "cannot import" in low or "importerror" in low:
         return "import_error"
 
@@ -85,7 +85,7 @@ def _classify_error(output: str) -> str:
 
 
 def _has_error(output: str, run_command: str) -> bool:
-    
+
     low = output.lower()
 
     if "timed out" in low:
@@ -520,7 +520,7 @@ def _build_project(
     _open_vscode(project_dir)
 
     last_output   = ""
-    auto_installs = 0  
+    auto_installs = 0
 
     for attempt in range(1, MAX_FIX_ATTEMPTS + 1):
         log(f"Running project (attempt {attempt}/{MAX_FIX_ATTEMPTS})...")

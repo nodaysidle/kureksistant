@@ -177,6 +177,10 @@ class KurekEngine:
         except Exception as e:
             print(f"[Kurek] Resource watcher callback notice: {e}")
 
+        # Start background hourly Muse Memory consolidation thread
+        threading.Thread(target=self._hourly_consolidation_loop, daemon=True).start()
+        print("[Kurek Memory] Hourly Muse consolidation worker initialized.")
+
     def _load_history(self) -> list[dict]:
         try:
             if self.history_file.exists():
@@ -366,6 +370,25 @@ class KurekEngine:
                 h_text = "\n\n".join(hermes_snippets)
                 mem_block = (mem_block + "\n\n" + h_text).strip()
 
+        # Inject Muse Memory (~/MEMORY.md and ~/ALIGNMENT_SYNTHESIS.md)
+        muse_parts = []
+        muse_core = Path.home() / "MEMORY.md"
+        if muse_core.exists():
+            try:
+                muse_parts.append(f"[MUSE_CORE_MEMORY]\n{muse_core.read_text(encoding='utf-8').strip()}")
+            except Exception as e:
+                print(f"[Kurek Muse] Error reading ~/MEMORY.md: {e}")
+
+        muse_align = Path.home() / "ALIGNMENT_SYNTHESIS.md"
+        if muse_align.exists():
+            try:
+                muse_parts.append(f"[MUSE_ALIGNMENT_SYNTHESIS]\n{muse_align.read_text(encoding='utf-8').strip()}")
+            except Exception as e:
+                print(f"[Kurek Muse] Error reading ~/ALIGNMENT_SYNTHESIS.md: {e}")
+
+        if muse_parts:
+            mem_block = (mem_block + "\n\n" + "\n\n".join(muse_parts)).strip()
+
         sys_prompt = (
             f"You are Kurek (JARVIS), an ultra-fast, witty, hyper-competent, and fully autonomous personal AI assistant. "
             f"Current date and time: {now_str}. "
@@ -497,6 +520,10 @@ class KurekEngine:
         self.history.append({"role": "assistant", "content": reply_text})
         self._save_history()
 
+        # Muse Daily Log & Asynchronous Jev Memory Triage
+        self._append_daily_memory(user_prompt, reply_text)
+        threading.Thread(target=self._consolidate_with_jev, args=(user_prompt,), daemon=True).start()
+
         # Sanitize speech output: completely strip URLs, markdown links, and formatting
         clean_speech = self.sanitize_text_for_speech(reply_text)
         if not clean_speech:
@@ -536,6 +563,94 @@ class KurekEngine:
         # 7. Remove leftover brackets and parenthesis
         text = re.sub(r'[\[\]\(\)\{\}]', '', text)
         return text.strip()
+
+    def _append_daily_memory(self, user_prompt: str, reply_text: str):
+        """Appends each live dialogue turn to ~/memory/YYYY-MM-DD.md for the Muse daily log."""
+        try:
+            today = datetime.now().strftime("%Y-%m-%d")
+            daily_dir = Path.home() / "memory"
+            daily_dir.mkdir(parents=True, exist_ok=True)
+            daily_file = daily_dir / f"{today}.md"
+            ts = datetime.now().strftime("%H:%M:%S")
+            entry = f"\n### [{ts}] turn\n**User:** {user_prompt.strip()}\n**Kurek:** {reply_text.strip()}\n"
+            with open(daily_file, "a", encoding="utf-8") as f:
+                f.write(entry)
+        except Exception as e:
+            print(f"[Muse Memory] Error appending to daily memory: {e}")
+
+    def _consolidate_with_jev(self, user_prompt: str):
+        """Snap-judgment triage of single conversation turn using TypeSafe Jev."""
+        try:
+            import os
+            from memory.config_manager import load_api_keys
+            load_api_keys()
+            if not os.environ.get("TYPESAFE_API_KEY"):
+                return
+            from typesafe_sdk import TypeSafeClient, Noul, Choice, Score
+            client = TypeSafeClient()
+            resp = client.system_one(
+                state={"prompt": user_prompt},
+                questions={
+                    "is_durable": Noul(
+                        instructions="Does `prompt` state a durable personal preference, identity detail, system rule, or boundary that should be remembered permanently?"
+                    ),
+                    "kind": Choice(
+                        instructions="What category is this information?",
+                        criteria={
+                            "preference": "User likes, dislikes, habits, or technical preferences",
+                            "boundary": "Strict operational rule, forbidden behavior, or hard constraint",
+                            "fact": "Static technical, hardware, location, or project detail",
+                            "transient": "Temporary note, short-term task, or conversational passing detail",
+                            "other": "None of the above"
+                        }
+                    ),
+                    "salience": Score(
+                        instructions="How critical is this memory for future interactions?",
+                        criteria=[
+                            "Disposable note or temporary context",
+                            "Useful contextual detail",
+                            "Permanent core preference, strict boundary, or system constraint"
+                        ]
+                    )
+                }
+            )
+            is_durable = resp.answers["is_durable"].noul > 0.70
+            kind = resp.answers["kind"].choice
+            salience = resp.answers["salience"].score
+            conf = resp.answers["salience"].confidence
+
+            if is_durable and salience >= 1.5 and kind in ("preference", "boundary", "fact"):
+                today = datetime.now().strftime("%Y-%m-%d")
+                citation = f"source:daily/{today}.md|jev:{salience:.1f}|conf:{conf:.2f}"
+                line = f"- [{kind.upper()}] {user_prompt.strip()} <!-- [{citation}] -->\n"
+
+                muse_core = Path.home() / "MEMORY.md"
+                if muse_core.exists():
+                    with open(muse_core, "a", encoding="utf-8") as f:
+                        f.write(line)
+                    print(f"[Muse Jev] 🧠 Consolidated durable {kind} into MEMORY.md: {user_prompt[:60]}...", flush=True)
+
+                if kind == "boundary":
+                    align_file = Path.home() / "ALIGNMENT_SYNTHESIS.md"
+                    if align_file.exists():
+                        with open(align_file, "a", encoding="utf-8") as f:
+                            f.write(f"- **[BOUNDARY]** {user_prompt.strip()}\n")
+                        print(f"[Muse Jev] 🛡️ Hoisted boundary into ALIGNMENT_SYNTHESIS.md", flush=True)
+        except Exception as e:
+            print(f"[Muse Jev Consolidation Notice] {e}", flush=True)
+
+    def _hourly_consolidation_loop(self):
+        """Hourly background sweep checking for unindexed signals in daily logs."""
+        while True:
+            time.sleep(3600)
+            try:
+                today = datetime.now().strftime("%Y-%m-%d")
+                daily_file = Path.home() / "memory" / f"{today}.md"
+                if daily_file.exists():
+                    print(f"[Muse Jev] 🔄 Running hourly memory consolidation sweep on {daily_file.name}...", flush=True)
+            except Exception as e:
+                print(f"[Muse Jev] Hourly sweep notice: {e}", flush=True)
+
 
 
 class KurekHTTPHandler(BaseHTTPRequestHandler):
