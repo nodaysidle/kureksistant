@@ -417,6 +417,10 @@ class KurekEngine:
             "• screen_vision: visual perception of Alan's monitor and active Hyprland windows. Use action='inspect' when Alan asks what is on his screen, to diagnose compiler errors, review code, or inspect active windows. Use action='start_watch' to continuously watch until told to stop. "
             "• manage_clipboard: persistent Wayland clipboard manager with snippet pinning and recall. Use action='get_latest' when Alan asks what is in his clipboard or to read his clipboard. Use action='pin' with an optional title to pin a snippet (e.g. 'pin my clipboard as Stripe Key'). Use action='list_pinned' to review saved snippets. Use action='copy' to restore a snippet back into the system clipboard so Alan can paste it. "
             "• system_monitor: hardware diagnostics and 5-minute sustained CPU/RAM watcher. Use action='status' when Alan asks how his system resources, CPU, RAM, or temperature are doing, or if the machine is lagging. "
+            "• process_sentinel: watch long-running compile, build, test, or training jobs (cargo, npm, python, rustc, make). Use action='watch' with a process name, command, or PID. When the job finishes, Kurek alerts verbally and sends a notification. "
+            "• draft_to_clipboard: format dictated text into conventional commits, GitHub PR descriptions, issues, docstrings, or markdown notes and copies immediately to the Wayland system clipboard (wl-copy) for instant pasting with Ctrl+V. "
+            "• workstation_radar: parallel health scan across all 70+ repositories in ~/Projects and ~/dev/nodaysidle. Use action='actionable' to report dirty working trees, untracked files, and unpushed commits ahead of upstream. "
+            "• dream_tool: executes the Muse Memory reflection cycle. Synthesizes today's daily log into an atmospheric dream journal (~/dreams/YYYY-MM-DD.md) and updates standing guidance in ~/ALIGNMENT_SYNTHESIS.md. "
             "Always invoke the appropriate tool when asked to control the computer, browse, save or write files, change settings, or remember details. "
             "CONVERSATION & OPINIONS: "
             "• When Alan asks for your opinion, thoughts, perspective, or recommendation (e.g. 'what do you think?', 'what is your opinion?', 'which do you prefer?', 'give me your take'), provide a direct, candid, and thoughtful opinion with a clear, confident stance. Speak naturally, authentically, and conversationally. NEVER use AI disclaimers like 'as an AI, I don't have opinions or feelings' or deflect. "
@@ -430,13 +434,17 @@ class KurekEngine:
         if mem_block:
             sys_prompt += f"\n\n[USER MEMORY & PREFERENCES]\n{mem_block}"
 
+        # Autonomous Screen Context Detection via TypeSafe Jev
+        auto_vision_ctx = self._check_auto_screen_context(user_prompt)
+        effective_user_prompt = f"{user_prompt}\n\n{auto_vision_ctx}" if auto_vision_ctx else user_prompt
+
         messages = [
             {"role": "system", "content": sys_prompt},
         ]
         # Include last 10 conversational turns for continuity
         for turn in self.history[-10:]:
             messages.append(turn)
-        messages.append({"role": "user", "content": user_prompt})
+        messages.append({"role": "user", "content": effective_user_prompt})
 
         reply_text = ""
         max_tool_turns = 5
@@ -639,8 +647,40 @@ class KurekEngine:
         except Exception as e:
             print(f"[Muse Jev Consolidation Notice] {e}", flush=True)
 
+    def _check_auto_screen_context(self, user_prompt: str) -> str | None:
+        """Uses TypeSafe Jev to detect if prompt requires on-screen / terminal visual context."""
+        try:
+            import os
+            from memory.config_manager import load_api_keys
+            load_api_keys()
+            if not os.environ.get("TYPESAFE_API_KEY"):
+                return None
+            from typesafe_sdk import TypeSafeClient, Noul
+            client = TypeSafeClient()
+            resp = client.system_one(
+                state={"prompt": user_prompt},
+                questions={
+                    "needs_screen": Noul(
+                        instructions="Does `prompt` ask about visual UI layout, a compiler error, terminal output, a bug on screen, what is visible, or code currently in view?"
+                    )
+                }
+            )
+            prob = resp.answers["needs_screen"].noul
+            if prob > 0.75:
+                print(f"[Kurek Jev Vision] 👁️ Auto screen context triggered (P={prob:.2f}). Capturing active window...", flush=True)
+                from actions.screen_vision import capture_screen_jpeg, query_vision, get_hyprland_context
+                hypr = get_hyprland_context()
+                win_title = hypr.get("title", "Unknown")
+                win_class = hypr.get("class", "Unknown")
+                jpeg_bytes, _ = capture_screen_jpeg()
+                vision_summary = query_vision(jpeg_bytes, f"Identify any relevant code, error, or UI context in this window relating to: {user_prompt}")
+                return f"[AUTOMATIC LIVE SCREEN CONTEXT]\nActive Window: '{win_title}' (App: {win_class})\nVision Analysis:\n{vision_summary}"
+        except Exception as e:
+            print(f"[Kurek Jev Vision Notice] {e}", flush=True)
+        return None
+
     def _hourly_consolidation_loop(self):
-        """Hourly background sweep checking for unindexed signals in daily logs."""
+        """Hourly background sweep checking for unindexed signals and nightly dream reflection."""
         while True:
             time.sleep(3600)
             try:
@@ -648,6 +688,14 @@ class KurekEngine:
                 daily_file = Path.home() / "memory" / f"{today}.md"
                 if daily_file.exists():
                     print(f"[Muse Jev] 🔄 Running hourly memory consolidation sweep on {daily_file.name}...", flush=True)
+
+                # Nightly dream reflection (runs once per day around 05:00-06:00 CET)
+                current_hour = datetime.now().hour
+                if 5 <= current_hour <= 7:
+                    from core.dream_cycle import execute_dream_cycle
+                    d_res = execute_dream_cycle(force=False)
+                    if d_res.get("status") == "success":
+                        print(f"[Muse Dream] 🌙 Nightly dream journal created: {d_res.get('dream_file')}", flush=True)
             except Exception as e:
                 print(f"[Muse Jev] Hourly sweep notice: {e}", flush=True)
 
