@@ -13,6 +13,7 @@ config/whatsapp_web/
 *credentials*.json
 .env
 .env.*
+!.env.example
 
 # ── Personal data the assistant accumulates about you ─────────────────────────
 memory/long_term.json

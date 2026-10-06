@@ -24,7 +24,7 @@ import psutil
 WATCHED_JOBS: dict[int, dict] = {}
 _LOCK = threading.Lock()
 
-ICON_PATH = "/home/arch/.local/share/icons/kurek.png"
+ICON_PATH = str(Path.home() / ".local/share/icons/kurek.png")
 
 
 def _format_elapsed(seconds: float) -> str:

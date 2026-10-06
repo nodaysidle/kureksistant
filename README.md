@@ -11,60 +11,125 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/nodaysidle/kureksistant/releases/tag/v0.1.0"><img src="https://img.shields.io/badge/Release-v0.1.0-blue.svg?style=flat-square" alt="Latest Release"></a>
   <img src="https://img.shields.io/badge/Platform-Arch%20Linux%20(Hyprland)%20%7C%20macOS-1793D1?style=flat-square&logo=arch-linux&logoColor=white" alt="Platform">
-  <img src="https://img.shields.io/badge/Brain-DeepSeek--Flash-4E6EF2?style=flat-square&logo=deepseek&logoColor=white" alt="DeepSeek">
-  <img src="https://img.shields.io/badge/Cognition-TypeSafe%20Jev-FF5722?style=flat-square" alt="TypeSafe Jev">
-  <img src="https://img.shields.io/badge/Voice-xAI%20Grok%20(Sol)-1E1E1E?style=flat-square&logo=x&logoColor=white" alt="xAI Grok">
-  <img src="https://img.shields.io/badge/Vision-Gemini%203.5%20Flash-4285F4?style=flat-square&logo=google&logoColor=white" alt="Gemini Vision">
-  <img src="https://img.shields.io/badge/Memory-Muse%20Architecture-9C27B0?style=flat-square" alt="Muse Memory">
   <img src="https://img.shields.io/badge/Footprint-~55MB%20RAM-brightgreen?style=flat-square" alt="Memory">
+  <img src="https://img.shields.io/badge/Brain-DeepSeek--Flash-4E6EF2?style=flat-square&logo=deepseek&logoColor=white" alt="DeepSeek">
+  <img src="https://img.shields.io/badge/Voice-xAI%20Grok%20(Sol)-1E1E1E?style=flat-square&logo=x&logoColor=white" alt="xAI Grok">
+  <img src="https://img.shields.io/badge/Vision-Gemini%20Flash-4285F4?style=flat-square&logo=google&logoColor=white" alt="Gemini Vision">
+  <img src="https://img.shields.io/badge/Cognition-TypeSafe%20Jev-FF5722?style=flat-square" alt="TypeSafe Jev">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License">
 </p>
 
 ---
 
-Kurek (Kurekizmo) is an ultra-fast, local-first personal AI assistant engineered for high-performance developer workstations. It discards bloated 500MB+ Electron containers in favor of a lean ~55MB Python daemon, instant mouse scroll-wheel summoning, native monitor perception via Wayland `grim`, persistent clipboard pinning, real-time web research, self-curating **Muse Memory**, and **TypeSafe Jev** cognitive snap-judgment gating.
+> **The Problem:** Modern desktop AI assistants are bloated 500MB+ Electron web apps that hijack workstation RAM, require manual window-switching, and lack direct hardware input integration.
+>
+> **The Result:** Kureksistant is a ~55MB headless local daemon summoned in sub-second time via mouse Middle-Click (`mouse:274`) or Fn key, featuring DeepSeek-Flash reasoning, xAI Grok voice (Sol), screen vision, and 20 native system tools.
+
+<p align="center">
+  <img src="docs/demo.gif" alt="Kureksistant Demo" width="800" />
+</p>
 
 ---
 
-## 📜 The Evolution of Kurek
+## ⚡ Quick Install
 
+### Option A: Download Pre-packaged Release (Recommended)
+
+Download the verified `v0.1.0` Linux bundle from the [GitHub Releases](https://github.com/nodaysidle/kureksistant/releases/tag/v0.1.0) page:
+
+```bash
+# 1. Download and extract v0.1.0 release archive
+curl -LO https://github.com/nodaysidle/kureksistant/releases/download/v0.1.0/kureksistant-v0.1.0-linux-x86_64.tar.gz
+tar -xzf kureksistant-v0.1.0-linux-x86_64.tar.gz
+cd kureksistant-0.1.0
+
+# 2. Run automated installer (sets up venv, ~/.local/bin/kurek, and desktop icon)
+./install_linux.sh
+
+# 3. Add your API keys to .env
+cp .env.example .env
+nano .env
+
+# 4. Start assistant daemon
+kurek start
 ```
-  ┌──────────────────────────────┐       ┌──────────────────────────────┐       ┌──────────────────────────────┐
-  │  Phase 1: The Monolith GUI   │       │  Phase 2: The Headless OS    │       │  Phase 3: Cognitive Memory   │
-  │ • Heavy PyQt6 interface      │  ───► │ • Lean Python daemon (:8790) │  ───► │ • Muse Memory 3-Tier Split   │
-  │ • ~500MB RAM consumption     │       │ • ~55MB RAM footprint        │       │ • TypeSafe Jev System One    │
-  │ • Slow visual cold-start     │       │ • Middle Click mouse summon  │       │ • Hourly auto-consolidation  │
-  │ • Flat history array         │       │ • 20 Linux control tools     │       │ • Instant boundary hoisting  │
-  └──────────────────────────────┘       └──────────────────────────────┘       └──────────────────────────────┘
+
+### Option B: Clone from Source
+
+```bash
+git clone https://github.com/nodaysidle/kureksistant.git
+cd kureksistant
+./install_linux.sh
+cp .env.example .env
+kurek start
 ```
 
-Kurek did not start as a headless system daemon; it was forged through real daily friction on developer machines:
+### macOS Native Menu Bar App
 
-### 1. The Monolith GUI Era (PyQt6 / Desktop Client)
-In its earliest iteration, Kurek lived as a traditional desktop window app written in PyQt6. While functional, it suffered from the fundamental disease of modern desktop AI tools: **unjustified bloat**. It held ~500MB of resident RAM, required window switching, and relied on a flat JSON array of conversation history. If the app restarted, context evaporated.
+```bash
+# Start background daemon
+./launch_kurek.sh
 
-### 2. The Headless OS Daemon Revolution
-We dismantled the monolithic window entirely and rebuilt Kurek as a dedicated Unix-style headless daemon running on `127.0.0.1:8790`:
-- **RAM slashed by 90%:** Down from 500MB+ to **~55MB idle**, leaving workstation memory free for compilers and Docker containers.
-- **Hardware Summoning:** Wired directly to Arch Linux / Hyprland input events — a single Middle Click (`mouse:274`) on the scroll-wheel toggles listening in sub-second time.
-- **Speed & Voice:** Integrated Deepgram Nova-2 STT (auto-submitting on 1.2s silence), DeepSeek-Flash reasoning, and xAI Grok TTS (**Sol** voice) streamed via PipeWire `mpv`.
-- **System Power:** Equipped with 20 native actions, including monitor vision via `grim`, sustained 300s CPU/RAM leak watchers, Playwright automation, and autonomous app generation via `dev_agent`.
+# Compile and launch native Swift menu bar indicator
+swiftc -O -o menubar/KurekBar menubar/KurekBar.swift
+./menubar/KurekBar &
+```
 
-### 3. The Cognitive Leap: Muse Memory & TypeSafe Jev
-The greatest limitation of personal AI agents is **catastrophic forgetting and context pollution**. Either the agent forgets who you are, or its prompt accumulates conversational garbage until reasoning degrades.
+---
 
-Kurek solved this by implementing the **Muse Memory Architecture** powered by **TypeSafe Jev**:
-- **3-Tier Separation:** Unstructured chat stays in daily logs (`~/memory/YYYY-MM-DD.md`); durable knowledge lives in curated core files (`~/MEMORY.md`); active operational rules reside in standing guidance (`~/ALIGNMENT_SYNTHESIS.md`).
-- **Jev System One Gating:** Integrated TypeSafe Jev for ~50ms calibrated snap judgments (`Noul`, `Choice`, `Score`). Casual chit-chat is discarded; durable personal preferences and non-negotiable boundaries (`salience >= 1.5`) are automatically promoted into permanent storage with mathematical confidence scores.
-- **Hermes Harmony:** Synchronizes bidirectionally with Hermes (`eldio`), ensuring personal context remains unified across terminal and voice interfaces.
+## 🔑 Requirements & Keys (`.env`)
+
+Kureksistant relies on direct high-speed cloud APIs for sub-second reasoning and realistic voice synthesis:
+
+| Environment Variable | Required | Description |
+|----------------------|----------|-------------|
+| `DEEPSEEK_API_KEY`   | **Yes**  | Direct platform API key from `api.deepseek.com` for `deepseek-flash` reasoning. |
+| `XAI_API_KEY`        | **Yes**  | xAI Grok Cloud API key from `api.x.ai` for natural speech generation (**Sol** voice). |
+| `GEMINI_API_KEY`     | Optional | Google Gemini Flash key for autonomous Wayland monitor vision (`screen_vision`). |
+| `DEEPGRAM_API_KEY`   | Optional | Deepgram Nova-2 voice transcription. If omitted, falls back to local `faster-whisper`. |
+| `TYPESAFE_API_KEY`   | Optional | TypeSafe Jev System One engine for sub-60ms cognitive snap-judgment triage. |
+
+**System dependencies:**
+- **Linux:** PipeWire with `mpv` (audio playback), `notify-send` (desktop notifications), `grim` (Wayland screen capture), `wl-clipboard` (`wl-copy` / `wl-paste`).
+- **macOS:** macOS 14+ with Xcode command line tools (`swiftc`, `afplay`).
+
+---
+
+## ⚠️ Known Limits
+
+- **Arch Linux & Hyprland first:** The mouse shortcut bindings (`mouse:274`) and `grim` screen vision are optimized for Arch Linux under Wayland/Hyprland. Other Wayland environments (Sway, River) require corresponding hotkey binds.
+- **Not fully offline:** While audio transcription can fall back to local `faster-whisper`, LLM reasoning (DeepSeek-Flash) and conversational voice output (xAI Grok Sol) require valid cloud API keys and active internet.
+- **macOS maturity:** The macOS background daemon and Swift menu bar app (`KurekBar.swift`) are functional, but Wayland-specific tools (`grim` screen capture, `wl-clipboard`) are replaced by standard macOS utilities (`pbcopy`, `screencapture`).
+- **Security & Permissions:** Tools execute with local workstation permissions. File creation is unrestricted; file deletion requires mandatory spoken confirmation (*"Yes or No?"*).
+
+---
+
+## ⌨️ Desktop Bindings & CLI
+
+### Hyprland Bindings (`~/.config/hypr/bindings.lua`)
+```lua
+-- Middle click mouse scroll-wheel to toggle voice listening
+o.bind("mouse:274", "Summon Kurek Middle Click", "~/.local/bin/kurek toggle", { mouse = true })
+o.bind("SUPER + mouse:274", "Summon Kurek Super+Middle Click", "~/.local/bin/kurek toggle", { mouse = true })
+```
+
+### CLI Commands (`kurek`)
+```bash
+kurek toggle           # Toggle microphone listening
+kurek status           # Check current daemon state & RAM
+kurek prompt "..."     # Send text query directly without mic
+kurek start            # Launch daemon in background
+kurek stop             # Stop all daemon processes
+```
 
 ---
 
 ## ⚡ Key Capabilities
 
-- **🧠 Muse Memory Architecture & TypeSafe Jev:** Three-tier memory plane (Daily Logs `~/memory/`, Durable Core `~/MEMORY.md`, Standing Alignment `~/ALIGNMENT_SYNTHESIS.md`). Cognitive snap-judgment triage powered by TypeSafe Jev (`Noul`, `Choice`, `Score`) auto-promotes durable rules and hoists negative boundaries instantly with calibrated confidence scores.
-- **👁️ Autonomous Screen Vision & Visual Cortex:** Zero-latency monitor perception via `grim` (Wayland/Hyprland) and active window inspection (`hyprctl activewindow`) analyzed through Gemini 3.5 Flash. Jev automatically detects when your query references code, errors, or layouts on screen and injects live visual context without asking you to command it.
+- **🧠 Muse Memory Architecture & TypeSafe Jev:** Three-tier memory plane (Daily Logs `~/memory/`, Durable Core `~/MEMORY.md`, Standing Alignment `~/ALIGNMENT_SYNTHESIS.md`). Cognitive snap-judgment triage powered by TypeSafe Jev auto-promotes durable rules and hoists negative boundaries instantly with calibrated confidence scores.
+- **👁️ Autonomous Screen Vision & Visual Cortex:** Zero-latency monitor perception via `grim` (Wayland/Hyprland) and active window inspection (`hyprctl activewindow`) analyzed through Gemini Flash. Jev automatically detects when your query references code, errors, or layouts on screen and injects live visual context without asking you to command it.
 - **⏱️ Process & Build Sentinel (`process_sentinel`):** Monitors long-running compiles, training runs, or test suites (`cargo`, `npm`, `make`, `python`). When the process exits, Kurek dispatches a notification and verbally announces completion time over the speaker via Sol TTS.
 - **📋 Voice-to-Clipboard Drafter (`draft_to_clipboard`):** Dictate conventional commits (`feat:`, `fix:`), GitHub PR descriptions, issue reports, or docstrings directly into the Wayland clipboard (`wl-copy`) ready for instant pasting with `Ctrl+V`.
 - **📡 Parallel Git Workstation Radar (`workstation_radar`):** Sub-second parallel scan across 100+ repositories in `~/Projects` and `~/dev/nodaysidle`. Instant voice triage of dirty working trees, untracked files, unpushed commits ahead of upstream, and stashes.
@@ -73,7 +138,7 @@ Kurek solved this by implementing the **Muse Memory Architecture** powered by **
 - **📈 300-Second Sustained Resource Watcher:** Tracks a 5-minute sliding window of CPU and RAM usage. If average load exceeds 85% sustained over 300 seconds, Kurek identifies the top culprit process, dispatches a desktop notification (`notify-send`), and warns you verbally over the speaker.
 - **🔬 Universal Autonomous Research & File Creation:** Deep search across multiple live sources, automated Markdown synthesis, and instant file creation on disk without asking permission. Strict safety confirmation gate required only for file deletion (*"Are you sure you want to delete [file]? Yes or No?"*).
 - **🧠 Bidirectional Hermes Memory Continuity:** Automatically synchronizes knowledge and preferences with Hermes (`~/.hermes/profiles/eldio/memories/USER.md` and `MEMORY.md`).
-- **🛠️ 24 Native System Tools:** Full file management, Playwright browser control, volume/brightness adjusters, Hyprland window tiling, alarms, process watchers, clipboard managers, and application launchers.
+- **🛠️ 20+ Native System Tools:** Full file management, Playwright browser control, volume/brightness adjusters, Hyprland window tiling, alarms, process watchers, clipboard managers, and application launchers.
 
 ---
 
@@ -102,8 +167,8 @@ flowchart TD
         Hermes["📡 Hermes Profile Continuity (~/.hermes)"]
     end
 
-    subgraph Tools ["20 Discovered Actions (actions/)"]
-        Vision["👁️ screen_vision • grim + Hyprland Context + Gemini 3.5"]
+    subgraph Tools ["Discovered Actions (actions/)"]
+        Vision["👁️ screen_vision • grim + Hyprland Context + Gemini"]
         Clip["📋 manage_clipboard • Persistent Pinning & Recall"]
         Monitor["📈 system_monitor • Live Metrics & 5m Moving Averages"]
         Web["🌐 web_search • DuckDuckGo + Live News Engine"]
@@ -127,54 +192,21 @@ flowchart TD
 
 ---
 
-## ⌨️ Desktop Bindings & CLI
+## 📜 The Evolution of Kurek
 
-### Hyprland Bindings (`~/.config/hypr/bindings.lua`)
-```lua
--- Middle click mouse scroll-wheel to toggle voice listening
-o.bind("mouse:274", "Summon Kurek Middle Click", "/home/arch/.local/bin/kurek toggle", { mouse = true })
-o.bind("SUPER + mouse:274", "Summon Kurek Super+Middle Click", "/home/arch/.local/bin/kurek toggle", { mouse = true })
+```
+  ┌──────────────────────────────┐       ┌──────────────────────────────┐       ┌──────────────────────────────┐
+  │  Phase 1: The Monolith GUI   │       │  Phase 2: The Headless OS    │       │  Phase 3: Cognitive Memory   │
+  │ • Heavy PyQt6 interface      │  ───► │ • Lean Python daemon (:8790) │  ───► │ • Muse Memory 3-Tier Split   │
+  │ • ~500MB RAM consumption     │       │ • ~55MB RAM footprint        │       │ • TypeSafe Jev System One    │
+  │ • Slow visual cold-start     │       │ • Middle Click mouse summon  │       │ • Hourly auto-consolidation  │
+  │ • Flat history array         │       │ • 20 Linux control tools     │       │ • Instant boundary hoisting  │
+  └──────────────────────────────┘       └──────────────────────────────┘       └──────────────────────────────┘
 ```
 
-### CLI Commands (`kurek`)
-```bash
-kurek toggle           # Toggle microphone listening
-kurek status           # Check current daemon state
-kurek prompt "..."     # Send text query directly without mic
-kurek start            # Launch daemon in background
-kurek stop             # Stop all daemon processes
-```
-
----
-
-## 🔧 Environment Configuration (`.env`)
-
-```bash
-DEEPSEEK_API_KEY=sk-...    # Direct platform key for api.deepseek.com
-XAI_API_KEY=xai-...        # Direct platform key for api.x.ai (Grok TTS)
-GEMINI_API_KEY=AIza...     # Google Gemini 3.5 Flash for screen vision
-DEEPGRAM_API_KEY=...      # Deepgram Nova-2 STT (falls back to local Whisper)
-TYPESAFE_API_KEY=...      # TypeSafe Jev System One cognitive triage & gatekeeper
-```
-
----
-
-## 🚀 Quickstart
-
-### Arch Linux / Omarchy
-```bash
-git clone git@github.com:nodaysidle/kureksistant.git
-cd kureksistant
-./install_linux.sh
-kurek start
-```
-
-### macOS Native Menu Bar
-```bash
-./launch_kurek.sh
-swiftc -O -o menubar/KurekBar menubar/KurekBar.swift
-./menubar/KurekBar &
-```
+1. **The Monolith GUI Era (PyQt6 Desktop Client):** In its earliest iteration, Kurek lived as a traditional desktop window app written in PyQt6. While functional, it consumed ~500MB of resident RAM, required window switching, and lost context on restart.
+2. **The Headless OS Daemon Revolution:** We dismantled the GUI window entirely and rebuilt Kurek as a dedicated Unix-style headless daemon running on `127.0.0.1:8790`. Idle memory dropped to ~55MB, and invocation was wired directly to a mouse Middle Click (`mouse:274`).
+3. **The Cognitive Leap (Muse Memory & TypeSafe Jev):** Integrated three-tier memory separation and sub-60ms cognitive snap-judgment gating. Casual chat is discarded while durable personal preferences and negative boundaries are automatically hoisted into permanent storage.
 
 ---
 
