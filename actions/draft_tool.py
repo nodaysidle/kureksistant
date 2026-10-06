@@ -16,7 +16,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ICON_PATH = "/home/arch/.local/share/icons/kurek.png"
+ICON_PATH = str(Path.home() / ".local/share/icons/kurek.png")
 
 
 def _copy_to_system_clipboard(text: str) -> bool:

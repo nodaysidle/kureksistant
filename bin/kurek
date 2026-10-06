@@ -2,8 +2,22 @@
 # Kurek CLI / App Launcher for Arch Linux / Omarchy
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-ICON="/home/arch/.local/share/icons/kurek.png"
+if [ -n "$KUREK_DIR" ] && [ -d "$KUREK_DIR" ]; then
+    DIR="$KUREK_DIR"
+elif [ -f "$SCRIPT_DIR/launch_kurek.sh" ]; then
+    DIR="$SCRIPT_DIR"
+elif [ -f "$SCRIPT_DIR/../launch_kurek.sh" ]; then
+    DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+elif [ -f "$HOME/.config/kurek/install_path" ]; then
+    DIR="$(cat "$HOME/.config/kurek/install_path")"
+else
+    DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+fi
+
+ICON="${HOME}/.local/share/icons/kurek.png"
+if [ ! -f "$ICON" ]; then
+    ICON="$DIR/desktop/kurek.png"
+fi
 DAEMON_URL="http://127.0.0.1:8790"
 
 ensure_daemon() {

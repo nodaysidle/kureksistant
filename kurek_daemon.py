@@ -208,7 +208,9 @@ class KurekEngine:
             self._notify_state(new_state)
 
     def _notify_state(self, state: str):
-        icon = "/home/arch/.local/share/icons/kurek.png"
+        icon = os.path.expanduser("~/.local/share/icons/kurek.png")
+        if not os.path.exists(icon):
+            icon = os.path.join(os.path.dirname(os.path.abspath(__file__)), "desktop", "kurek.png")
         msg_map = {
             KurekState.LISTENING: "🟢 Listening... (Speak now)",
             KurekState.THINKING:  "🟡 Thinking...",
