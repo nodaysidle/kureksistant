@@ -18,7 +18,7 @@
   <img src="https://img.shields.io/badge/Voice-xAI%20Grok%20(Sol)-1E1E1E?style=flat-square&logo=x&logoColor=white" alt="xAI Grok">
   <img src="https://img.shields.io/badge/Vision-Gemini%20Flash-4285F4?style=flat-square&logo=google&logoColor=white" alt="Gemini Vision">
   <img src="https://img.shields.io/badge/Cognition-TypeSafe%20Jev-FF5722?style=flat-square" alt="TypeSafe Jev">
-  <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License">
+  <img src="https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey?style=flat-square" alt="License">
 </p>
 
 ---
@@ -212,4 +212,4 @@ flowchart TD
 
 ## 📄 License
 
-MIT © [Alan Pfeifer (NODAYSIDLE)](https://github.com/nodaysidle)
+[CC BY-NC 4.0](LICENSE) — derived from FatihMakes' JARVIS ("MARK 53 — JARVIS"). Kureksistant changes by [NODAYSIDLE](https://github.com/nodaysidle).
