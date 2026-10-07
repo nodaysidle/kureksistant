@@ -1,6 +1,6 @@
-# AGENTS.md — Developer & AI Agent Guide for Kurek (JARVIS)
+# AGENTS.md — Developer & AI Agent Guide for Kurek (Kureksistant)
 
-> **Kurek** is an ultra-fast, low-RAM (~60MB total), headless personal AI assistant for **Arch Linux / Omarchy Quattro (Hyprland)** and **macOS**. Features instant Middle Click mouse summon, native desktop launcher, DeepSeek-Flash reasoning, xAI Grok speech (**Sol** voice), Hermes bidirectional memory continuity, and 17 direct computer-control tools.
+> **Kurek** is an ultra-fast, low-RAM (~55MB), headless personal AI assistant for **Arch Linux / Omarchy Quattro (Hyprland)** and **macOS**. Features instant Middle Click mouse summon, native desktop launcher, DeepSeek-Flash reasoning, xAI Grok speech (**Sol** voice), Hermes bidirectional memory continuity, and 28 tool modules in `actions/`. Release: v0.1.0.
 
 ---
 
@@ -31,7 +31,7 @@
 │                                         │                                              │
 │                                         ▼                                              │
 │  ┌──────────────────────────────────────────────────────────────────────────────────┐  │
-│  │                         17 Computer Control & Core Tools                         │  │
+│  │                         28 Computer Control & Core Tools                         │  │
 │  │  • open_app           • browser_control     • desktop_control   • reminder       │  │
 │  │  • computer_control   • computer_settings   • manage_memory     • weather        │  │
 │  │  • file_controller    • dev_agent           • web_search        • youtube_video  │  │
@@ -40,10 +40,10 @@
 │                                         ▼                                              │
 │  ┌──────────────────────────────────────────────────────────────────────────────────┐  │
 │  │                             Persistent Memory System                             │  │
-│  │  • Rolling Context: memory/kurek_history.json (multi-turn persistence)           │  │
+│  │  • Muse Memory: ~/memory/YYYY-MM-DD.md · ~/MEMORY.md · ~/ALIGNMENT_SYNTHESIS.md │  │
 │  │  • Hermes Continuity Sync: ~/.hermes/profiles/eldio/memories/                   │  │
 │  │    (reads full USER.md & MEMORY.md, syncs bidirectional remember calls)          │  │
-│  │  • Local Store: memory/long_term.json                                            │  │
+│  │  • Conversation context: memory/kurek_history.json                              │  │
 │  └──────────────────────────────────────────────────────────────────────────────────┘  │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -54,25 +54,25 @@
 
 | Component | File Path | Description |
 |-----------|-----------|-------------|
-| **Python Daemon** | [`kurek_daemon.py`](file:///home/arch/Projects/JARVIS/kurek_daemon.py) | Headless background HTTP service on port `8790` (using `ThreadingHTTPServer`). Orchestrates audio capture, VAD auto-submitting, STT, DeepSeek LLM, tools, and TTS. |
-| **Linux CLI & App Launcher** | [`bin/kurek`](file:///home/arch/Projects/JARVIS/bin/kurek) (`~/.local/bin/kurek`) | Single binary control: `kurek [toggle|prompt|status|start|stop]`. Auto-spawns daemon if offline. |
-| **Desktop Entry** | [`desktop/kurek.desktop`](file:///home/arch/Projects/JARVIS/desktop/kurek.desktop) | Standard FreeDesktop `.desktop` entry. Appears in Omarchy launcher (`Super+Space`) under Apps with 1024x1024 retina icon. |
+| **Python Daemon** | [`kurek_daemon.py`](kurek_daemon.py) | Headless background HTTP service on port `8790` (using `ThreadingHTTPServer`). Orchestrates audio capture, VAD auto-submitting, STT, DeepSeek LLM, tools, and TTS. |
+| **Linux CLI & App Launcher** | [`bin/kurek`](bin/kurek) (`~/.local/bin/kurek`) | Single binary control: `kurek [toggle|prompt|status|start|stop]`. Auto-spawns daemon if offline. |
+| **Desktop Entry** | [`desktop/kurek.desktop`](desktop/kurek.desktop) | Standard FreeDesktop `.desktop` entry. Appears in Omarchy launcher (`Super+Space`) under Apps with 1024x1024 retina icon. |
 | **Hyprland Bindings** | `~/.config/hypr/bindings.lua` | Middle Click (`mouse:274`) and `SUPER + mouse:274` to summon Kurek. |
-| **macOS Menu Bar UI** | [`menubar/KurekBar.swift`](file:///home/arch/Projects/JARVIS/menubar/KurekBar.swift) | Native Swift 6 status item for macOS. Polls `/status` at 10 Hz and monitors global `Fn` modifier flags. |
-| **Launcher Script** | [`launch_kurek.sh`](file:///home/arch/Projects/JARVIS/launch_kurek.sh) | Cross-platform control script: `./launch_kurek.sh [start|stop|status]`. Uses `setsid` to detach permanently. |
-| **Installer** | [`install_linux.sh`](file:///home/arch/Projects/JARVIS/install_linux.sh) | One-line installer for Arch Linux / Omarchy Quattro. |
-| **LLM Client** | [`core/llm_client.py`](file:///home/arch/Projects/JARVIS/core/llm_client.py) | Direct `api.deepseek.com` client with OpenAI tool schemas (`deepseek-flash`). |
-| **TTS Engine** | [`core/tts.py`](file:///home/arch/Projects/JARVIS/core/tts.py) | Implements `XAITTSEngine` (Grok Cloud TTS, voice: **Sol** / `sal`) playing via Linux `mpv` or macOS `afplay`. |
-| **STT Engine** | [`core/stt.py`](file:///home/arch/Projects/JARVIS/core/stt.py) | Implements `DeepgramSTT` (Nova-2) and `WhisperSTT` (`faster-whisper`) with DC offset stripping and peak normalization. |
-| **Memory Tool** | [`actions/memory_tool.py`](file:///home/arch/Projects/JARVIS/actions/memory_tool.py) | `manage_memory(action='remember'|'recall')`. Bidirectionally syncs with Hermes `USER.md` & `MEMORY.md`. |
-| **Memory Files** | [`memory/kurek_history.json`](file:///home/arch/Projects/JARVIS/memory/kurek_history.json) | Saved multi-turn conversation history. Reloaded on daemon startup. |
+| **macOS Menu Bar UI** | [`menubar/KurekBar.swift`](menubar/KurekBar.swift) | Native Swift 6 status item for macOS. Polls `/status` at 10 Hz and monitors global `Fn` modifier flags. |
+| **Launcher Script** | [`launch_kurek.sh`](launch_kurek.sh) | Cross-platform control script: `./launch_kurek.sh [start|stop|status]`. Uses `setsid` to detach permanently. |
+| **Installer** | [`install_linux.sh`](install_linux.sh) | One-line installer for Arch Linux / Omarchy Quattro. |
+| **LLM Client** | [`core/llm_client.py`](core/llm_client.py) | Direct `api.deepseek.com` client with OpenAI tool schemas (`deepseek-flash`). |
+| **TTS Engine** | [`core/tts.py`](core/tts.py) | Implements `XAITTSEngine` (Grok Cloud TTS, voice: **Sol** / `sal`) playing via Linux `mpv` or macOS `afplay`. |
+| **STT Engine** | [`core/stt.py`](core/stt.py) | Implements `DeepgramSTT` (Nova-2) and `WhisperSTT` (`faster-whisper`) with DC offset stripping and peak normalization. |
+| **Memory Tool** | [`actions/memory_tool.py`](actions/memory_tool.py) | `manage_memory(action='remember'|'recall')`. Bidirectionally syncs with Hermes `USER.md` & `MEMORY.md`. |
+| **Memory Files** | [`memory/kurek_history.json`](memory/kurek_history.json) | Saved multi-turn conversation history. Reloaded on daemon startup. |
 | **External Memory** | `~/.hermes/profiles/eldio/memories/` | Contains `USER.md` (profile of NDI) and `MEMORY.md` (knowledge base). |
 
 ---
 
 ## 3. Environment & Secrets
 
-Environment variables are loaded from [`.env`](file:///home/arch/Projects/JARVIS/.env):
+Environment variables are loaded from [`.env`](.env):
 
 ```bash
 DEEPSEEK_API_KEY=sk-...   # Direct platform key for api.deepseek.com
@@ -102,25 +102,21 @@ On macOS, the status is rendered by `KurekBar.swift` in the system menu bar.
 
 ## 5. Memory System & Hermes Continuity
 
-Kurek features a **three-tier memory architecture**:
+Kurek uses the **Muse Memory** three-tier markdown memory plane, triaged by TypeSafe Jev:
 
-1. **Short-Term Conversational Memory:**
-   - In-flight messages within the current session.
-   - Automatically saved to `memory/kurek_history.json` after every turn.
-   - Last 10 turns are re-injected as context on every new user query.
-2. **Long-Term Structured Memory:**
-   - Stored in `memory/long_term.json`.
-   - Managed via `actions/memory_tool.py` using `manage_memory(action='remember', category=..., key=..., value=...)`.
-3. **Hermes Continuity Sync:**
-   - On every request, Kurek dynamically resolves `~/.hermes/profiles/eldio/memories/USER.md` and `MEMORY.md`.
-   - Injects the user's complete profile (NDI, Slovenia, Omarchy Quattro / Arch Linux, brand values, active projects) into the system prompt.
-   - When Kurek executes `manage_memory(action='remember')`, it automatically appends the fact to Hermes `MEMORY.md` (`§ [CATEGORY] Key: Value`) so both assistants share knowledge in real time.
+1. **Daily logs:** `~/memory/YYYY-MM-DD.md`, the day's captured context.
+2. **Durable core:** `~/MEMORY.md`, durable preferences and rules promoted by Jev.
+3. **Standing alignment:** `~/ALIGNMENT_SYNTHESIS.md`, behavioural guidance distilled by the nightly dream cycle (`dream_tool`).
+
+Supporting stores:
+- `memory/kurek_history.json` keeps the rolling conversation context between turns.
+- **Hermes continuity:** `manage_memory(action='remember')` also appends to Hermes `~/.hermes/profiles/eldio/memories/MEMORY.md`, and Kurek reads Hermes `USER.md` and `MEMORY.md` into its system prompt.
 
 ---
 
 ## 6. Available Tools & Capabilities
 
-The daemon auto-discovers all tools in the [`actions/`](file:///home/arch/Projects/JARVIS/actions/) directory:
+The daemon auto-discovers all tools in the [`actions/`](actions/) directory:
 
 - **`open_app`**: Cross-platform launcher (`xdg-open` / binary on Linux, `open -a` on macOS).
 - **`browser_control`**: Full Playwright browser automation (navigate, click, type, scrape).

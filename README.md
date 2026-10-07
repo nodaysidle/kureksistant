@@ -25,7 +25,7 @@
 
 > **The Problem:** Modern desktop AI assistants are bloated 500MB+ Electron web apps that hijack workstation RAM, require manual window-switching, and lack direct hardware input integration.
 >
-> **The Result:** Kureksistant is a ~55MB headless local daemon summoned in sub-second time via mouse Middle-Click (`mouse:274`) or Fn key, featuring DeepSeek-Flash reasoning, xAI Grok voice (Sol), screen vision, and 20 native system tools.
+> **The Result:** Kureksistant is a ~55MB headless local daemon summoned in sub-second time via mouse Middle-Click (`mouse:274`) or Fn key, featuring DeepSeek-Flash reasoning, xAI Grok voice (Sol), screen vision, and 28 native tool modules.
 
 <p align="center">
   <img src="docs/demo.gif" alt="Kureksistant Demo" width="800" />
@@ -138,7 +138,7 @@ kurek stop             # Stop all daemon processes
 - **📈 300-Second Sustained Resource Watcher:** Tracks a 5-minute sliding window of CPU and RAM usage. If average load exceeds 85% sustained over 300 seconds, Kurek identifies the top culprit process, dispatches a desktop notification (`notify-send`), and warns you verbally over the speaker.
 - **🔬 Universal Autonomous Research & File Creation:** Deep search across multiple live sources, automated Markdown synthesis, and instant file creation on disk without asking permission. Strict safety confirmation gate required only for file deletion (*"Are you sure you want to delete [file]? Yes or No?"*).
 - **🧠 Bidirectional Hermes Memory Continuity:** Automatically synchronizes knowledge and preferences with Hermes (`~/.hermes/profiles/eldio/memories/USER.md` and `MEMORY.md`).
-- **🛠️ 20+ Native System Tools:** Full file management, Playwright browser control, volume/brightness adjusters, Hyprland window tiling, alarms, process watchers, clipboard managers, and application launchers.
+- **🛠️ 28 Native Tool Modules:** Full file management, Playwright browser control, volume/brightness adjusters, Hyprland window tiling, alarms, process watchers, clipboard managers, and application launchers.
 
 ---
 
@@ -200,7 +200,7 @@ flowchart TD
   │ • Heavy PyQt6 interface      │  ───► │ • Lean Python daemon (:8790) │  ───► │ • Muse Memory 3-Tier Split   │
   │ • ~500MB RAM consumption     │       │ • ~55MB RAM footprint        │       │ • TypeSafe Jev System One    │
   │ • Slow visual cold-start     │       │ • Middle Click mouse summon  │       │ • Hourly auto-consolidation  │
-  │ • Flat history array         │       │ • 20 Linux control tools     │       │ • Instant boundary hoisting  │
+  │ • Flat history array         │       │ • 28 Linux tool modules      │       │ • Instant boundary hoisting  │
   └──────────────────────────────┘       └──────────────────────────────┘       └──────────────────────────────┘
 ```
 
