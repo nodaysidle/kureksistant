@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 KUREK DAEMON — Ultra-low latency, lean headless personal AI assistant for macOS.
-Replaces the heavy PyQt6 UI (~500MB RAM) with a tiny background service (~45MB RAM).
+Replaces the heavy PyQt6 UI (~500MB RAM) with a headless background service
+(~333MB RAM with default faster-whisper STT; lower without Whisper).
 
 Connects with:
   • Swift Menu Bar Indicator (KurekBar) & Fn key push-to-talk
