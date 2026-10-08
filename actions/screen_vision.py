@@ -20,6 +20,8 @@ import time
 from pathlib import Path
 from PIL import Image
 
+BASE_DIR = Path(__file__).resolve().parent.parent
+
 _WATCH_THREAD: threading.Thread | None = None
 _WATCH_RUNNING = False
 _LAST_IMAGE_HASH: int | None = None

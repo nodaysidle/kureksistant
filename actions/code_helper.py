@@ -295,7 +295,7 @@ def _build(description, language, output_path, args, timeout, speak=None, player
 def _write_action(description, language, output_path, player, code: str = "") -> str:
     if code:
         try:
-            target = Path(output_path).resolve() if output_path else _default_path(language or "python")
+            target = _resolve_save_path(output_path, language)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(code, encoding="utf-8")
             print(f"[Code] ✅ Written directly: {target}")
@@ -532,7 +532,7 @@ Be specific and actionable. If you see an error message, quote it exactly."""
 
 
 def code_helper(
-    parameters: dict,
+    parameters: dict = None,
     response=None,
     player=None,
     session_memory=None,

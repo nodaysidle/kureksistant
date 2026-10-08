@@ -10,13 +10,13 @@ echo "=== Installing Kurek on Linux ==="
 
 # 1. Ensure Python virtualenv exists
 if [ ! -d "$DIR/.venv" ]; then
-    echo "Creating virtual environment with uv..."
+    echo "Creating virtual environment..."
     if command -v uv >/dev/null 2>&1; then
         uv venv .venv --python 3.12
-        uv pip install --python .venv/bin/python numpy sounddevice requests faster-whisper pyautogui pyperclip duckduckgo_search psutil playwright
+        uv pip install --python .venv/bin/python -r requirements.txt
     else
         python3 -m venv .venv
-        .venv/bin/pip install numpy sounddevice requests faster-whisper pyautogui pyperclip duckduckgo_search psutil playwright
+        .venv/bin/pip install -r requirements.txt
     fi
 fi
 

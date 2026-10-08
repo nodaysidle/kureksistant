@@ -14,6 +14,8 @@ pillow
 beautifulsoup4
 send2trash
 PyYAML
+google-genai
+typesafe-sdk
 
 # Dev / CI
 pytest

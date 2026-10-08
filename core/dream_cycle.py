@@ -63,7 +63,12 @@ Do not output robotic bullet points. Write 2-3 atmospheric paragraphs.
         messages=[{"role": "user", "content": dream_prompt}],
         model="deepseek-flash"
     )
-    dream_prose = resp.get("content", "Reflections settle over the workspace.").strip()
+    if isinstance(resp, str):
+        dream_prose = resp.strip()
+    elif isinstance(resp, dict):
+        dream_prose = (resp.get("content") or "Reflections settle over the workspace.").strip()
+    else:
+        dream_prose = "Reflections settle over the workspace."
 
     # Write Dream Journal
     dream_header = f"""# Dream Journal: {today}

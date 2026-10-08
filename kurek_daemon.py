@@ -452,6 +452,7 @@ class KurekEngine:
         messages.append({"role": "user", "content": effective_user_prompt})
 
         reply_text = ""
+        last_tool_output = ""
         max_tool_turns = 5
         for turn_idx in range(max_tool_turns):
             resp = query_deepseek(

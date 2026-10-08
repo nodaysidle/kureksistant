@@ -49,6 +49,7 @@ jobs:
           ruff check \
             kurek_daemon.py \
             core \
+            actions \
             memory \
             scripts \
             tests \
