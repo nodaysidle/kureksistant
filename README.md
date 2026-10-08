@@ -7,13 +7,13 @@
 </p>
 
 <p align="center">
-  <strong>Autonomous, sub-second personal AI assistant with native screen vision, xAI Grok voice, Wayland clipboard manager, TypeSafe Jev cognition, and Muse Memory. Built for Arch Linux (Hyprland / Omarchy) and macOS. ~55MB RAM.</strong>
+  <strong>Autonomous, sub-second personal AI assistant with native screen vision, xAI Grok voice, Wayland clipboard manager, TypeSafe Jev cognition, and Muse Memory. Built for Arch Linux (Hyprland / Omarchy) and macOS. ~333MB RAM with default faster-whisper STT.</strong>
 </p>
 
 <p align="center">
   <a href="https://github.com/nodaysidle/kureksistant/releases/tag/v0.1.0"><img src="https://img.shields.io/badge/Release-v0.1.0-blue.svg?style=flat-square" alt="Latest Release"></a>
   <img src="https://img.shields.io/badge/Platform-Arch%20Linux%20(Hyprland)%20%7C%20macOS-1793D1?style=flat-square&logo=arch-linux&logoColor=white" alt="Platform">
-  <img src="https://img.shields.io/badge/Footprint-~55MB%20RAM-brightgreen?style=flat-square" alt="Memory">
+  <img src="https://img.shields.io/badge/Footprint-~333MB%20RAM%20(Whisper)-brightgreen?style=flat-square" alt="Memory">
   <img src="https://img.shields.io/badge/Brain-DeepSeek--Flash-4E6EF2?style=flat-square&logo=deepseek&logoColor=white" alt="DeepSeek">
   <img src="https://img.shields.io/badge/Voice-xAI%20Grok%20(Sol)-1E1E1E?style=flat-square&logo=x&logoColor=white" alt="xAI Grok">
   <img src="https://img.shields.io/badge/Vision-Gemini%20Flash-4285F4?style=flat-square&logo=google&logoColor=white" alt="Gemini Vision">
@@ -25,7 +25,7 @@
 
 > **The Problem:** Modern desktop AI assistants are bloated 500MB+ Electron web apps that hijack workstation RAM, require manual window-switching, and lack direct hardware input integration.
 >
-> **The Result:** Kureksistant is a ~55MB headless local daemon summoned in sub-second time via mouse Middle-Click (`mouse:274`) or Fn key, featuring DeepSeek-Flash reasoning, xAI Grok voice (Sol), screen vision, and 28 native tool modules.
+> **The Result:** Kureksistant is a headless local daemon (~333MB RAM with default faster-whisper STT; lower without Whisper) summoned in sub-second time via mouse Middle-Click (`mouse:274`) or Fn key, featuring DeepSeek-Flash reasoning, xAI Grok voice (Sol), screen vision, and 24 native tool modules.
 
 <p align="center">
   <img src="docs/demo.gif" alt="Kureksistant Demo" width="800" />
@@ -149,7 +149,7 @@ kurek stop             # Stop all daemon processes
 - **📈 300-Second Sustained Resource Watcher:** Tracks a 5-minute sliding window of CPU and RAM usage. If average load exceeds 85% sustained over 300 seconds, Kurek identifies the top culprit process, dispatches a desktop notification (`notify-send`), and warns you verbally over the speaker.
 - **🔬 Universal Autonomous Research & File Creation:** Deep search across multiple live sources, automated Markdown synthesis, and instant file creation on disk without asking permission. Strict safety confirmation gate required only for file deletion (*"Are you sure you want to delete [file]? Yes or No?"*).
 - **🧠 Bidirectional Hermes Memory Continuity:** Optionally synchronizes knowledge with Hermes (`HERMES_PROFILE` or `HERMES_MEMORIES_DIR` in `.env`; default probe `~/.hermes/memories`).
-- **🛠️ 28 Native Tool Modules:** Full file management, Playwright browser control, volume/brightness adjusters, Hyprland window tiling, alarms, process watchers, clipboard managers, and application launchers.
+- **🛠️ 24 Native Tool Modules:** Full file management, Playwright browser control, volume/brightness adjusters, Hyprland window tiling, alarms, process watchers, clipboard managers, and application launchers.
 
 ---
 
@@ -163,7 +163,7 @@ flowchart TD
         MacBar["🍏 macOS Menu Bar (KurekBar.swift)\nFn Global Push-to-Talk"]
     end
 
-    subgraph Daemon ["Kurek Daemon :8790 (~55MB RAM)"]
+    subgraph Daemon ["Kurek Daemon :8790 (~333MB RAM w/ Whisper)"]
         State["State Engine (IDLE / LISTENING / THINKING / SPEAKING)"]
         Audio["sounddevice • Adaptive RMS Gate • 1.2s Silence Auto-Submit"]
         STT["STT Engine: Deepgram Nova-2 (Fallback: faster-whisper)"]
@@ -209,14 +209,14 @@ flowchart TD
   ┌──────────────────────────────┐       ┌──────────────────────────────┐       ┌──────────────────────────────┐
   │  Phase 1: The Monolith GUI   │       │  Phase 2: The Headless OS    │       │  Phase 3: Cognitive Memory   │
   │ • Heavy PyQt6 interface      │  ───► │ • Lean Python daemon (:8790) │  ───► │ • Muse Memory 3-Tier Split   │
-  │ • ~500MB RAM consumption     │       │ • ~55MB RAM footprint        │       │ • TypeSafe Jev System One    │
+  │ • ~500MB RAM consumption     │       │ • ~333MB RAM w/ Whisper STT  │       │ • TypeSafe Jev System One    │
   │ • Slow visual cold-start     │       │ • Middle Click mouse summon  │       │ • Hourly auto-consolidation  │
-  │ • Flat history array         │       │ • 28 Linux tool modules      │       │ • Instant boundary hoisting  │
+  │ • Flat history array         │       │ • 24 Linux tool modules      │       │ • Instant boundary hoisting  │
   └──────────────────────────────┘       └──────────────────────────────┘       └──────────────────────────────┘
 ```
 
 1. **The Monolith GUI Era (PyQt6 Desktop Client):** In its earliest iteration, Kurek lived as a traditional desktop window app written in PyQt6. While functional, it consumed ~500MB of resident RAM, required window switching, and lost context on restart.
-2. **The Headless OS Daemon Revolution:** We dismantled the GUI window entirely and rebuilt Kurek as a dedicated Unix-style headless daemon running on `127.0.0.1:8790`. Idle memory dropped to ~55MB, and invocation was wired directly to a mouse Middle Click (`mouse:274`).
+2. **The Headless OS Daemon Revolution:** We dismantled the GUI window entirely and rebuilt Kurek as a dedicated Unix-style headless daemon running on `127.0.0.1:8790`. With the default local faster-whisper STT path, resident memory is about ~333MB (lower without Whisper), and invocation was wired directly to a mouse Middle Click (`mouse:274`).
 3. **The Cognitive Leap (Muse Memory & TypeSafe Jev):** Integrated three-tier memory separation and sub-60ms cognitive snap-judgment gating. Casual chat is discarded while durable personal preferences and negative boundaries are automatically hoisted into permanent storage.
 
 ---

@@ -1,6 +1,6 @@
 # AGENTS.md — Developer & AI Agent Guide for Kurek (Kureksistant)
 
-> **Kurek** is an ultra-fast, low-RAM (~55MB), headless personal AI assistant for **Arch Linux / Omarchy Quattro (Hyprland)** and **macOS**. Features instant Middle Click mouse summon, native desktop launcher, DeepSeek-Flash reasoning, xAI Grok speech (**Sol** voice), Hermes bidirectional memory continuity, and 28 tool modules in `actions/`. Release: v0.1.0.
+> **Kurek** is an ultra-fast headless personal AI assistant for **Arch Linux / Omarchy Quattro (Hyprland)** and **macOS** (~333MB RAM with default faster-whisper STT; lower without Whisper). Features instant Middle Click mouse summon, native desktop launcher, DeepSeek-Flash reasoning, xAI Grok speech (**Sol** voice), Hermes bidirectional memory continuity, and 24 tool modules in `actions/`. Release: v0.1.0.
 
 ---
 
@@ -25,13 +25,13 @@
 │  │  • Deepgram Nova-2   │   │  • DeepSeek-Flash     │   │  • xAI Grok TTS (Sol/sal) │  │
 │  │  • faster-whisper    │   │    (api.deepseek.com) │   │    (api.x.ai/v1/tts)      │  │
 │  │    (base.en local)   │   │  • Reasoning tokens   │   │  • Linux mpv (PipeWire)   │  │
-│  │  • DC offset removal │   │  • 17 OpenAI Tools    │   │  • macOS afplay           │  │
+│  │  • DC offset removal │   │  • 24 OpenAI Tools    │   │  • macOS afplay           │  │
 │  │  • Peak normalization│   │  • Unrestricted Jarvis│   │  • In-place notifications │  │
 │  └──────────────────────┘   └───────────┬───────────┘   └───────────────────────────┘  │
 │                                         │                                              │
 │                                         ▼                                              │
 │  ┌──────────────────────────────────────────────────────────────────────────────────┐  │
-│  │                         28 Computer Control & Core Tools                         │  │
+│  │                         24 Computer Control & Core Tools                         │  │
 │  │  • open_app           • browser_control     • desktop_control   • reminder       │  │
 │  │  • computer_control   • computer_settings   • manage_memory     • weather        │  │
 │  │  • file_controller    • dev_agent           • web_search        • youtube_video  │  │
