@@ -1,13 +1,11 @@
+#!/usr/bin/env python3
 """
-MARK LIII — one-time setup.
+Kureksistant setup — headless daemon path.
 
-Installs the Python dependencies for THIS operating system only: the OS-specific
-packages in requirements.txt carry `sys_platform` markers, so a macOS or Linux
-user never pulls Windows-only libraries (and vice-versa). Then it fetches the
-Playwright browsers needed for web automation (current-OS builds only).
+Installs the Python dependencies needed to run `kurek_daemon.py`, then reminds
+you to configure `.env` and start the daemon with `kurek start`.
 
-The optional local wake word ("Hey Jarvis") is NOT installed here — it's a
-one-click, opt-in download from ⚙ → WAKE WORD inside the app.
+The unsupported PyQt6 JARVIS GUI installer lives at `legacy/setup_gui.py`.
 """
 import platform
 import subprocess
@@ -15,6 +13,7 @@ import sys
 from pathlib import Path
 
 OS = platform.system()  # "Windows" | "Darwin" | "Linux"
+ROOT = Path(__file__).resolve().parent
 
 
 def _run(label: str, args: list[str]) -> None:
@@ -23,49 +22,37 @@ def _run(label: str, args: list[str]) -> None:
 
 
 def main() -> None:
-    print(f"⚙  MARK LIII setup — detected OS: {OS or 'unknown'}")
+    print(f"⚙  Kureksistant setup — detected OS: {OS or 'unknown'}")
 
-    # requirements.txt filters OS-specific extras by itself via pip markers.
-    _run("Installing Python dependencies (OS-specific extras auto-filtered)…",
-         [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+    req = ROOT / "requirements.txt"
+    _run(
+        "Installing daemon Python dependencies…",
+        [sys.executable, "-m", "pip", "install", "-r", str(req)],
+    )
 
-    # Chromium covers Chrome/Edge/Opera/Brave/Vivaldi; Firefox for Firefox.
-    # (Safari automation additionally needs: python -m playwright install webkit)
-    _run("Installing Playwright browsers (chromium + firefox)…",
-         [sys.executable, "-m", "playwright", "install", "chromium", "firefox"])
-
-    # ── OS-specific post-install notes ────────────────────────────────────────
-    if OS == "Windows":
-        try:
-            import win32com.client  # noqa: F401
-        except ImportError:
-            postinstall = Path(sys.executable).parent / "Scripts" / "pywin32_postinstall.py"
-            print(
-                "\n⚠️  pywin32 did not register correctly — desktop-shortcut "
-                "creation will use a slower fallback. To fix it, run:\n"
-                f'    "{sys.executable}" -m pip install --force-reinstall pywin32\n'
-                f'    "{sys.executable}" "{postinstall}" -install'
-            )
-    elif OS == "Linux":
+    if OS == "Linux":
         print(
-            "\nℹ️  Linux note — a few voice-controlled OS actions shell out to "
-            "native tools. Install the ones you'll use via your package manager:\n"
-            "    • volume      → pulseaudio-utils   (pactl)\n"
+            "\nℹ️  Linux note — install native tools you plan to use:\n"
+            "    • audio I/O   → portaudio (libportaudio2) + mpv\n"
+            "    • notifications → libnotify (notify-send)\n"
+            "    • volume      → pulseaudio-utils / pipewire-pulse (pactl)\n"
             "    • brightness  → brightnessctl\n"
-            "    • reminders   → systemd (systemd-run) or 'at'\n"
-            "    • open URLs   → xdg-utils          (xdg-open)"
+            "    • Wayland UX  → grim, wl-clipboard\n"
+            "    • open URLs   → xdg-utils (xdg-open)\n"
+            "    • pyautogui   → python3-tk\n"
         )
     elif OS == "Darwin":
         print(
-            "\nℹ️  macOS note — volume, brightness and reminders use the built-in "
-            "'osascript' / LaunchAgents, so no extra tools are required.\n"
-            "    For Safari automation only: python -m playwright install webkit"
+            "\nℹ️  macOS note — volume/brightness/reminders use built-in tools.\n"
+            "    Optional menu bar: swiftc -O -o menubar/KurekBar menubar/KurekBar.swift\n"
         )
 
     print("\n✅ Setup complete!")
-    print("   1) Launch it:  python main.py")
-    print("   2) Paste your free Gemini API key when the setup screen appears.")
-    print("   3) (Optional) Enable 'Hey Jarvis' from ⚙ → WAKE WORD.")
+    print("   1) cp .env.example .env   # then add DEEPSEEK_API_KEY and XAI_API_KEY")
+    print("   2) ./install_linux.sh     # optional: CLI + desktop entry (Linux)")
+    print("   3) kurek start            # or: ./launch_kurek.sh")
+    print("   4) curl -s http://127.0.0.1:8790/status")
+    print("\n   Legacy GUI (unsupported): see legacy/README.md")
 
 
 if __name__ == "__main__":

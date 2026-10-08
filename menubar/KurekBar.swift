@@ -12,7 +12,7 @@ final class KurekBarApp: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        
+
         menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Kurek (Click or Fn to talk)", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
@@ -45,23 +45,53 @@ final class KurekBarApp: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Resolve the Kurek install directory without hardcoding a machine path.
+    /// Order: KUREK_PROJECT_DIR / KUREK_DIR env → ~/.config/kurek/install_path →
+    /// parent of this binary when it lives in <repo>/menubar/.
+    private func resolveProjectDir() -> String? {
+        let env = ProcessInfo.processInfo.environment
+        for key in ["KUREK_PROJECT_DIR", "KUREK_DIR"] {
+            if let value = env[key], !value.isEmpty,
+               FileManager.default.fileExists(atPath: (value as NSString).appendingPathComponent("kurek_daemon.py")) {
+                return value
+            }
+        }
+
+        let installPathFile = (NSHomeDirectory() as NSString).appendingPathComponent(".config/kurek/install_path")
+        if let recorded = try? String(contentsOfFile: installPathFile, encoding: .utf8) {
+            let dir = recorded.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !dir.isEmpty,
+               FileManager.default.fileExists(atPath: (dir as NSString).appendingPathComponent("kurek_daemon.py")) {
+                return dir
+            }
+        }
+
+        let execURL = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
+        let menubarParent = execURL.deletingLastPathComponent() // …/menubar
+        let repoRoot = menubarParent.deletingLastPathComponent() // repo root
+        let daemon = repoRoot.appendingPathComponent("kurek_daemon.py").path
+        if FileManager.default.fileExists(atPath: daemon) {
+            return repoRoot.path
+        }
+        return nil
+    }
+
     private func ensureDaemonRunning() {
         let checkReq = URLRequest(url: serverURL.appendingPathComponent("status"), timeoutInterval: 0.3)
         URLSession.shared.dataTask(with: checkReq) { [weak self] data, _, error in
             if data != nil { return } // Already running
-            
-            // Spawn daemon in background
-            let projectDir = "/Volumes/omarchyuser/projekti/JARVIS"
-            let venvPython = "\(projectDir)/.venv/bin/python"
-            let script = "\(projectDir)/kurek_daemon.py"
-            
+
+            guard let projectDir = self?.resolveProjectDir() else { return }
+            let venvPython = (projectDir as NSString).appendingPathComponent(".venv/bin/python")
+            let script = (projectDir as NSString).appendingPathComponent("kurek_daemon.py")
+
             guard FileManager.default.fileExists(atPath: venvPython) else { return }
-            
+
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: venvPython)
             proc.arguments = ["-u", script]
             proc.currentDirectoryURL = URL(fileURLWithPath: projectDir)
-            
+
             let logFile = URL(fileURLWithPath: "/tmp/kurek_daemon.log")
             if !FileManager.default.fileExists(atPath: logFile.path) {
                 FileManager.default.createFile(atPath: logFile.path, contents: nil)
@@ -71,7 +101,7 @@ final class KurekBarApp: NSObject, NSApplicationDelegate {
                 proc.standardOutput = fileHandle
                 proc.standardError = fileHandle
             }
-            
+
             try? proc.run()
             self?.daemonProcess = proc
         }.resume()

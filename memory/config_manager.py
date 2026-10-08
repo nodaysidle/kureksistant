@@ -64,7 +64,20 @@ def load_api_keys() -> dict:
         data[k.lower()] = v
         if k == "TYPESAFE_API_KEY" and k not in os.environ:
             os.environ[k] = v
-    for k in ["DEEPSEEK_API_KEY", "DEEPGRAM_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "TYPESAFE_API_KEY"]:
+    for k in [
+        "DEEPSEEK_API_KEY",
+        "DEEPGRAM_API_KEY",
+        "XAI_API_KEY",
+        "GEMINI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "TYPESAFE_API_KEY",
+        "KUREK_USER_NAME",
+        "USER_DISPLAY_NAME",
+        "HERMES_PROFILE",
+        "HERMES_MEMORIES_DIR",
+        "INPUT_DEVICE",
+        "KUREK_PROJECT_DIR",
+    ]:
         if k in os.environ and os.environ[k]:
             data[k] = os.environ[k]
             data[k.lower()] = os.environ[k]
@@ -106,8 +119,59 @@ def get_assistant_name() -> str:
 
 
 def get_user_name() -> str:
-    """Return the configured user name for addressing."""
-    return load_api_keys().get("user_name", "")
+    """Return the configured user name for addressing (neutral default: empty)."""
+    import os
+    keys = load_api_keys()
+    return (
+        keys.get("KUREK_USER_NAME")
+        or keys.get("USER_DISPLAY_NAME")
+        or keys.get("user_name")
+        or keys.get("user_display_name")
+        or os.environ.get("KUREK_USER_NAME")
+        or os.environ.get("USER_DISPLAY_NAME")
+        or ""
+    )
+
+
+def get_hermes_profile() -> str:
+    """Optional Hermes profile name under ~/.hermes/profiles/<name>/memories."""
+    import os
+    keys = load_api_keys()
+    return (
+        (keys.get("HERMES_PROFILE") or keys.get("hermes_profile")
+         or os.environ.get("HERMES_PROFILE") or "")
+    ).strip()
+
+
+def get_hermes_memories_dir() -> str:
+    """Optional absolute/tilde path override for Hermes memories directory."""
+    import os
+    keys = load_api_keys()
+    return (
+        (keys.get("HERMES_MEMORIES_DIR") or keys.get("hermes_memories_dir")
+         or os.environ.get("HERMES_MEMORIES_DIR") or "")
+    ).strip()
+
+
+def resolve_hermes_memory_dirs() -> list[Path]:
+    """Candidate Hermes memory directories, most specific first. No machine-specific defaults."""
+    dirs: list[Path] = []
+    explicit = get_hermes_memories_dir()
+    if explicit:
+        dirs.append(Path(explicit).expanduser())
+    profile = get_hermes_profile()
+    if profile:
+        dirs.append(Path.home() / ".hermes" / "profiles" / profile / "memories")
+    dirs.append(Path.home() / ".hermes" / "memories")
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    out: list[Path] = []
+    for d in dirs:
+        key = str(d)
+        if key not in seen:
+            seen.add(key)
+            out.append(d)
+    return out
 
 
 def save_assistant_config(assistant_name: str, user_name: str) -> None:
@@ -119,7 +183,7 @@ def save_assistant_config(assistant_name: str, user_name: str) -> None:
             data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         except Exception:
             data = {}
-    data["assistant_name"] = assistant_name.strip() or "JARVIS"
+    data["assistant_name"] = assistant_name.strip() or "Kurek"
     data["user_name"] = user_name.strip()
     CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
 
@@ -211,8 +275,15 @@ def _patch_config(**fields) -> None:
 
 
 def get_input_device() -> str:
-    """Microphone device name, or '' for the system default."""
-    return (load_api_keys().get("input_device", "") or "").strip()
+    """Microphone device name substring, or '' for the system default."""
+    import os
+    keys = load_api_keys()
+    return (
+        keys.get("INPUT_DEVICE")
+        or keys.get("input_device")
+        or os.environ.get("INPUT_DEVICE")
+        or ""
+    ).strip()
 
 
 def save_input_device(name: str) -> None:

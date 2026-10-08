@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-and-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system audio / tk deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libportaudio2 python3-tk
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install daemon + CI Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff pytest
+          pip install -r requirements.txt
+
+      - name: Ruff syntax/runtime (daemon path — exclude legacy GUI)
+        run: |
+          # E9/F63/F7: syntax & invalid-statement checks across the daemon tree.
+          # F82 (undefined names) is run only on modules without known pre-existing
+          # F821 debt in actions/* (those fixes are intentionally out of scope).
+          ruff check \
+            kurek_daemon.py \
+            core \
+            actions \
+            memory \
+            bin \
+            scripts \
+            tests \
+            setup.py \
+            --select E9,F63,F7 \
+            --exclude legacy
+          ruff check \
+            kurek_daemon.py \
+            core \
+            memory \
+            scripts \
+            tests \
+            setup.py \
+            --select F82 \
+            --exclude legacy
+
+      - name: Packaging deny-list (dry-run build)
+        run: |
+          chmod +x scripts/package_release.sh
+          VERSION=0.1.0 OUT_DIR="$RUNNER_TEMP/kurek-dist" ./scripts/package_release.sh
+
+      - name: Daemon smoke test
+        run: pytest -q tests/test_daemon_smoke.py

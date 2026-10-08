@@ -175,13 +175,13 @@ def _watch_loop(topic: str, interval: int = 4):
 
                 raw_vision = query_vision(
                     jpeg_bytes,
-                    f"Alan asked: 'Watch my screen and tell me what you think about {topic}'. "
+                    f"The user asked: 'Watch my screen and tell me what you think about {topic}'. "
                     "Analyze the current activity, design, errors, or progress. Keep it direct."
                 )
 
                 # Query DeepSeek-Flash to decide if an audible comment is warranted
                 prompt = (
-                    f"You are Kurek (JARVIS). You are silently watching Alan's screen observing: '{topic}'.\n"
+                    f"You are Kurek. You are silently watching the user's screen observing: '{topic}'.\n"
                     f"Visual observation just captured: \"{raw_vision}\"\n"
                     "If there is a valuable insight, critique, suggestion, warning, or candid reaction, "
                     "provide a short, punchy 1-2 sentence spoken comment (no markdown, no asterisks). "

@@ -163,15 +163,11 @@ def _resolve_path(raw: str) -> Path:
     if lower in shortcuts:
         return shortcuts[lower]
 
-    # Auto-remap legacy macOS paths to Linux home directory
-    if _OS != "Darwin":
-        if raw.startswith("/Users/archuser") or raw.startswith("/Users/"):
-            parts = raw.split("/", 3)
-            sub = parts[3] if len(parts) > 3 else ""
-            return Path.home() / sub
-        elif raw.startswith("/Volumes/omarchyuser"):
-            sub = raw.replace("/Volumes/omarchyuser", "", 1).lstrip("/")
-            return Path.home() / sub
+    # Remap foreign absolute home-style prefixes onto the current user's home
+    if _OS != "Darwin" and raw.startswith("/Users/"):
+        parts = raw.split("/", 3)
+        sub = parts[3] if len(parts) > 3 else ""
+        return Path.home() / sub
 
     return Path(raw).expanduser()
 
@@ -309,7 +305,7 @@ def delete_file(path: str, name: str = "", confirmed: bool = False) -> str:
             return (
                 f"File '{target.name}' found at '{target}'. "
                 f"Deletion requires confirmation. "
-                f"Ask Alan: 'Are you sure you want to delete {target.name}? Yes or No?'"
+                f"Ask the user: 'Are you sure you want to delete {target.name}? Yes or No?'"
             )
 
         original = target.resolve()

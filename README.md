@@ -62,9 +62,13 @@ kurek start
 git clone https://github.com/nodaysidle/kureksistant.git
 cd kureksistant
 ./install_linux.sh
-cp .env.example .env
+cp .env.example .env   # add DEEPSEEK_API_KEY and XAI_API_KEY
 kurek start
+curl -s http://127.0.0.1:8790/status
 ```
+
+Canonical entrypoint: the headless daemon (`kurek_daemon.py`) via `kurek start` / `./launch_kurek.sh`.  
+The old PyQt6 JARVIS GUI lives under [`legacy/`](legacy/) and is **unsupported**.
 
 ### macOS Native Menu Bar App
 
@@ -76,6 +80,8 @@ kurek start
 swiftc -O -o menubar/KurekBar menubar/KurekBar.swift
 ./menubar/KurekBar &
 ```
+
+Set `KUREK_PROJECT_DIR` (or rely on `~/.config/kurek/install_path`) so the menu bar app can locate the daemon if needed.
 
 ---
 
@@ -90,6 +96,11 @@ Kureksistant relies on direct high-speed cloud APIs for sub-second reasoning and
 | `GEMINI_API_KEY`     | Optional | Google Gemini Flash key for autonomous Wayland monitor vision (`screen_vision`). |
 | `DEEPGRAM_API_KEY`   | Optional | Deepgram Nova-2 voice transcription. If omitted, falls back to local `faster-whisper`. |
 | `TYPESAFE_API_KEY`   | Optional | TypeSafe Jev System One engine for sub-60ms cognitive snap-judgment triage. |
+| `KUREK_USER_NAME`    | Optional | Display name used in the system prompt (default: neutral `"the user"`). |
+| `HERMES_PROFILE`     | Optional | Hermes profile name → `~/.hermes/profiles/<name>/memories`. |
+| `HERMES_MEMORIES_DIR`| Optional | Absolute/tilde override for Hermes memories (wins over profile). |
+| `INPUT_DEVICE`       | Optional | Microphone name substring; empty uses the system default. |
+| `KUREK_PROJECT_DIR`  | Optional | Install path for menu-bar daemon auto-spawn (also `~/.config/kurek/install_path`). |
 
 **System dependencies:**
 - **Linux:** PipeWire with `mpv` (audio playback), `notify-send` (desktop notifications), `grim` (Wayland screen capture), `wl-clipboard` (`wl-copy` / `wl-paste`).
@@ -132,12 +143,12 @@ kurek stop             # Stop all daemon processes
 - **👁️ Autonomous Screen Vision & Visual Cortex:** Zero-latency monitor perception via `grim` (Wayland/Hyprland) and active window inspection (`hyprctl activewindow`) analyzed through Gemini Flash. Jev automatically detects when your query references code, errors, or layouts on screen and injects live visual context without asking you to command it.
 - **⏱️ Process & Build Sentinel (`process_sentinel`):** Monitors long-running compiles, training runs, or test suites (`cargo`, `npm`, `make`, `python`). When the process exits, Kurek dispatches a notification and verbally announces completion time over the speaker via Sol TTS.
 - **📋 Voice-to-Clipboard Drafter (`draft_to_clipboard`):** Dictate conventional commits (`feat:`, `fix:`), GitHub PR descriptions, issue reports, or docstrings directly into the Wayland clipboard (`wl-copy`) ready for instant pasting with `Ctrl+V`.
-- **📡 Parallel Git Workstation Radar (`workstation_radar`):** Sub-second parallel scan across 100+ repositories in `~/Projects` and `~/dev/nodaysidle`. Instant voice triage of dirty working trees, untracked files, unpushed commits ahead of upstream, and stashes.
+- **📡 Parallel Git Workstation Radar (`workstation_radar`):** Sub-second parallel scan across repositories in `~/Projects` and `~/dev`. Instant voice triage of dirty working trees, untracked files, unpushed commits ahead of upstream, and stashes.
 - **🌙 Nightly Dream & Reflection Cycle (`dream_tool`):** Daily subconscious reflection layer that writes an atmospheric prose journal to `~/dreams/YYYY-MM-DD.md` and dynamically distills active behavioral guidance into `~/ALIGNMENT_SYNTHESIS.md`.
 - **🎙️ Adaptive VAD & Voice Pipeline:** Ambient noise tracking auto-submits on 1.2s silence. Sub-second transcription via Deepgram Nova-2 (or local Whisper), direct reasoning via DeepSeek-Flash with full reasoning-token persistence, and natural conversational speech using xAI Grok Cloud TTS (**Sol** voice) streamed via PipeWire `mpv` (Linux) or `afplay` (macOS).
 - **📈 300-Second Sustained Resource Watcher:** Tracks a 5-minute sliding window of CPU and RAM usage. If average load exceeds 85% sustained over 300 seconds, Kurek identifies the top culprit process, dispatches a desktop notification (`notify-send`), and warns you verbally over the speaker.
 - **🔬 Universal Autonomous Research & File Creation:** Deep search across multiple live sources, automated Markdown synthesis, and instant file creation on disk without asking permission. Strict safety confirmation gate required only for file deletion (*"Are you sure you want to delete [file]? Yes or No?"*).
-- **🧠 Bidirectional Hermes Memory Continuity:** Automatically synchronizes knowledge and preferences with Hermes (`~/.hermes/profiles/eldio/memories/USER.md` and `MEMORY.md`).
+- **🧠 Bidirectional Hermes Memory Continuity:** Optionally synchronizes knowledge with Hermes (`HERMES_PROFILE` or `HERMES_MEMORIES_DIR` in `.env`; default probe `~/.hermes/memories`).
 - **🛠️ 28 Native Tool Modules:** Full file management, Playwright browser control, volume/brightness adjusters, Hyprland window tiling, alarms, process watchers, clipboard managers, and application launchers.
 
 ---
@@ -212,4 +223,6 @@ flowchart TD
 
 ## 📄 License
 
-[CC BY-NC 4.0](LICENSE) — derived from FatihMakes' JARVIS ("MARK 53 — JARVIS"). Kureksistant changes by [NODAYSIDLE](https://github.com/nodaysidle).
+[CC BY-NC 4.0](LICENSE) (`SPDX-License-Identifier: CC-BY-NC-4.0`) — derived from FatihMakes' JARVIS ("MARK 53 — JARVIS"). Kureksistant changes by [NODAYSIDLE](https://github.com/nodaysidle). See [NOTICE](NOTICE).
+
+Security reports (including key leaks): see [SECURITY.md](SECURITY.md).
