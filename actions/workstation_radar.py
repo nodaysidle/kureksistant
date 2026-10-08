@@ -3,20 +3,19 @@ actions/workstation_radar.py — Git workstation health radar for Kurek.
 Auto-discovered by core/action_loader.py.
 
 Capabilities:
-  • Scans all repositories across ~/Projects and ~/dev/nodaysidle in parallel.
+  • Scans all repositories across ~/Projects and ~/dev in parallel.
   • Detects dirty working trees (modified/untracked files), unpushed commits ahead of upstream, and stashes.
   • Returns a high-density executive voice summary and structured markdown audit.
 """
 from __future__ import annotations
 
 import concurrent.futures
-import os
 import subprocess
 from pathlib import Path
 
 WORKSPACE_ROOTS = [
     Path.home() / "Projects",
-    Path.home() / "dev" / "nodaysidle",
+    Path.home() / "dev",
 ]
 
 
@@ -89,7 +88,7 @@ def workstation_radar(parameters: dict | None = None, **kwargs) -> str:
             pass
 
     if not repo_dirs:
-        return "No git repositories found in ~/Projects or ~/dev/nodaysidle."
+        return "No git repositories found in ~/Projects or ~/dev."
 
     # Scan all repositories in parallel
     results: list[dict] = []
@@ -160,7 +159,7 @@ def workstation_radar(parameters: dict | None = None, **kwargs) -> str:
 
 TOOL = {
     "name": "workstation_radar",
-    "description": "Scans all repositories in ~/Projects and ~/dev/nodaysidle in parallel. Reports repositories with uncommitted changes, modified or untracked files, and unpushed commits ahead of upstream remotes.",
+    "description": "Scans all repositories in ~/Projects and ~/dev in parallel. Reports repositories with uncommitted changes, modified or untracked files, and unpushed commits ahead of upstream remotes.",
     "parameters": {
         "type": "OBJECT",
         "properties": {

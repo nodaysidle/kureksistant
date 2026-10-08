@@ -64,7 +64,7 @@ def _notify_job_complete(label: str, elapsed_str: str, pid: int):
         print(f"[Sentinel Memory Log Error] {e}")
 
     # 3. Verbal Spoken Alert via xAI Grok TTS / System Audio
-    spoken_text = f"Alan, your {label} job just finished in {elapsed_str}."
+    spoken_text = f"Your {label} job just finished in {elapsed_str}."
     try:
         from memory.config_manager import get_xai_key
         from core.tts import create_tts_player

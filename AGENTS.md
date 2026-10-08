@@ -41,7 +41,7 @@
 │  ┌──────────────────────────────────────────────────────────────────────────────────┐  │
 │  │                             Persistent Memory System                             │  │
 │  │  • Muse Memory: ~/memory/YYYY-MM-DD.md · ~/MEMORY.md · ~/ALIGNMENT_SYNTHESIS.md │  │
-│  │  • Hermes Continuity Sync: ~/.hermes/profiles/eldio/memories/                   │  │
+│  │  • Hermes Continuity Sync: HERMES_PROFILE / HERMES_MEMORIES_DIR / ~/.hermes/…  │  │
 │  │    (reads full USER.md & MEMORY.md, syncs bidirectional remember calls)          │  │
 │  │  • Conversation context: memory/kurek_history.json                              │  │
 │  └──────────────────────────────────────────────────────────────────────────────────┘  │
@@ -66,7 +66,8 @@
 | **STT Engine** | [`core/stt.py`](core/stt.py) | Implements `DeepgramSTT` (Nova-2) and `WhisperSTT` (`faster-whisper`) with DC offset stripping and peak normalization. |
 | **Memory Tool** | [`actions/memory_tool.py`](actions/memory_tool.py) | `manage_memory(action='remember'|'recall')`. Bidirectionally syncs with Hermes `USER.md` & `MEMORY.md`. |
 | **Memory Files** | [`memory/kurek_history.json`](memory/kurek_history.json) | Saved multi-turn conversation history. Reloaded on daemon startup. |
-| **External Memory** | `~/.hermes/profiles/eldio/memories/` | Contains `USER.md` (profile of NDI) and `MEMORY.md` (knowledge base). |
+| **External Memory** | `HERMES_PROFILE` / `HERMES_MEMORIES_DIR` / `~/.hermes/memories` | Optional Hermes `USER.md` + `MEMORY.md` continuity. |
+| **Legacy GUI** | [`legacy/`](legacy/) | Unsupported PyQt6 JARVIS UI / dashboard / plugins (see `legacy/README.md`). |
 
 ---
 
@@ -110,7 +111,7 @@ Kurek uses the **Muse Memory** three-tier markdown memory plane, triaged by Type
 
 Supporting stores:
 - `memory/kurek_history.json` keeps the rolling conversation context between turns.
-- **Hermes continuity:** `manage_memory(action='remember')` also appends to Hermes `~/.hermes/profiles/eldio/memories/MEMORY.md`, and Kurek reads Hermes `USER.md` and `MEMORY.md` into its system prompt.
+- **Hermes continuity:** When configured, `manage_memory(action='remember')` also appends to Hermes `MEMORY.md`, and Kurek reads Hermes `USER.md` / `MEMORY.md` into its system prompt.
 
 ---
 

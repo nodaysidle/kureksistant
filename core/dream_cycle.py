@@ -55,7 +55,7 @@ Review today's user interactions and activities:
 
 {recent_content[-4000:]}
 
-Write an evocative, prose reflection ("Dream") summarizing the day's technical achievements, human-agent collaboration with Alan (NDI), and cognitive themes. 
+Write an evocative, prose reflection ("Dream") summarizing the day's technical achievements, human-agent collaboration, and cognitive themes. 
 Do not output robotic bullet points. Write 2-3 atmospheric paragraphs.
 """
 

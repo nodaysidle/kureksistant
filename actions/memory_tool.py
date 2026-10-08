@@ -1,19 +1,16 @@
 """
-Memory tool for Kurek / JARVIS.
+Memory tool for Kurek.
 Allows storing and recalling long-term user facts, preferences, identity, and notes.
-Synchronizes with both JARVIS memory and Hermes memory (/Volumes/omarchyuser/26MaySymlink/.hermes/memories).
+Synchronizes with local memory and optional Hermes memories (see HERMES_* in .env).
 """
 from pathlib import Path
+
+from memory.config_manager import resolve_hermes_memory_dirs
 from memory.memory_manager import remember, search_memory, load_memory
 
-HERMES_CANDIDATES = [
-    Path.home() / ".hermes" / "profiles" / "eldio" / "memories",
-    Path.home() / ".hermes" / "memories",
-    Path("/Volumes/omarchyuser/26MaySymlink/.hermes/memories"),
-]
 
 def _resolve_hermes_dir() -> Path | None:
-    for candidate in HERMES_CANDIDATES:
+    for candidate in resolve_hermes_memory_dirs():
         if candidate.exists() and candidate.is_dir():
             return candidate
     return None

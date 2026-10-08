@@ -55,7 +55,7 @@ class WhisperSTT:
     def transcribe(self, audio: np.ndarray, sample_rate: int = 16000, **kwargs) -> str:
         """Transcribe a float32 mono 16 kHz numpy array. Returns transcript string."""
         try:
-            # 1. Strip DC offset (critical for USB mics like Trust GXT 232)
+            # 1. Strip DC offset (critical for many USB / desk mics)
             clean_audio = audio - np.mean(audio)
             # 2. Peak normalize to 0.95 so low-gain microphone audio is clear to Whisper
             peak = float(np.max(np.abs(clean_audio)))
