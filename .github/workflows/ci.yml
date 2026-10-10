@@ -14,10 +14,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install system audio / tk deps
+      - name: Install system audio / tk / build deps
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq libportaudio2 python3-tk
+          sudo apt-get install -y -qq libportaudio2 python3-tk gcc shellcheck
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -56,6 +56,14 @@ jobs:
             setup.py \
             --select F82 \
             --exclude legacy
+
+      - name: Build kurek-trigger (-Wall -Wextra -Werror)
+        run: |
+          gcc -O3 -Wall -Wextra -Werror bin/kurek-trigger.c -o /tmp/kurek-trigger-ci
+          test -x /tmp/kurek-trigger-ci
+
+      - name: Shellcheck installer
+        run: shellcheck -x install_linux.sh
 
       - name: Packaging deny-list (dry-run build)
         run: |

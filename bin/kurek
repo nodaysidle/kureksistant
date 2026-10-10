@@ -8,8 +8,8 @@ elif [ -f "$SCRIPT_DIR/launch_kurek.sh" ]; then
     DIR="$SCRIPT_DIR"
 elif [ -f "$SCRIPT_DIR/../launch_kurek.sh" ]; then
     DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-elif [ -f "$HOME/.config/kurek/install_path" ]; then
-    DIR="$(cat "$HOME/.config/kurek/install_path")"
+elif [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/kurek/install_path" ]; then
+    DIR="$(cat "${XDG_CONFIG_HOME:-$HOME/.config}/kurek/install_path")"
 else
     DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 fi

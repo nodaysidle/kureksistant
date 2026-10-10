@@ -29,8 +29,12 @@ def test_kurek_service_memory_envelope() -> None:
     high_mb = _parse_memory_value(high_match.group(1))
     max_mb = _parse_memory_value(max_match.group(1))
 
-    assert high_mb == 400, f"MemoryHigh should be 400M, got {high_match.group(1)}"
+    assert high_mb == 450, f"MemoryHigh should be 450M, got {high_match.group(1)}"
     assert max_mb == 600, f"MemoryMax should be 600M, got {max_match.group(1)}"
     assert high_mb < max_mb
     # Must sit above the documented ~333MB Whisper resident set.
     assert high_mb >= 333
+    # Repo unit is a template — installer fills @KUREK_DIR@.
+    assert "@KUREK_DIR@" in text
+    assert "/home/arch" not in text
+    assert "nodaysidle/kurekizmo" not in text
