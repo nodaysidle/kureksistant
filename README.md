@@ -25,7 +25,7 @@
 
 > **The Problem:** Modern desktop AI assistants are bloated 500MB+ Electron web apps that hijack workstation RAM, require manual window-switching, and lack direct hardware input integration.
 >
-> **The Result:** Kureksistant is a headless local daemon (~450MB peak with faster-whisper loaded, observed) summoned via mouse Middle-Click (`mouse:274`) or Fn key, featuring DeepSeek-Flash reasoning, xAI Grok voice (Sol), screen vision, and 24 native tool modules. Trigger dispatch is ~0.8ms median (`scripts/bench_trigger.py`, mock daemon); end-to-end latency is reported by `KUREK_TIMING=1` logs.
+> **The Result:** Kureksistant is a headless local daemon (~450MB peak with faster-whisper loaded, observed) summoned via mouse Middle-Click (`mouse:274`) or Fn key, featuring DeepSeek-Flash reasoning, xAI Grok voice (Sol), screen vision, and 25 native tool modules. Trigger dispatch is ~0.8ms median (`scripts/bench_trigger.py`, mock daemon); end-to-end latency is reported by `KUREK_TIMING=1` logs.
 
 <p align="center">
   <img src="docs/demo.gif" alt="Kureksistant v0.2.0 promo — 24 tools, ~450MB peak with Whisper, ~0.8ms trigger median" width="800" />
@@ -154,7 +154,8 @@ kurek-trigger toggle   # Direct C trigger dispatch (~0.8ms median, mock daemon)
 - **🌙 Nightly Dream & Reflection Cycle (`dream_tool`):** Daily subconscious reflection layer that writes an atmospheric prose journal to `~/dreams/YYYY-MM-DD.md` and dynamically distills active behavioral guidance into `~/ALIGNMENT_SYNTHESIS.md`.
 - **🔬 Universal Autonomous Research & File Creation:** Deep search across multiple live sources, automated Markdown synthesis, and instant file creation on disk without asking permission. Strict safety confirmation gate required only for file deletion (*"Are you sure you want to delete [file]? Yes or No?"*).
 - **🧠 Bidirectional Hermes Memory Continuity:** Optionally synchronizes knowledge with Hermes (`HERMES_PROFILE` or `HERMES_MEMORIES_DIR` in `.env`; default probe `~/.hermes/memories`).
-- **🛠️ 24 Native Tool Modules:** Full file management, Playwright browser control, volume/brightness adjusters, Hyprland window tiling, alarms, process watchers, clipboard managers, and application launchers.
+- **📚 nodaysidle-knowledge Vault Integration (`vault_knowledge`):** Deep integration with the 70+ project Obsidian llm-wiki vault. Instant voice queries for project architecture, roadmap, releases, PRDs, social media / X promotion calendars, and quick inbox capturing.
+- **🛠️ 25 Native Tool Modules:** Full file management, Playwright browser control, volume/brightness adjusters, Hyprland window tiling, alarms, process watchers, clipboard managers, vault queries, and application launchers.
 
 ---
 

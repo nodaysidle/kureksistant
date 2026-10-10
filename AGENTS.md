@@ -1,6 +1,6 @@
 # AGENTS.md — Developer & AI Agent Guide for Kurek (Kureksistant)
 
-> **Kurek** is a headless personal AI assistant for **Arch Linux / Omarchy Quattro (Hyprland)** and **macOS** (~450MB peak RAM with faster-whisper loaded, observed). Features Middle Click mouse summon (~0.8ms median trigger via `bench_trigger.py`), native desktop launcher, DeepSeek-Flash reasoning, xAI Grok speech (**Sol** voice), Hermes bidirectional memory continuity, and 24 tool modules in `actions/`. Release: v0.2.0.
+> **Kurek** is a headless personal AI assistant for **Arch Linux / Omarchy Quattro (Hyprland)** and **macOS** (~450MB peak RAM with faster-whisper loaded, observed). Features Middle Click mouse summon (~0.8ms median trigger via `bench_trigger.py`), native desktop launcher, DeepSeek-Flash reasoning, xAI Grok speech (**Sol** voice), Hermes bidirectional memory continuity, and 25 tool modules in `actions/`. Release: v0.2.0.
 
 ---
 
@@ -67,8 +67,8 @@
 | **TTS Engine** | [`core/tts.py`](core/tts.py) | Implements `XAITTSEngine` (Grok Cloud TTS, voice: **Sol** / `sal`) with chunk streaming into `MpvPipeWireSink`. |
 | **STT Engine** | [`core/stt.py`](core/stt.py) | Implements `DeepgramSTT` (Nova-2) and `WhisperSTT` (`faster-whisper`) with DC offset stripping and peak normalization. |
 | **Memory Tool** | [`actions/memory_tool.py`](actions/memory_tool.py) | `manage_memory(action='remember'|'recall')`. Bidirectionally syncs with Hermes `USER.md` & `MEMORY.md`. |
-| **Memory Files** | [`memory/kurek_history.json`](memory/kurek_history.json) | Saved multi-turn conversation history. Reloaded on daemon startup. |
 | **External Memory** | `HERMES_PROFILE` / `HERMES_MEMORIES_DIR` / `~/.hermes/memories` | Optional Hermes `USER.md` + `MEMORY.md` continuity. |
+| **Knowledge Vault** | [`actions/vault_knowledge.py`](actions/vault_knowledge.py) | `vault_knowledge(action='list_projects'\|'read'\|'search'\|'add_inbox')`. Accesses nodaysidle-knowledge Obsidian vault notes, PRDs, roadmaps, and social media plans. |
 
 ---
 
@@ -129,6 +129,7 @@ The daemon auto-discovers all tools in the [`actions/`](actions/) directory:
 - **`reminder`**: Schedules system alarms and notifications.
 - **`web_search`**: DuckDuckGo web search and real-time news retrieval.
 - **`manage_memory`**: Stores and retrieves personal knowledge, synced with Hermes.
+- **`vault_knowledge`**: Reads and searches the `nodaysidle-knowledge` Obsidian vault (projects, PRDs, social media plans, inbox).
 - **`weather_report`**, **`youtube_video`**, **`code_helper`**, **`file_controller`**, etc.
 
 ---
