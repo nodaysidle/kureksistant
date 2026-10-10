@@ -28,7 +28,7 @@
 > **The Result:** Kureksistant is a headless local daemon (~450MB peak with faster-whisper loaded, observed) summoned via mouse Middle-Click (`mouse:274`) or Fn key, featuring DeepSeek-Flash reasoning, xAI Grok voice (Sol), screen vision, and 24 native tool modules. Trigger dispatch is ~0.8ms median (`scripts/bench_trigger.py`, mock daemon); end-to-end latency is reported by `KUREK_TIMING=1` logs.
 
 <p align="center">
-  <img src="docs/demo.gif" alt="Kureksistant Demo" width="800" />
+  <img src="docs/demo.gif" alt="Kureksistant v0.2.0 promo — 24 tools, ~450MB peak with Whisper, ~0.8ms trigger median" width="800" />
 </p>
 
 ---
