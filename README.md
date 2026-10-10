@@ -87,7 +87,7 @@ Set `KUREK_PROJECT_DIR` (or rely on `~/.config/kurek/install_path`) so the menu 
 
 ## 🔑 Requirements & Keys (`.env`)
 
-Kureksistant relies on direct high-speed cloud APIs for sub-second reasoning and realistic voice synthesis:
+Kureksistant relies on direct high-speed cloud APIs for reasoning and realistic voice synthesis:
 
 | Environment Variable | Required | Description |
 |----------------------|----------|-------------|
@@ -122,7 +122,7 @@ Kureksistant relies on direct high-speed cloud APIs for sub-second reasoning and
 
 ### Hyprland Bindings (`~/.config/hypr/bindings.lua`)
 ```lua
--- Middle click mouse scroll-wheel: sub-millisecond UDS trigger (<1ms)
+-- Middle click mouse scroll-wheel: UDS trigger (~0.8ms median, bench_trigger.py)
 o.bind("mouse:274", "Summon Kurek Middle Click", "~/.local/bin/kurek-trigger toggle", { mouse = true })
 o.bind("SUPER + mouse:274", "Summon Kurek Super+Middle Click", "~/.local/bin/kurek-trigger toggle", { mouse = true })
 ```

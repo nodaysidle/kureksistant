@@ -275,7 +275,7 @@ class KurekEngine:
                 pass
 
     def toggle(self):
-        """Toggle between idle and listening with instant sub-millisecond barge-in."""
+        """Toggle between idle and listening with instant barge-in."""
         with self.state_lock:
             cur = self.state
 
