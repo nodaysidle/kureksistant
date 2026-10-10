@@ -24,6 +24,7 @@ memory/*.db
 
 # ── Compiled binaries ─────────────────────────────────────────────────────────
 menubar/kurekbar
+bin/kurek-trigger
 
 # ── Python build noise ────────────────────────────────────────────────────────
 __pycache__/

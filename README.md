@@ -121,32 +121,36 @@ Kureksistant relies on direct high-speed cloud APIs for sub-second reasoning and
 
 ### Hyprland Bindings (`~/.config/hypr/bindings.lua`)
 ```lua
--- Middle click mouse scroll-wheel to toggle voice listening
-o.bind("mouse:274", "Summon Kurek Middle Click", "~/.local/bin/kurek toggle", { mouse = true })
-o.bind("SUPER + mouse:274", "Summon Kurek Super+Middle Click", "~/.local/bin/kurek toggle", { mouse = true })
+-- Middle click mouse scroll-wheel: sub-millisecond UDS trigger (<1ms)
+o.bind("mouse:274", "Summon Kurek Middle Click", "~/.local/bin/kurek-trigger toggle", { mouse = true })
+o.bind("SUPER + mouse:274", "Summon Kurek Super+Middle Click", "~/.local/bin/kurek-trigger toggle", { mouse = true })
 ```
 
-### CLI Commands (`kurek`)
+### CLI Commands (`kurek` / `kurek-trigger`)
 ```bash
-kurek toggle           # Toggle microphone listening
+kurek toggle           # Toggle microphone listening (<1ms via C trigger)
 kurek status           # Check current daemon state & RAM
 kurek prompt "..."     # Send text query directly without mic
-kurek start            # Launch daemon in background
-kurek stop             # Stop all daemon processes
+kurek start            # Launch daemon via systemd user unit
+kurek stop             # Stop assistant daemon
+kurek-trigger toggle   # Direct sub-millisecond C trigger dispatch
 ```
 
 ---
 
 ## ⚡ Key Capabilities
 
+- **⚡ Sub-400ms Streaming Voice Pipeline:** Sentence-buffered streaming directly splits initial response boundaries (`[.!?\n]`). First sentence dispatches to xAI Grok TTS (**Sol** voice) immediately while downstream tokens generate in parallel.
+- **🎧 Persistent PipeWire mpv Audio Sink & Instant Barge-in:** Maintains an idle PipeWire `mpv` background process via `$XDG_RUNTIME_DIR/kurek_mpv.sock`. Plays audio chunks straight from `/dev/shm` (POSIX shared RAM tmpfs) with zero NVMe disk writes. Clicking middle-mouse while Kurek is speaking instantly cuts off playback via IPC.
+- **🪟 Event-Driven Hyprland Cortex (`.socket2.sock`):** Connects directly to Hyprland's broadcast event stream. Keeps focused window class, title, workspace, and geometry cached in RAM with zero CLI subprocess forks.
+- **👁️ Zero-Disk Window-Targeted Screen Vision:** Crops active window coordinates via `grim -g "<coords>" -t jpeg -q 80 -` piped straight to memory buffers (`io.BytesIO`) into Gemini Flash. Zero temporary disk writes and sub-60ms capture time.
+- **🔌 Unix Domain Socket IPC & C Trigger Client:** Asynchronous socket listener at `$XDG_RUNTIME_DIR/kurek.sock`. Middle-click summon dispatches raw JSON in <1ms via a compiled C binary (`bin/kurek-trigger`), bypassing Bash, curl, and TCP stack overhead. Real-time state event streaming (`IDLE`, `LISTENING`, `THINKING`, `SPEAKING`) available for Waybar/AGS widgets.
+- **📦 Native systemd User Service (`kurek.service`):** Bound to `graphical-session.target` with journald logging, auto-restart on failure, and a strict resource envelope (`MemoryHigh=250M`, `MemoryMax=450M`).
 - **🧠 Muse Memory Architecture & TypeSafe Jev:** Three-tier memory plane (Daily Logs `~/memory/`, Durable Core `~/MEMORY.md`, Standing Alignment `~/ALIGNMENT_SYNTHESIS.md`). Cognitive snap-judgment triage powered by TypeSafe Jev auto-promotes durable rules and hoists negative boundaries instantly with calibrated confidence scores.
-- **👁️ Autonomous Screen Vision & Visual Cortex:** Zero-latency monitor perception via `grim` (Wayland/Hyprland) and active window inspection (`hyprctl activewindow`) analyzed through Gemini Flash. Jev automatically detects when your query references code, errors, or layouts on screen and injects live visual context without asking you to command it.
 - **⏱️ Process & Build Sentinel (`process_sentinel`):** Monitors long-running compiles, training runs, or test suites (`cargo`, `npm`, `make`, `python`). When the process exits, Kurek dispatches a notification and verbally announces completion time over the speaker via Sol TTS.
 - **📋 Voice-to-Clipboard Drafter (`draft_to_clipboard`):** Dictate conventional commits (`feat:`, `fix:`), GitHub PR descriptions, issue reports, or docstrings directly into the Wayland clipboard (`wl-copy`) ready for instant pasting with `Ctrl+V`.
 - **📡 Parallel Git Workstation Radar (`workstation_radar`):** Sub-second parallel scan across repositories in `~/Projects` and `~/dev`. Instant voice triage of dirty working trees, untracked files, unpushed commits ahead of upstream, and stashes.
 - **🌙 Nightly Dream & Reflection Cycle (`dream_tool`):** Daily subconscious reflection layer that writes an atmospheric prose journal to `~/dreams/YYYY-MM-DD.md` and dynamically distills active behavioral guidance into `~/ALIGNMENT_SYNTHESIS.md`.
-- **🎙️ Adaptive VAD & Voice Pipeline:** Ambient noise tracking auto-submits on 1.2s silence. Sub-second transcription via Deepgram Nova-2 (or local Whisper), direct reasoning via DeepSeek-Flash with full reasoning-token persistence, and natural conversational speech using xAI Grok Cloud TTS (**Sol** voice) streamed via PipeWire `mpv` (Linux) or `afplay` (macOS).
-- **📈 300-Second Sustained Resource Watcher:** Tracks a 5-minute sliding window of CPU and RAM usage. If average load exceeds 85% sustained over 300 seconds, Kurek identifies the top culprit process, dispatches a desktop notification (`notify-send`), and warns you verbally over the speaker.
 - **🔬 Universal Autonomous Research & File Creation:** Deep search across multiple live sources, automated Markdown synthesis, and instant file creation on disk without asking permission. Strict safety confirmation gate required only for file deletion (*"Are you sure you want to delete [file]? Yes or No?"*).
 - **🧠 Bidirectional Hermes Memory Continuity:** Optionally synchronizes knowledge with Hermes (`HERMES_PROFILE` or `HERMES_MEMORIES_DIR` in `.env`; default probe `~/.hermes/memories`).
 - **🛠️ 24 Native Tool Modules:** Full file management, Playwright browser control, volume/brightness adjusters, Hyprland window tiling, alarms, process watchers, clipboard managers, and application launchers.
@@ -158,18 +162,19 @@ kurek stop             # Stop all daemon processes
 ```mermaid
 flowchart TD
     subgraph Inputs ["Summon Triggers"]
-        Mouse["🖱️ Middle Click (mouse:274)\nSuper + Middle Click"]
+        Mouse["🖱️ Middle Click (mouse:274)\nSuper + Middle Click\n(kurek-trigger C binary <1ms)"]
         Launcher["🚀 Desktop Launcher (kurek.desktop)\nkurek toggle | prompt"]
         MacBar["🍏 macOS Menu Bar (KurekBar.swift)\nFn Global Push-to-Talk"]
     end
 
-    subgraph Daemon ["Kurek Daemon :8790 (~333MB RAM w/ Whisper)"]
+    subgraph Daemon ["Kurek Daemon (UDS kurek.sock + HTTP :8790)"]
         State["State Engine (IDLE / LISTENING / THINKING / SPEAKING)"]
         Audio["sounddevice • Adaptive RMS Gate • 1.2s Silence Auto-Submit"]
         STT["STT Engine: Deepgram Nova-2 (Fallback: faster-whisper)"]
-        LLM["Brain: DeepSeek-Flash (api.deepseek.com)"]
-        TTS["Speech: xAI Grok Cloud Sol (PipeWire mpv / afplay)"]
-        Watchers["Background Watchers:\n• 300s CPU/RAM Sliding Window\n• Wayland Clipboard Listener\n• Hourly Muse Consolidation"]
+        LLM["Brain: DeepSeek-Flash (stream_deepseek_sentences)"]
+        TTS["Speech: xAI Grok Cloud Sol (Sentence-Buffered Streaming)"]
+        Sink["Audio Sink: Persistent mpv PipeWire Sink (kurek_mpv.sock)\nRAM /dev/shm tmpfs • Instant Barge-in"]
+        HyprWatcher["Hyprland Watcher: .socket2.sock (RAM Context)"]
     end
 
     subgraph Cognition ["Cognitive Plane & Memory"]

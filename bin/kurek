@@ -19,15 +19,29 @@ if [ ! -f "$ICON" ]; then
     ICON="$DIR/desktop/kurek.png"
 fi
 DAEMON_URL="http://127.0.0.1:8790"
+TRIGGER_BIN="${HOME}/.local/bin/kurek-trigger"
+if [ ! -x "$TRIGGER_BIN" ] && [ -x "$DIR/bin/kurek-trigger" ]; then
+    TRIGGER_BIN="$DIR/bin/kurek-trigger"
+fi
 
 ensure_daemon() {
     if pgrep -f "kurek_daemon.py" >/dev/null 2>&1; then
         return 0
     fi
+    if [ -x "$TRIGGER_BIN" ] && "$TRIGGER_BIN" status >/dev/null 2>&1; then
+        return 0
+    fi
     if ! curl -s --max-time 1 "$DAEMON_URL/status" >/dev/null 2>&1; then
         notify-send -t 2000 -h string:x-canonical-private-synchronous:kurek -i "$ICON" "Kurek" "Starting assistant daemon..." 2>/dev/null
-        "$DIR/launch_kurek.sh" >/dev/null 2>&1 &
+        if systemctl --user is-enabled kurek.service >/dev/null 2>&1; then
+            systemctl --user start kurek.service
+        else
+            "$DIR/launch_kurek.sh" >/dev/null 2>&1 &
+        fi
         for i in {1..25}; do
+            if [ -x "$TRIGGER_BIN" ] && "$TRIGGER_BIN" status >/dev/null 2>&1; then
+                break
+            fi
             if curl -s --max-time 0.5 "$DAEMON_URL/status" >/dev/null 2>&1; then
                 break
             fi
@@ -38,29 +52,57 @@ ensure_daemon() {
 
 case "$1" in
     start)
-        "$DIR/launch_kurek.sh"
+        if systemctl --user is-enabled kurek.service >/dev/null 2>&1; then
+            systemctl --user start kurek.service
+        else
+            "$DIR/launch_kurek.sh"
+        fi
         ;;
     stop)
-        "$DIR/launch_kurek.sh" stop
+        if [ -x "$TRIGGER_BIN" ]; then
+            "$TRIGGER_BIN" stop >/dev/null 2>&1
+        fi
+        if systemctl --user is-active kurek.service >/dev/null 2>&1; then
+            systemctl --user stop kurek.service
+        else
+            "$DIR/launch_kurek.sh" stop
+        fi
         notify-send -t 1500 -h string:x-canonical-private-synchronous:kurek -i "$ICON" "Kurek" "Stopped" 2>/dev/null
         ;;
     status)
+        if [ -x "$TRIGGER_BIN" ] && "$TRIGGER_BIN" status 2>/dev/null; then
+            exit 0
+        fi
         "$DIR/launch_kurek.sh" status
         ;;
     prompt)
         shift
-        ensure_daemon
         PROMPT_TEXT="$*"
         if [ -z "$PROMPT_TEXT" ]; then
             echo "Usage: kurek prompt <your message>"
             exit 1
+        fi
+        # Fast path via C trigger UDS
+        if [ -x "$TRIGGER_BIN" ] && "$TRIGGER_BIN" prompt "$PROMPT_TEXT" 2>/dev/null; then
+            exit 0
+        fi
+        ensure_daemon
+        if [ -x "$TRIGGER_BIN" ] && "$TRIGGER_BIN" prompt "$PROMPT_TEXT" 2>/dev/null; then
+            exit 0
         fi
         curl -s -X POST "$DAEMON_URL/prompt" \
             -H "Content-Type: application/json" \
             -d "{\"prompt\": $(python3 -c "import json, sys; print(json.dumps(sys.argv[1]))" "$PROMPT_TEXT")}"
         ;;
     toggle|"")
+        # Sub-millisecond fast path via C trigger UDS
+        if [ -x "$TRIGGER_BIN" ] && "$TRIGGER_BIN" toggle 2>/dev/null; then
+            exit 0
+        fi
         ensure_daemon
+        if [ -x "$TRIGGER_BIN" ] && "$TRIGGER_BIN" toggle 2>/dev/null; then
+            exit 0
+        fi
         curl -s --max-time 1 -X POST "$DAEMON_URL/toggle" >/dev/null 2>&1
         ;;
     *)

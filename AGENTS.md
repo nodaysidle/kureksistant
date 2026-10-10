@@ -54,20 +54,21 @@
 
 | Component | File Path | Description |
 |-----------|-----------|-------------|
-| **Python Daemon** | [`kurek_daemon.py`](kurek_daemon.py) | Headless background HTTP service on port `8790` (using `ThreadingHTTPServer`). Orchestrates audio capture, VAD auto-submitting, STT, DeepSeek LLM, tools, and TTS. |
-| **Linux CLI & App Launcher** | [`bin/kurek`](bin/kurek) (`~/.local/bin/kurek`) | Single binary control: `kurek [toggle|prompt|status|start|stop]`. Auto-spawns daemon if offline. |
+| **Python Daemon** | [`kurek_daemon.py`](kurek_daemon.py) | Headless background daemon. Exposes Unix Domain Socket (`$XDG_RUNTIME_DIR/kurek.sock`) and HTTP port `8790`. Orchestrates audio capture, VAD auto-submitting, STT, DeepSeek LLM, tools, and TTS. |
+| **C Trigger Client** | [`bin/kurek-trigger`](bin/kurek-trigger) (`bin/kurek-trigger.c`) | Ultra-fast (<1ms) compiled C binary dispatching raw JSON over UDS socket directly to the daemon. Auto-spawns daemon if offline. |
+| **Linux CLI & App Launcher** | [`bin/kurek`](bin/kurek) (`~/.local/bin/kurek`) | Single binary control: `kurek [toggle|prompt|status|start|stop]`. Delegates to `kurek-trigger` over UDS. |
+| **systemd User Service** | [`desktop/kurek.service`](desktop/kurek.service) (`~/.config/systemd/user/kurek.service`) | Native systemd user unit bound to `graphical-session.target` with journald logging and memory envelope. |
+| **Hyprland Event Watcher** | [`core/hyprland_watcher.py`](core/hyprland_watcher.py) | Event-driven background thread connected to Hyprland's `.socket2.sock`. Caches active window title, class, and geometry in RAM. |
+| **PipeWire Audio Sink** | [`core/mpv_sink.py`](core/mpv_sink.py) | Persistent background `mpv` process bound to PipeWire via `$XDG_RUNTIME_DIR/kurek_mpv.sock`. Zero-disk tmpfs playback & instant barge-in. |
 | **Desktop Entry** | [`desktop/kurek.desktop`](desktop/kurek.desktop) | Standard FreeDesktop `.desktop` entry. Appears in Omarchy launcher (`Super+Space`) under Apps with 1024x1024 retina icon. |
-| **Hyprland Bindings** | `~/.config/hypr/bindings.lua` | Middle Click (`mouse:274`) and `SUPER + mouse:274` to summon Kurek. |
+| **Hyprland Bindings** | `~/.config/hypr/bindings.lua` | Middle Click (`mouse:274`) and `SUPER + mouse:274` calling `kurek-trigger toggle`. |
 | **macOS Menu Bar UI** | [`menubar/KurekBar.swift`](menubar/KurekBar.swift) | Native Swift 6 status item for macOS. Polls `/status` at 10 Hz and monitors global `Fn` modifier flags. |
-| **Launcher Script** | [`launch_kurek.sh`](launch_kurek.sh) | Cross-platform control script: `./launch_kurek.sh [start|stop|status]`. Uses `setsid` to detach permanently. |
-| **Installer** | [`install_linux.sh`](install_linux.sh) | One-line installer for Arch Linux / Omarchy Quattro. |
-| **LLM Client** | [`core/llm_client.py`](core/llm_client.py) | Direct `api.deepseek.com` client with OpenAI tool schemas (`deepseek-flash`). |
-| **TTS Engine** | [`core/tts.py`](core/tts.py) | Implements `XAITTSEngine` (Grok Cloud TTS, voice: **Sol** / `sal`) playing via Linux `mpv` or macOS `afplay`. |
+| **LLM Client** | [`core/llm_client.py`](core/llm_client.py) | Direct `api.deepseek.com` client with sentence-buffered streaming pipeline (`stream_deepseek_sentences`). |
+| **TTS Engine** | [`core/tts.py`](core/tts.py) | Implements `XAITTSEngine` (Grok Cloud TTS, voice: **Sol** / `sal`) with chunk streaming into `MpvPipeWireSink`. |
 | **STT Engine** | [`core/stt.py`](core/stt.py) | Implements `DeepgramSTT` (Nova-2) and `WhisperSTT` (`faster-whisper`) with DC offset stripping and peak normalization. |
 | **Memory Tool** | [`actions/memory_tool.py`](actions/memory_tool.py) | `manage_memory(action='remember'|'recall')`. Bidirectionally syncs with Hermes `USER.md` & `MEMORY.md`. |
 | **Memory Files** | [`memory/kurek_history.json`](memory/kurek_history.json) | Saved multi-turn conversation history. Reloaded on daemon startup. |
 | **External Memory** | `HERMES_PROFILE` / `HERMES_MEMORIES_DIR` / `~/.hermes/memories` | Optional Hermes `USER.md` + `MEMORY.md` continuity. |
-| **Legacy GUI** | [`legacy/`](legacy/) | Unsupported PyQt6 JARVIS UI / dashboard / plugins (see `legacy/README.md`). |
 
 ---
 

@@ -86,8 +86,17 @@ def _play_np(samples, sample_rate: int) -> None:
     sd.wait()
 
 
-def _play_audio_bytes(audio_bytes: bytes) -> None:
-    """Decode MP3/WAV/OGG bytes and play via macOS afplay, Linux mpv/pw-play/aplay, or sounddevice."""
+def _play_audio_bytes(audio_bytes: bytes, append: bool = False) -> None:
+    """Decode MP3/WAV/OGG bytes and play via PipeWire mpv IPC, macOS afplay, or fallback."""
+    if sys.platform != "darwin":
+        try:
+            from core.mpv_sink import get_mpv_sink
+            sink = get_mpv_sink()
+            if sink.play_bytes(audio_bytes, append=append):
+                return
+        except Exception as e:
+            print(f"[AudioPlay] PipeWire mpv sink notice: {e}")
+
     import tempfile
     import subprocess
     import shutil
@@ -433,7 +442,13 @@ class TTSPlayer:
 
     @property
     def is_playing(self) -> bool:
-        return self._playing
+        if self._playing:
+            return True
+        try:
+            from core.mpv_sink import get_mpv_sink
+            return get_mpv_sink().is_playing()
+        except Exception:
+            return False
 
     def speak(
         self,
@@ -456,8 +471,33 @@ class TTSPlayer:
             if on_done:
                 on_done()
 
+    def speak_chunk(self, text: str, append: bool = False) -> None:
+        """Synthesise and play a single sentence chunk in streaming mode."""
+        if not text.strip():
+            return
+        try:
+            with self._lock:
+                self._playing = True
+            if hasattr(self._engine, "speak"):
+                try:
+                    self._engine.speak(text, append=append)
+                except TypeError:
+                    self._engine.speak(text)
+        except Exception as e:
+            print(f"[TTS Chunk] Error: {e}")
+
     def stop(self) -> None:
         sd.stop()
+        if hasattr(self._engine, "stop"):
+            try:
+                self._engine.stop()
+            except Exception:
+                pass
+        try:
+            from core.mpv_sink import get_mpv_sink
+            get_mpv_sink().stop()
+        except Exception:
+            pass
         with self._lock:
             self._playing = False
 
@@ -504,7 +544,7 @@ class XAITTSEngine:
         self.voice_id = _XAI_VOICE_MAP.get(raw_voice, raw_voice)
         self.language = language or "en"
 
-    def speak(self, text: str) -> None:
+    def speak(self, text: str, append: bool = False) -> None:
         if not text.strip():
             return
         import requests
@@ -520,13 +560,20 @@ class XAITTSEngine:
             }
             resp = requests.post("https://api.x.ai/v1/tts", headers=headers, json=payload, timeout=12)
             if resp.status_code == 200:
-                _play_audio_bytes(resp.content)
+                _play_audio_bytes(resp.content, append=append)
             else:
                 print(f"[xAI TTS] HTTP {resp.status_code}: {resp.text}")
                 MacSayEngine().speak(text)
         except Exception as e:
             print(f"[xAI TTS] Error: {e}")
             MacSayEngine().speak(text)
+
+    def stop(self) -> None:
+        try:
+            from core.mpv_sink import get_mpv_sink
+            get_mpv_sink().stop()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------

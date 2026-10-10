@@ -29,16 +29,19 @@ import sounddevice as sd
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 
+import socket
 from memory.config_manager import (
     get_deepgram_key,
     get_user_name,
     get_xai_key,
     resolve_hermes_memory_dirs,
 )
-from core.llm_client import query_deepseek
+from core.llm_client import query_deepseek, stream_deepseek_sentences
 from core.tts import create_tts_player
 from core.stt import DeepgramSTT, WhisperSTT
 from core.action_loader import discover_actions
+from core.hyprland_watcher import get_hyprland_watcher
+from core.mpv_sink import get_mpv_sink
 from memory.memory_manager import load_memory, format_memory_for_prompt
 
 # Audio recording configuration
@@ -181,6 +184,24 @@ class KurekEngine:
         except Exception as e:
             print(f"[Kurek] Resource watcher callback notice: {e}")
 
+        # IPC & Hyprland watchers
+        self.uds_subscribers: list[socket.socket] = []
+        self.uds_lock = threading.Lock()
+        self._cancel_requested = False
+
+        # Pre-warm PipeWire mpv sink & start Hyprland event watcher
+        try:
+            get_mpv_sink().ensure_running()
+            print("[Kurek Audio] 🎧 Persistent PipeWire mpv sink initialized.")
+        except Exception as e:
+            print(f"[Kurek Audio Notice] {e}")
+
+        try:
+            get_hyprland_watcher()
+            print("[Kurek Hyprland] 🪟 Event-driven Hyprland watcher connected.")
+        except Exception as e:
+            print(f"[Kurek Hyprland Notice] {e}")
+
         # Start background hourly Muse Memory consolidation thread
         threading.Thread(target=self._hourly_consolidation_loop, daemon=True).start()
         print("[Kurek Memory] Hourly Muse consolidation worker initialized.")
@@ -210,6 +231,23 @@ class KurekEngine:
             self.state = new_state
             print(f"[Kurek State] → {new_state.upper()}", flush=True)
             self._notify_state(new_state)
+            self._broadcast_state_uds(new_state)
+
+    def _broadcast_state_uds(self, state: str):
+        payload = (json.dumps({"event": "state", "state": state}) + "\n").encode("utf-8")
+        with self.uds_lock:
+            dead = []
+            for client_sock in self.uds_subscribers:
+                try:
+                    client_sock.sendall(payload)
+                except Exception:
+                    dead.append(client_sock)
+            for d in dead:
+                try:
+                    self.uds_subscribers.remove(d)
+                    d.close()
+                except Exception:
+                    pass
 
     def _notify_state(self, state: str):
         icon = os.path.expanduser("~/.local/share/icons/kurek.png")
@@ -234,16 +272,18 @@ class KurekEngine:
                 pass
 
     def toggle(self):
-        """Toggle between idle and listening (called by Fn key or menu bar click)."""
+        """Toggle between idle and listening with instant sub-millisecond barge-in."""
         with self.state_lock:
             cur = self.state
 
         if cur == KurekState.IDLE:
+            self._cancel_requested = False
             self.start_listening()
         elif cur == KurekState.LISTENING:
             self.stop_listening_and_process()
         elif cur in (KurekState.SPEAKING, KurekState.THINKING):
-            # Interrupt / cancel
+            # Instant barge-in / interrupt
+            self._cancel_requested = True
             self.tts.stop()
             self.set_state(KurekState.IDLE)
 
@@ -454,66 +494,84 @@ class KurekEngine:
         reply_text = ""
         last_tool_output = ""
         max_tool_turns = 5
+        sentence_count = 0
+
         for turn_idx in range(max_tool_turns):
-            resp = query_deepseek(
+            if self._cancel_requested:
+                break
+
+            tool_detected = False
+            streamed_sentences = []
+
+            for ev in stream_deepseek_sentences(
                 messages=messages,
                 tools=self.openai_tools if (self.openai_tools and turn_idx < max_tool_turns - 1) else None,
                 model="deepseek-flash",
-            )
+            ):
+                if self._cancel_requested:
+                    break
 
-            if isinstance(resp, dict) and resp.get("type") == "tool_calls":
-                tool_calls = resp.get("tool_calls", [])
-                asst_msg = {
-                    "role": "assistant",
-                    "content": resp.get("content") or "",
-                    "tool_calls": tool_calls,
-                }
-                if resp.get("reasoning_content"):
-                    asst_msg["reasoning_content"] = resp["reasoning_content"]
-                messages.append(asst_msg)
+                ev_type = ev.get("type")
+                if ev_type == "tool_calls":
+                    tool_detected = True
+                    tool_calls = ev.get("tool_calls", [])
+                    asst_msg = {
+                        "role": "assistant",
+                        "content": ev.get("content") or "",
+                        "tool_calls": tool_calls,
+                    }
+                    messages.append(asst_msg)
 
-                last_tool_output = ""
-                for tc in tool_calls:
-                    fn = tc.get("function", {})
-                    fn_name = fn.get("name", "")
-                    fn_args_raw = fn.get("arguments", "{}")
-                    try:
-                        fn_args = json.loads(fn_args_raw) if isinstance(fn_args_raw, str) else fn_args_raw
-                    except Exception:
-                        fn_args = {}
+                    last_tool_output = ""
+                    for tc in tool_calls:
+                        fn = tc.get("function", {})
+                        fn_name = fn.get("name", "")
+                        fn_args_raw = fn.get("arguments", "{}")
+                        try:
+                            fn_args = json.loads(fn_args_raw) if isinstance(fn_args_raw, str) else fn_args_raw
+                        except Exception:
+                            fn_args = {}
 
-                    print(f"[Kurek Tool Dispatch] ⚙️ {fn_name}({fn_args})", flush=True)
-                    try:
-                        tool_result = self.actions.run(fn_name, fn_args)
-                    except Exception as e:
-                        tool_result = f"Error executing {fn_name}: {e}"
-                    last_tool_output = str(tool_result)
-                    print(f"[Kurek Tool Result] → {tool_result}", flush=True)
+                        print(f"[Kurek Tool Dispatch] ⚙️ {fn_name}({fn_args})", flush=True)
+                        try:
+                            tool_result = self.actions.run(fn_name, fn_args)
+                        except Exception as e:
+                            tool_result = f"Error executing {fn_name}: {e}"
+                        last_tool_output = str(tool_result)
+                        print(f"[Kurek Tool Result] → {tool_result}", flush=True)
 
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.get("id", f"call_{fn_name}_{turn_idx}"),
-                        "content": str(tool_result),
-                    })
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.get("id", f"call_{fn_name}_{turn_idx}"),
+                            "content": str(tool_result),
+                        })
+                    # Break out to next turn to process tool result
+                    break
 
-                # Loop to next turn so DeepSeek can process tool output or call follow-on tools
+                elif ev_type == "sentence":
+                    raw_sentence = ev.get("sentence", "")
+                    clean_sentence = self.sanitize_text_for_speech(raw_sentence)
+                    if clean_sentence and not self._cancel_requested:
+                        if sentence_count == 0:
+                            self.set_state(KurekState.SPEAKING)
+                        self.tts.speak_chunk(clean_sentence, append=(sentence_count > 0))
+                        sentence_count += 1
+                        streamed_sentences.append(raw_sentence)
+
+                elif ev_type == "done":
+                    reply_text = ev.get("full_content", "") or " ".join(streamed_sentences)
+                    break
+
+            if tool_detected:
                 continue
-
-            elif isinstance(resp, str):
-                reply_text = resp
-                break
-            elif isinstance(resp, dict) and "content" in resp:
-                reply_text = resp.get("content") or "All set."
-                break
             else:
-                if last_tool_output:
-                    if "Contents of " in last_tool_output or ("\n" in last_tool_output and len(last_tool_output) > 120):
-                        reply_text = "I executed the requested action on your system."
-                    else:
-                        reply_text = last_tool_output
-                else:
-                    reply_text = "I encountered an issue processing that with DeepSeek."
                 break
+
+        if not reply_text and last_tool_output:
+            if "Contents of " in last_tool_output or ("\n" in last_tool_output and len(last_tool_output) > 120):
+                reply_text = "I executed the requested action on your system."
+            else:
+                reply_text = last_tool_output
 
         # Strip DeepSeek safety tags, thinking wrappers, and DSML markup if present
         reply_text = re.sub(r"<ds_safety>.*?</ds_safety>", "", reply_text, flags=re.DOTALL)
@@ -538,19 +596,24 @@ class KurekEngine:
         self._append_daily_memory(user_prompt, reply_text)
         threading.Thread(target=self._consolidate_with_jev, args=(user_prompt,), daemon=True).start()
 
-        # Sanitize speech output: completely strip URLs, markdown links, and formatting
-        clean_speech = self.sanitize_text_for_speech(reply_text)
-        if not clean_speech:
-            clean_speech = "I found the information, but there is no spoken summary."
+        # Fallback speak if sentences were not streamed directly
+        if sentence_count == 0 and not self._cancel_requested:
+            clean_speech = self.sanitize_text_for_speech(reply_text)
+            if not clean_speech:
+                clean_speech = "All set."
+            self.set_state(KurekState.SPEAKING)
+            try:
+                self.tts.speak(clean_speech)
+            except Exception as e:
+                print(f"[Kurek] TTS error: {e}")
 
-        # Speak
-        self.set_state(KurekState.SPEAKING)
-        try:
-            self.tts.speak(clean_speech)
-        except Exception as e:
-            print(f"[Kurek] TTS error: {e}")
-        finally:
-            self.set_state(KurekState.IDLE)
+        # Wait for audio playback to finish (or interrupt)
+        while self.tts.is_playing:
+            if self._cancel_requested:
+                break
+            time.sleep(0.05)
+        self.set_state(KurekState.IDLE)
+        return
 
     @staticmethod
     def sanitize_text_for_speech(text: str) -> str:
@@ -750,8 +813,100 @@ class KurekHTTPHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
 
+def _get_uds_socket_path() -> Path:
+    xdg = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid() if hasattr(os, 'getuid') else 1000}"
+    p = Path(xdg) / "kurek.sock"
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
+    except Exception:
+        return Path("/tmp/kurek.sock")
+
+
+def run_uds_server(engine: KurekEngine):
+    sock_path = _get_uds_socket_path()
+    if sock_path.exists():
+        try:
+            test_s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            test_s.settimeout(0.15)
+            test_s.connect(str(sock_path))
+            test_s.close()
+            print(f"[Kurek UDS] Socket {sock_path} is currently active.")
+            return
+        except Exception:
+            sock_path.unlink(missing_ok=True)
+
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(sock_path))
+    server.listen(16)
+    print(f"[Kurek UDS] 🚀 Listening at Unix Domain Socket: {sock_path}", flush=True)
+
+    def _client_handler(conn: socket.socket):
+        try:
+            conn.settimeout(None)
+            f = conn.makefile("r", encoding="utf-8", errors="replace")
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except Exception:
+                    data = {"action": line}
+
+                action = data.get("action", "")
+
+                if action == "toggle":
+                    engine.toggle()
+                    conn.sendall(json.dumps({"ok": True, "state": engine.state}).encode("utf-8") + b"\n")
+                    break
+
+                elif action == "prompt":
+                    prompt_text = data.get("prompt", "")
+                    if prompt_text:
+                        threading.Thread(target=engine.handle_text_query, args=(prompt_text,), daemon=True).start()
+                    conn.sendall(b'{"status":"processing"}\n')
+                    break
+
+                elif action == "status":
+                    conn.sendall(json.dumps({"state": engine.state}).encode("utf-8") + b"\n")
+                    break
+
+                elif action == "stop":
+                    engine.tts.stop()
+                    engine.set_state(KurekState.IDLE)
+                    conn.sendall(b'{"ok":true}\n')
+                    break
+
+                elif action == "subscribe":
+                    with engine.uds_lock:
+                        engine.uds_subscribers.append(conn)
+                    conn.sendall(json.dumps({"event": "state", "state": engine.state}).encode("utf-8") + b"\n")
+                    return
+
+                else:
+                    conn.sendall(b'{"error":"unknown action"}\n')
+                    break
+        except Exception:
+            pass
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    while True:
+        try:
+            conn, _ = server.accept()
+            threading.Thread(target=_client_handler, args=(conn,), daemon=True).start()
+        except Exception:
+            time.sleep(0.5)
+
+
 def run_server(engine: KurekEngine, port: int = 8790):
     KurekHTTPHandler.engine = engine
+    # Launch UDS listener in background
+    threading.Thread(target=run_uds_server, args=(engine,), daemon=True).start()
     server = ThreadingHTTPServer(("127.0.0.1", port), KurekHTTPHandler)
     print(f"[Kurek Server] 🚀 Listening at http://127.0.0.1:{port}")
     server.serve_forever()
@@ -759,7 +914,7 @@ def run_server(engine: KurekEngine, port: int = 8790):
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("⚡ KUREK DAEMON STARTING (Headless macOS Native Mode)")
+    print("⚡ KUREK DAEMON STARTING (Arch Linux / Omarchy Native Mode)")
     print("=" * 60)
 
     engine = KurekEngine()

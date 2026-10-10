@@ -1,0 +1,20 @@
+[Unit]
+Description=Kurek AI Assistant Daemon for Arch Linux / Hyprland
+After=graphical-session.target pipewire.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/dev/nodaysidle/kurekizmo
+ExecStart=%h/dev/nodaysidle/kurekizmo/.venv/bin/python -u %h/dev/nodaysidle/kurekizmo/kurek_daemon.py
+Restart=on-failure
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+# Resource Envelope (Comfortably accommodates faster-whisper base.en)
+MemoryHigh=250M
+MemoryMax=450M
+
+[Install]
+WantedBy=graphical-session.target

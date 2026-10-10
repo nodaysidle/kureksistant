@@ -51,10 +51,18 @@ def _get_gemini_api_key() -> str:
 
 
 def get_hyprland_context() -> dict:
-    """Retrieves active window, class, title, and workspace from Hyprland."""
+    """Retrieves active window, class, title, and workspace from in-memory Hyprland event watcher."""
+    try:
+        from core.hyprland_watcher import get_hyprland_watcher
+        ctx = get_hyprland_watcher().get_active_window_context()
+        if ctx and ctx.get("class"):
+            return ctx
+    except Exception:
+        pass
+
     if shutil.which("hyprctl"):
         try:
-            res = subprocess.run(["hyprctl", "activewindow", "-j"], capture_output=True, text=True, timeout=1.5)
+            res = subprocess.run(["hyprctl", "activewindow", "-j"], capture_output=True, text=True, timeout=1.0)
             if res.returncode == 0 and res.stdout.strip():
                 return json.loads(res.stdout)
         except Exception:
@@ -62,39 +70,67 @@ def get_hyprland_context() -> dict:
     return {}
 
 
-def capture_screen_jpeg(max_width: int = 1440) -> tuple[bytes, int]:
+def capture_screen_jpeg(max_width: int = 1440, crop_active_window: bool = True) -> tuple[bytes, int]:
     """
-    Captures the primary monitor using native OS tools (grim on Wayland, screencapture on macOS, or mss).
+    Captures active window (or primary monitor) directly into memory without disk writes.
+    Uses grim stdout pipe on Wayland, screencapture on macOS.
     Returns (jpeg_bytes, structural_diff_hash).
     """
-    tmp_path = Path("/tmp/kurek_screen_cap.png")
+    # 1. Linux Wayland (grim) - Zero-disk in-memory stream
+    if shutil.which("grim"):
+        cmd = ["grim"]
 
+        # Window-targeted cropping: query cached geometry
+        if crop_active_window:
+            try:
+                from core.hyprland_watcher import get_hyprland_watcher
+                geom = get_hyprland_watcher().get_active_window_geometry()
+                if geom:
+                    cmd.extend(["-g", f"{geom[0]},{geom[1]} {geom[2]}x{geom[3]}"])
+            except Exception:
+                pass
+
+        cmd.extend(["-t", "jpeg", "-q", "80", "-"])
+        try:
+            res = subprocess.run(cmd, capture_output=True, check=True)
+            jpeg_bytes = res.stdout
+
+            # Structural diff hash from in-memory buffer
+            with Image.open(io.BytesIO(jpeg_bytes)) as img:
+                small = img.resize((16, 16)).convert("L")
+                img_hash = sum(small.getdata())
+
+            return jpeg_bytes, img_hash
+        except Exception as e:
+            print(f"[ScreenVision] In-memory grim notice: {e}")
+
+    # 2. macOS native screencapture fallback
     if sys.platform == "darwin":
+        tmp_path = Path("/tmp/kurek_screen_cap.png")
         subprocess.run(["screencapture", "-x", str(tmp_path)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    elif shutil.which("grim"):
-        subprocess.run(["grim", str(tmp_path)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    else:
-        import mss
-        with mss.mss() as sct:
-            monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
-            shot = sct.grab(monitor)
-            img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
-            img.save(tmp_path)
+        with Image.open(tmp_path) as img:
+            img = img.convert("RGB")
+            img.thumbnail((max_width, 810), Image.Resampling.BILINEAR)
+            small = img.resize((16, 16)).convert("L")
+            img_hash = sum(small.getdata())
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=85)
+            jpeg_bytes = buf.getvalue()
+        tmp_path.unlink(missing_ok=True)
+        return jpeg_bytes, img_hash
 
-    with Image.open(tmp_path) as img:
-        img = img.convert("RGB")
+    # 3. Generic mss fallback
+    import mss
+    with mss.mss() as sct:
+        monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+        shot = sct.grab(monitor)
+        img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
         img.thumbnail((max_width, 810), Image.Resampling.BILINEAR)
-
-        # Structural hash for change detection (16x16 thumbnail grayscale sum)
         small = img.resize((16, 16)).convert("L")
         img_hash = sum(small.getdata())
-
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=85)
-        jpeg_bytes = buf.getvalue()
-
-    tmp_path.unlink(missing_ok=True)
-    return jpeg_bytes, img_hash
+        return buf.getvalue(), img_hash
 
 
 def query_vision(jpeg_bytes: bytes, prompt: str) -> str:

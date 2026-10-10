@@ -35,12 +35,24 @@ mkdir -p "$HOME/.local/share/icons/hicolor/512x512/apps"
 cp "$DIR/desktop/kurek.png" "$HOME/.local/share/icons/kurek.png"
 cp "$DIR/desktop/kurek.png" "$HOME/.local/share/icons/hicolor/512x512/apps/kurek.png"
 
-# 5. Install CLI binary
+# 5. Compile and install CLI and C trigger binary
 mkdir -p "$HOME/.local/bin"
 cp "$DIR/bin/kurek" "$HOME/.local/bin/kurek"
 chmod +x "$HOME/.local/bin/kurek"
 
-# 6. Install Desktop Entry
+if command -v gcc >/dev/null 2>&1 && [ -f "$DIR/bin/kurek-trigger.c" ]; then
+    gcc -O3 "$DIR/bin/kurek-trigger.c" -o "$HOME/.local/bin/kurek-trigger"
+    chmod +x "$HOME/.local/bin/kurek-trigger"
+    echo "⚡ Compiled and installed kurek-trigger (<1ms UDS client)"
+fi
+
+# 6. Install systemd user service
+mkdir -p "$HOME/.config/systemd/user"
+cp "$DIR/desktop/kurek.service" "$HOME/.config/systemd/user/kurek.service"
+systemctl --user daemon-reload 2>/dev/null || true
+echo "📦 Installed kurek.service to ~/.config/systemd/user/"
+
+# 7. Install Desktop Entry
 mkdir -p "$HOME/.local/share/applications"
 sed -e "s|Exec=kurek toggle|Exec=$HOME/.local/bin/kurek toggle|g" \
     "$DIR/desktop/kurek.desktop" > "$HOME/.local/share/applications/kurek.desktop"
