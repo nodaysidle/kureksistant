@@ -62,5 +62,5 @@ jobs:
           chmod +x scripts/package_release.sh
           VERSION=0.1.0 OUT_DIR="$RUNNER_TEMP/kurek-dist" ./scripts/package_release.sh
 
-      - name: Daemon smoke test
-        run: pytest -q tests/test_daemon_smoke.py
+      - name: Test suite (offline / no API keys)
+        run: pytest -q tests/
