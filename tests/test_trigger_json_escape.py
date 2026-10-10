@@ -102,3 +102,7 @@ def test_trigger_source_has_no_home_arch() -> None:
     text = TRIGGER_SRC.read_text(encoding="utf-8")
     assert "/home/arch" not in text
     assert "/tmp/kurek.sock" not in text
+    # Vault resolver must not hardcode a machine-specific absolute home path.
+    vault_src = ROOT / "actions" / "vault_knowledge.py"
+    vault_text = vault_src.read_text(encoding="utf-8")
+    assert "/home/arch" not in vault_text
