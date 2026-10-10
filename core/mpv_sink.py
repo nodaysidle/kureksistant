@@ -1,8 +1,8 @@
 """
 core/mpv_sink.py — Persistent PipeWire mpv audio sink with IPC socket control.
 
-Eliminates per-utterance process startup latency and provides sub-millisecond
-instant barge-in / stop functionality via $XDG_RUNTIME_DIR/kurek_mpv.sock.
+Avoids per-utterance process startup latency and provides instant barge-in /
+stop functionality via $XDG_RUNTIME_DIR/kurek_mpv.sock.
 """
 from __future__ import annotations
 
@@ -15,6 +15,8 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+
+from core.timing import mark as timing_mark
 
 
 def _get_runtime_dir() -> Path:
@@ -133,6 +135,7 @@ class MpvPipeWireSink:
             return False
 
         mode = "append-play" if append else "replace"
+        timing_mark("mpv_loadfile", once=True)
         success = self._send_command(["loadfile", str(chunk_file), mode])
 
         # Clean old chunks from /dev/shm in background

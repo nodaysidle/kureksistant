@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-KUREK DAEMON — Ultra-low latency, lean headless personal AI assistant for macOS.
-Replaces the heavy PyQt6 UI (~500MB RAM) with a headless background service
-(~333MB RAM with default faster-whisper STT; lower without Whisper).
+KUREK DAEMON — Lean headless personal AI assistant for Arch Linux / Hyprland
+(and macOS menu-bar companion). Background service with observed ~450MB peak
+RAM when faster-whisper is loaded.
 
 Connects with:
-  • Swift Menu Bar Indicator (KurekBar) & Fn key push-to-talk
-  • DeepSeek API (deepseek-chat)
+  • Linux UDS trigger (kurek-trigger) / Hyprland Middle Click
+  • Swift Menu Bar Indicator (KurekBar) & Fn key push-to-talk on macOS
+  • DeepSeek API (deepseek-flash)
   • Deepgram STT (nova-2) & faster-whisper fallback
-  • Kokoro-82M TTS & macOS native 'say' fallback
+  • xAI Grok TTS (Sol) via persistent mpv PipeWire sink
 """
 import asyncio
 import io
@@ -44,6 +45,7 @@ from core.stt import DeepgramSTT, WhisperSTT
 from core.action_loader import discover_actions
 from core.hyprland_watcher import get_hyprland_watcher
 from core.mpv_sink import get_mpv_sink
+from core.timing import begin_query, end_query
 from memory.memory_manager import load_memory, format_memory_for_prompt
 
 # Audio recording configuration
@@ -273,7 +275,7 @@ class KurekEngine:
                 pass
 
     def toggle(self):
-        """Toggle between idle and listening with instant sub-millisecond barge-in."""
+        """Toggle between idle and listening with instant barge-in."""
         with self.state_lock:
             cur = self.state
 
@@ -402,6 +404,7 @@ class KurekEngine:
             pass
 
     def handle_text_query(self, user_prompt: str):
+        begin_query()
         self.set_state(KurekState.THINKING)
         try:
             self._handle_text_query_inner(user_prompt)
@@ -425,6 +428,7 @@ class KurekEngine:
                 pass
             if self.state != KurekState.IDLE:
                 self.set_state(KurekState.IDLE)
+            end_query()
 
     def _handle_text_query_inner(self, user_prompt: str):
         now_str = datetime.now().strftime("%Y-%m-%d %A, %I:%M %p")

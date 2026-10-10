@@ -1,9 +1,13 @@
 """
 core/hyprland_watcher.py — Event-driven Hyprland state watcher via socket2.sock.
 
-Listens to Hyprland's broadcast event stream on .socket2.sock to maintain
-an in-memory state table of focused window title, class, and geometry.
-Eliminates hyprctl CLI process spawning completely during assistant turns.
+Listens to Hyprland's broadcast event stream on .socket2.sock and keeps an
+in-memory cache of focused window class, title, address, and workspace.
+
+hyprctl usage:
+  • one seed call at startup (activewindow -j)
+  • one lazy geometry fetch per vision/screen-capture request when geometry
+    is stale (focus/move events mark geometry dirty; they do NOT spawn hyprctl)
 """
 from __future__ import annotations
 
@@ -62,14 +66,18 @@ class HyprlandEventWatcher:
         self._active_window: dict = {
             "class": "",
             "title": "",
+            "address": "",
             "at": [0, 0],
             "size": [0, 0],
             "workspace": {"id": 1, "name": "1"},
         }
+        self._geometry_dirty = True
         self._sock_path: str | None = None
         self._instance_sig: str | None = None
         self._running = False
         self._thread: threading.Thread | None = None
+        # Test seam: count lazy geometry fetches.
+        self.geometry_fetch_count = 0
 
     def start(self):
         with self._lock:
@@ -82,7 +90,7 @@ class HyprlandEventWatcher:
         self._thread.start()
 
     def _seed_initial_state(self):
-        """Seed initial active window geometry from hyprctl once on startup."""
+        """Seed initial active window (incl. geometry) from hyprctl once on startup."""
         sock_path, inst_sig = _resolve_hyprland_socket2()
         self._sock_path = sock_path
         self._instance_sig = inst_sig
@@ -91,28 +99,105 @@ class HyprlandEventWatcher:
             return
 
         try:
-            cmd = ["hyprctl", "--instance", inst_sig, "activewindow", "-j"]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=1.0)
-            if res.returncode == 0 and res.stdout.strip():
-                data = json.loads(res.stdout)
+            data = self._hyprctl_activewindow()
+            if data:
                 with self._lock:
                     self._active_window.update(data)
+                    self._geometry_dirty = False
         except Exception as e:
             print(f"[HyprWatcher] Seed notice: {e}")
 
-    def _refresh_active_window(self):
-        """Asynchronously refreshes full geometry for the newly focused window."""
+    def _hyprctl_activewindow(self) -> dict | None:
         if not self._instance_sig or not shutil.which("hyprctl"):
-            return
+            return None
+        cmd = ["hyprctl", "--instance", self._instance_sig, "activewindow", "-j"]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=1.0)
+        if res.returncode == 0 and res.stdout.strip():
+            return json.loads(res.stdout)
+        return None
+
+    def _fetch_geometry_once(self) -> None:
+        """Synchronous one-shot geometry refresh for vision/capture callers."""
         try:
-            cmd = ["hyprctl", "--instance", self._instance_sig, "activewindow", "-j"]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=0.8)
-            if res.returncode == 0 and res.stdout.strip():
-                data = json.loads(res.stdout)
-                with self._lock:
-                    self._active_window.update(data)
+            data = self._hyprctl_activewindow()
         except Exception:
-            pass
+            data = None
+        with self._lock:
+            self.geometry_fetch_count += 1
+            if data:
+                self._active_window.update(data)
+                self._geometry_dirty = False
+
+    def apply_event_line(self, line: str) -> None:
+        """Parse a single socket2 line into the cache. Never spawns hyprctl."""
+        line = line.strip()
+        if not line or ">>" not in line:
+            return
+        event_type, event_data = line.split(">>", 1)
+        self._handle_event(event_type, event_data)
+
+    def _handle_event(self, event_type: str, event_data: str) -> None:
+        if event_type == "activewindow":
+            # class,title
+            parts = event_data.split(",", 1)
+            win_cls = parts[0]
+            win_title = parts[1] if len(parts) > 1 else ""
+            with self._lock:
+                self._active_window["class"] = win_cls
+                self._active_window["title"] = win_title
+                self._geometry_dirty = True
+
+        elif event_type == "activewindowv2":
+            # address (e.g. 0x5b4992764370)
+            with self._lock:
+                self._active_window["address"] = event_data.strip()
+                self._geometry_dirty = True
+
+        elif event_type == "openwindow":
+            # address,workspace,class,title
+            parts = event_data.split(",", 3)
+            if len(parts) < 4:
+                return
+            addr, workspace, win_cls, win_title = parts
+            with self._lock:
+                # Update cache when this is (or becomes) the focused window.
+                current_addr = (self._active_window.get("address") or "").lower()
+                if not current_addr or current_addr == addr.lower():
+                    self._active_window["address"] = addr
+                    self._active_window["class"] = win_cls
+                    self._active_window["title"] = win_title
+                    self._active_window.setdefault("workspace", {})["name"] = workspace
+                    self._geometry_dirty = True
+
+        elif event_type in ("movewindow", "movewindowv2"):
+            # address,workspace  (movewindowv2 may include more fields)
+            parts = event_data.split(",", 1)
+            if not parts:
+                return
+            addr = parts[0].strip()
+            workspace = parts[1].strip() if len(parts) > 1 else ""
+            with self._lock:
+                current_addr = (self._active_window.get("address") or "").lower()
+                if current_addr and current_addr == addr.lower():
+                    if workspace:
+                        # workspace may be "name" or "id,name"
+                        ws_name = workspace.split(",")[-1]
+                        self._active_window.setdefault("workspace", {})["name"] = ws_name
+                    self._geometry_dirty = True
+
+        elif event_type == "workspace":
+            with self._lock:
+                self._active_window.setdefault("workspace", {})["name"] = event_data
+
+        elif event_type == "workspacev2":
+            # id,name
+            parts = event_data.split(",", 1)
+            with self._lock:
+                ws = self._active_window.setdefault("workspace", {})
+                if parts[0].strip().lstrip("-").isdigit():
+                    ws["id"] = int(parts[0].strip())
+                if len(parts) > 1:
+                    ws["name"] = parts[1]
 
     def _listen_loop(self):
         while self._running:
@@ -133,35 +218,9 @@ class HyprlandEventWatcher:
                 for line in sock_file:
                     if not self._running:
                         break
-                    line = line.strip()
-                    if not line:
-                        continue
+                    self.apply_event_line(line)
 
-                    # Events format: event>>data
-                    if ">>" not in line:
-                        continue
-                    event_type, event_data = line.split(">>", 1)
-
-                    if event_type == "activewindow":
-                        # class,title
-                        parts = event_data.split(",", 1)
-                        win_cls = parts[0]
-                        win_title = parts[1] if len(parts) > 1 else ""
-                        with self._lock:
-                            self._active_window["class"] = win_cls
-                            self._active_window["title"] = win_title
-                        # Trigger lightweight async geometry refresh
-                        threading.Thread(target=self._refresh_active_window, daemon=True).start()
-
-                    elif event_type == "activewindowv2":
-                        # address (e.g. 0x5b4992764370)
-                        threading.Thread(target=self._refresh_active_window, daemon=True).start()
-
-                    elif event_type == "workspace":
-                        with self._lock:
-                            self._active_window.setdefault("workspace", {})["name"] = event_data
-
-            except Exception as e:
+            except Exception:
                 # Socket disconnected or hyprland reloaded
                 time.sleep(1.0)
             finally:
@@ -172,17 +231,42 @@ class HyprlandEventWatcher:
                         pass
 
     def get_active_window_context(self) -> dict:
-        """O(1) in-memory lookup. Zero CLI process execution."""
+        """O(1) in-memory lookup (class/title/workspace/address). No hyprctl."""
         with self._lock:
             return dict(self._active_window)
 
     def get_active_window_geometry(self) -> tuple[int, int, int, int] | None:
-        """Returns (x, y, width, height) if valid, else None."""
+        """
+        Returns (x, y, width, height) if valid.
+
+        Fetches geometry via hyprctl at most once while dirty (typically once
+        per vision/screen-capture request after a focus change).
+        """
         with self._lock:
-            at = self._active_window.get("at", [0, 0])
-            size = self._active_window.get("size", [0, 0])
-            if size and len(size) == 2 and size[0] > 50 and size[1] > 50:
-                return int(at[0]), int(at[1]), int(size[0]), int(size[1])
+            dirty = self._geometry_dirty
+            at = list(self._active_window.get("at", [0, 0]) or [0, 0])
+            size = list(self._active_window.get("size", [0, 0]) or [0, 0])
+            have_geom = (
+                len(at) == 2
+                and len(size) == 2
+                and size[0] > 50
+                and size[1] > 50
+            )
+
+        if dirty or not have_geom:
+            self._fetch_geometry_once()
+            with self._lock:
+                at = list(self._active_window.get("at", [0, 0]) or [0, 0])
+                size = list(self._active_window.get("size", [0, 0]) or [0, 0])
+                have_geom = (
+                    len(at) == 2
+                    and len(size) == 2
+                    and size[0] > 50
+                    and size[1] > 50
+                )
+
+        if have_geom:
+            return int(at[0]), int(at[1]), int(size[0]), int(size[1])
         return None
 
     def stop(self):

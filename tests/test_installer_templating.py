@@ -42,7 +42,7 @@ def test_render_unit_sed_produces_no_hardcoded_arch_path(tmp_path: Path) -> None
     assert f"WorkingDirectory={install_dir}" in rendered
     assert f"ExecStart={install_dir}/.venv/bin/python -u {install_dir}/kurek_daemon.py" in rendered
     assert "/home/arch" not in rendered
-    assert "MemoryHigh=450M" in rendered
+    assert "MemoryHigh=512M" in rendered
     assert "MemoryMax=600M" in rendered
 
 

@@ -12,8 +12,8 @@ RestartSec=2
 StandardOutput=journal
 StandardError=journal
 
-# Resource Envelope (Comfortably accommodates faster-whisper base.en ~333MB)
-MemoryHigh=450M
+# Resource Envelope (observed ~452MiB peak with faster-whisper loaded)
+MemoryHigh=512M
 MemoryMax=600M
 
 [Install]

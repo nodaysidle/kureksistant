@@ -1,4 +1,4 @@
-"""CI check: systemd unit memory envelope fits the ~333MB Whisper footprint."""
+"""CI check: systemd unit memory envelope fits observed Whisper peak (~452MiB)."""
 from __future__ import annotations
 
 import re
@@ -9,7 +9,7 @@ UNIT = ROOT / "desktop" / "kurek.service"
 
 
 def _parse_memory_value(raw: str) -> int:
-    """Parse systemd memory sizes like 400M / 600M into megabytes."""
+    """Parse systemd memory sizes like 512M / 600M into megabytes."""
     match = re.fullmatch(r"(\d+)([KMG])?", raw.strip(), flags=re.IGNORECASE)
     assert match, f"unrecognised memory value: {raw!r}"
     amount = int(match.group(1))
@@ -29,11 +29,11 @@ def test_kurek_service_memory_envelope() -> None:
     high_mb = _parse_memory_value(high_match.group(1))
     max_mb = _parse_memory_value(max_match.group(1))
 
-    assert high_mb == 450, f"MemoryHigh should be 450M, got {high_match.group(1)}"
+    assert high_mb == 512, f"MemoryHigh should be 512M, got {high_match.group(1)}"
     assert max_mb == 600, f"MemoryMax should be 600M, got {max_match.group(1)}"
     assert high_mb < max_mb
-    # Must sit above the documented ~333MB Whisper resident set.
-    assert high_mb >= 333
+    # Must sit above the observed ~452MiB Whisper peak.
+    assert high_mb >= 452
     # Repo unit is a template — installer fills @KUREK_DIR@.
     assert "@KUREK_DIR@" in text
     assert "/home/arch" not in text

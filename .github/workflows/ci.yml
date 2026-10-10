@@ -32,9 +32,7 @@ jobs:
 
       - name: Ruff syntax/runtime (daemon path — exclude legacy GUI)
         run: |
-          # E9/F63/F7: syntax & invalid-statement checks across the daemon tree.
-          # F82 (undefined names) is run only on modules without known pre-existing
-          # F821 debt in actions/* (those fixes are intentionally out of scope).
+          # E9/F63/F7: syntax & invalid-statement checks; F821: undefined names.
           ruff check \
             kurek_daemon.py \
             core \
@@ -44,17 +42,7 @@ jobs:
             scripts \
             tests \
             setup.py \
-            --select E9,F63,F7 \
-            --exclude legacy
-          ruff check \
-            kurek_daemon.py \
-            core \
-            actions \
-            memory \
-            scripts \
-            tests \
-            setup.py \
-            --select F82 \
+            --select E9,F63,F7,F821 \
             --exclude legacy
 
       - name: Build kurek-trigger (-Wall -Wextra -Werror)
@@ -64,6 +52,12 @@ jobs:
 
       - name: Shellcheck installer
         run: shellcheck -x install_linux.sh
+
+      - name: Trigger latency bench (informational)
+        run: |
+          # Soft bound only — print results; never fail the job on the bench.
+          python scripts/bench_trigger.py --runs 200 --trigger /tmp/kurek-trigger-ci --sanity-ms 50 \
+            || echo "::warning::bench_trigger soft-fail (ignored for CI gate)"
 
       - name: Packaging deny-list (dry-run build)
         run: |
