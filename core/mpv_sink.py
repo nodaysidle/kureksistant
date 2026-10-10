@@ -16,6 +16,8 @@ import threading
 import time
 from pathlib import Path
 
+from core.timing import mark as timing_mark
+
 
 def _get_runtime_dir() -> Path:
     xdg = os.environ.get("XDG_RUNTIME_DIR")
@@ -133,6 +135,7 @@ class MpvPipeWireSink:
             return False
 
         mode = "append-play" if append else "replace"
+        timing_mark("mpv_loadfile", once=True)
         success = self._send_command(["loadfile", str(chunk_file), mode])
 
         # Clean old chunks from /dev/shm in background

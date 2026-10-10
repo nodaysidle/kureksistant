@@ -17,6 +17,8 @@ from typing import Callable, Optional
 import numpy as np
 import sounddevice as sd
 
+from core.timing import mark as timing_mark
+
 
 
 # USE_TF=0 stops transformers from importing TensorFlow (saves 4-8 s startup).
@@ -476,6 +478,7 @@ class TTSPlayer:
         if not text.strip():
             return
         try:
+            timing_mark("first_speak_chunk", once=True)
             with self._lock:
                 self._playing = True
             if hasattr(self._engine, "speak"):
