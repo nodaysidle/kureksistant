@@ -5,15 +5,15 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/dev/nodaysidle/kurekizmo
-ExecStart=%h/dev/nodaysidle/kurekizmo/.venv/bin/python -u %h/dev/nodaysidle/kurekizmo/kurek_daemon.py
+WorkingDirectory=@KUREK_DIR@
+ExecStart=@KUREK_DIR@/.venv/bin/python -u @KUREK_DIR@/kurek_daemon.py
 Restart=on-failure
 RestartSec=2
 StandardOutput=journal
 StandardError=journal
 
 # Resource Envelope (Comfortably accommodates faster-whisper base.en ~333MB)
-MemoryHigh=400M
+MemoryHigh=450M
 MemoryMax=600M
 
 [Install]

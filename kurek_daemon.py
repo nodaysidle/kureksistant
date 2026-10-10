@@ -15,6 +15,7 @@ import io
 import json
 import os
 import re
+import struct
 import subprocess
 import sys
 import threading
@@ -875,14 +876,59 @@ class KurekHTTPHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
 
-def _get_uds_socket_path() -> Path:
-    xdg = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid() if hasattr(os, 'getuid') else 1000}"
-    p = Path(xdg) / "kurek.sock"
+def _private_runtime_dir() -> Path:
+    """Per-user private runtime dir (0700) when XDG_RUNTIME_DIR is unset."""
+    base = Path.home() / ".cache" / "kurek" / "run"
+    base.mkdir(parents=True, exist_ok=True)
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        return p
-    except Exception:
-        return Path("/tmp/kurek.sock")
+        os.chmod(base, 0o700)
+    except OSError:
+        pass
+    return base
+
+
+def _get_uds_socket_path() -> Path:
+    """Resolve the UDS path. Never falls back to /tmp (world-writable)."""
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg:
+        base = Path(xdg)
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise RuntimeError(
+                f"XDG_RUNTIME_DIR={xdg!r} is not usable: {e}"
+            ) from e
+        return base / "kurek.sock"
+
+    base = _private_runtime_dir()
+    print(
+        "[Kurek UDS] XDG_RUNTIME_DIR unset — using private "
+        f"{base}/kurek.sock (mode 0700 dir)",
+        flush=True,
+    )
+    return base / "kurek.sock"
+
+
+def _peer_uid(conn: socket.socket) -> int | None:
+    """Return the peer UID via SO_PEERCRED (Linux), or None on failure."""
+    if sys.platform != "linux":
+        # macOS / other: no portable SO_PEERCRED; treat as same-uid.
+        return os.getuid()
+    so_peercred = getattr(socket, "SO_PEERCRED", 17)
+    try:
+        creds = conn.getsockopt(socket.SOL_SOCKET, so_peercred, struct.calcsize("3i"))
+        _pid, uid, _gid = struct.unpack("3i", creds)
+        return int(uid)
+    except OSError:
+        return None
+
+
+def _uds_peer_allowed(conn: socket.socket) -> bool:
+    """Accept only connections from the same UID as the daemon."""
+    peer = _peer_uid(conn)
+    if peer is None:
+        return False
+    return peer == os.getuid()
 
 
 def run_uds_server(engine: KurekEngine):
@@ -898,14 +944,30 @@ def run_uds_server(engine: KurekEngine):
         except Exception:
             sock_path.unlink(missing_ok=True)
 
-    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server.bind(str(sock_path))
+    # Restrict the socket inode to the owning user only.
+    old_umask = os.umask(0o177)
+    try:
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(str(sock_path))
+    finally:
+        os.umask(old_umask)
+    try:
+        os.chmod(sock_path, 0o600)
+    except OSError as e:
+        print(f"[Kurek UDS] Warning: could not chmod 0600 {sock_path}: {e}", flush=True)
     server.listen(16)
-    print(f"[Kurek UDS] 🚀 Listening at Unix Domain Socket: {sock_path}", flush=True)
+    print(f"[Kurek UDS] 🚀 Listening at Unix Domain Socket: {sock_path} (0600)", flush=True)
 
     def _client_handler(conn: socket.socket):
         is_subscriber = False
         try:
+            if not _uds_peer_allowed(conn):
+                try:
+                    conn.sendall(b'{"error":"unauthorized"}\n')
+                except Exception:
+                    pass
+                return
+
             conn.settimeout(None)
             f = conn.makefile("r", encoding="utf-8", errors="replace")
             for line in f:
@@ -977,6 +1039,17 @@ def run_uds_server(engine: KurekEngine):
     while True:
         try:
             conn, _ = server.accept()
+            # Peer UID is re-checked inside the handler; reject early here too.
+            if not _uds_peer_allowed(conn):
+                try:
+                    conn.sendall(b'{"error":"unauthorized"}\n')
+                except Exception:
+                    pass
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                continue
             threading.Thread(target=_client_handler, args=(conn,), daemon=True).start()
         except Exception:
             time.sleep(0.5)
