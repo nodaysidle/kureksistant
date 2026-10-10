@@ -62,7 +62,7 @@ jobs:
       - name: Packaging deny-list (dry-run build)
         run: |
           chmod +x scripts/package_release.sh
-          VERSION=0.1.0 OUT_DIR="$RUNNER_TEMP/kurek-dist" ./scripts/package_release.sh
+          VERSION=0.2.0 OUT_DIR="$RUNNER_TEMP/kurek-dist" ./scripts/package_release.sh
 
       - name: Test suite (offline / no API keys)
         run: pytest -q tests/
