@@ -20,7 +20,7 @@ from pathlib import Path
 
 def _resolve_vault_dir() -> Path | None:
     # 1. Environment variables
-    for env_k in ("NODAYSIDLE_VAULT_DIR", "VAULT_DIR", "KUREK_VAULT_DIR"):
+    for env_k in ("KUREK_VAULT_DIR", "NODAYSIDLE_VAULT_DIR", "VAULT_DIR"):
         val = os.environ.get(env_k)
         if val and Path(val).exists() and Path(val).is_dir():
             return Path(val).resolve()
@@ -35,17 +35,26 @@ def _resolve_vault_dir() -> Path | None:
         except Exception:
             pass
 
-    # 3. Known standard workspace paths
+    # 3. Expanduser fallbacks (no hardcoded absolute home paths)
     candidates = [
         Path.home() / "dev" / "nodaysidle" / "nodaysidle-knowledge",
         Path.home() / "Projects" / "nodaysidle-knowledge",
-        Path("/home/arch/dev/nodaysidle/nodaysidle-knowledge"),
     ]
     for cand in candidates:
         if cand.exists() and cand.is_dir():
             return cand.resolve()
 
     return None
+
+
+def _path_within_vault(vault_dir: Path, path: Path) -> bool:
+    """True if resolved path stays inside vault_dir (blocks symlink escape)."""
+    vault_resolved = vault_dir.resolve()
+    try:
+        path.resolve().relative_to(vault_resolved)
+        return True
+    except ValueError:
+        return False
 
 
 def _clean_markdown(text: str) -> str:
@@ -69,7 +78,7 @@ def vault_knowledge(parameters: dict | None = None, **kwargs) -> str:
     if not vault_dir:
         return (
             "Error: nodaysidle-knowledge vault directory not found. "
-            "Please ensure ~/dev/nodaysidle/nodaysidle-knowledge exists or set NODAYSIDLE_VAULT_DIR in .env."
+            "Please ensure ~/dev/nodaysidle/nodaysidle-knowledge exists or set KUREK_VAULT_DIR."
         )
 
     # -------------------------------------------------------------
@@ -91,12 +100,19 @@ def vault_knowledge(parameters: dict | None = None, **kwargs) -> str:
         if not note_name:
             return "Error: note_name parameter is required when action='read' (e.g. 'kureksistant-overview' or 'x-promo-strategy')."
 
+        note_path = Path(note_name)
+        if note_path.is_absolute() or ".." in note_path.parts:
+            return (
+                "Error: note_name must be a relative path within the vault; "
+                "absolute paths and '..' traversal are not allowed."
+            )
+
         slug = note_name.lower().replace(".md", "").strip()
         found_file: Path | None = None
 
         # 1. Exact relative path
         candidate = vault_dir / f"{note_name}.md" if not note_name.endswith(".md") else vault_dir / note_name
-        if candidate.exists() and candidate.is_file():
+        if candidate.exists() and candidate.is_file() and _path_within_vault(vault_dir, candidate):
             found_file = candidate
 
         # 2. Search common subfolders
@@ -104,7 +120,7 @@ def vault_knowledge(parameters: dict | None = None, **kwargs) -> str:
             search_folders = ["wiki/concepts", "wiki/MOC", "briefs", "artifacts", "sources/index", "inbox", "sessions"]
             for s_folder in search_folders:
                 c = vault_dir / s_folder / f"{slug}.md"
-                if c.exists() and c.is_file():
+                if c.exists() and c.is_file() and _path_within_vault(vault_dir, c):
                     found_file = c
                     break
 
@@ -113,7 +129,7 @@ def vault_knowledge(parameters: dict | None = None, **kwargs) -> str:
             for p in vault_dir.rglob("*.md"):
                 if p.name.startswith("."):
                     continue
-                if slug in p.stem.lower():
+                if slug in p.stem.lower() and _path_within_vault(vault_dir, p):
                     found_file = p
                     break
 
@@ -126,9 +142,17 @@ def vault_knowledge(parameters: dict | None = None, **kwargs) -> str:
             suggestion = f" Matching candidates: {', '.join(matches)}" if matches else ""
             return f"Note '{note_name}' not found in {vault_dir.name}.{suggestion}"
 
-        text = found_file.read_text(encoding="utf-8")
+        if not _path_within_vault(vault_dir, found_file):
+            return (
+                "Error: resolved note path is outside the vault directory; "
+                "refusing to read."
+            )
+
+        vault_resolved = vault_dir.resolve()
+        found_resolved = found_file.resolve()
+        text = found_resolved.read_text(encoding="utf-8")
         cleaned = _clean_markdown(text)
-        rel_path = found_file.relative_to(vault_dir)
+        rel_path = found_resolved.relative_to(vault_resolved)
 
         # Cap length if excessively large
         if len(cleaned) > 8000:
@@ -172,6 +196,10 @@ def vault_knowledge(parameters: dict | None = None, **kwargs) -> str:
 
         # Python fallback search
         words = [w.lower() for w in query.split() if len(w) > 2]
+        # Vacuous all([]) would match every note — require at least one real token.
+        if not words:
+            return f"No notes found matching '{query}' in vault {vault_dir.name}."
+
         for p in vault_dir.rglob("*.md"):
             if any(part.startswith(".") for part in p.parts):
                 continue
