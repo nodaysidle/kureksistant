@@ -15,6 +15,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -261,7 +262,6 @@ class KurekEngine:
         }
         msg = msg_map.get(state)
         if msg:
-            import subprocess
             try:
                 subprocess.Popen([
                     "notify-send", "-t", "2000",
@@ -381,8 +381,51 @@ class KurekEngine:
 
         self.handle_text_query(transcript)
 
+    def _notify_failure(self, message: str):
+        """Surface a short honest failure via notification (and optional speech)."""
+        print(f"[Kurek] ❌ {message}", flush=True)
+        icon = os.path.expanduser("~/.local/share/icons/kurek.png")
+        if not os.path.exists(icon):
+            icon = os.path.join(os.path.dirname(os.path.abspath(__file__)), "desktop", "kurek.png")
+        try:
+            subprocess.Popen(
+                [
+                    "notify-send", "-t", "4000",
+                    "-h", "string:x-canonical-private-synchronous:kurek",
+                    "-i", icon, "Kurek", message,
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+
     def handle_text_query(self, user_prompt: str):
         self.set_state(KurekState.THINKING)
+        try:
+            self._handle_text_query_inner(user_prompt)
+        except Exception as e:
+            print(f"[Kurek] Unhandled query error: {e}", flush=True)
+            self._notify_failure("Something went wrong handling that request.")
+            try:
+                if not self._cancel_requested:
+                    self.set_state(KurekState.SPEAKING)
+                    self.tts.speak("Something went wrong handling that request.")
+            except Exception as tts_err:
+                print(f"[Kurek] TTS error during failure report: {tts_err}")
+        finally:
+            # Always return to a resting state — never leave the daemon stuck in THINKING.
+            try:
+                while getattr(self.tts, "is_playing", False):
+                    if self._cancel_requested:
+                        break
+                    time.sleep(0.05)
+            except Exception:
+                pass
+            if self.state != KurekState.IDLE:
+                self.set_state(KurekState.IDLE)
+
+    def _handle_text_query_inner(self, user_prompt: str):
         now_str = datetime.now().strftime("%Y-%m-%d %A, %I:%M %p")
 
         # Load long-term user memories & context
@@ -495,6 +538,7 @@ class KurekEngine:
         last_tool_output = ""
         max_tool_turns = 5
         sentence_count = 0
+        stream_error: str | None = None
 
         for turn_idx in range(max_tool_turns):
             if self._cancel_requested:
@@ -512,6 +556,10 @@ class KurekEngine:
                     break
 
                 ev_type = ev.get("type")
+                if ev_type == "error":
+                    stream_error = ev.get("error") or "DeepSeek request failed."
+                    break
+
                 if ev_type == "tool_calls":
                     tool_detected = True
                     tool_calls = ev.get("tool_calls", [])
@@ -562,10 +610,29 @@ class KurekEngine:
                     reply_text = ev.get("full_content", "") or " ".join(streamed_sentences)
                     break
 
+            if stream_error:
+                break
             if tool_detected:
                 continue
             else:
                 break
+
+        if stream_error or (not reply_text and not last_tool_output and sentence_count == 0):
+            if stream_error:
+                failure_msg = "I couldn't reach DeepSeek right now."
+                detail = stream_error
+            else:
+                failure_msg = "I didn't get a response from DeepSeek."
+                detail = "empty stream"
+            print(f"[Kurek] Stream failure ({detail})", flush=True)
+            self._notify_failure(failure_msg)
+            if not self._cancel_requested:
+                self.set_state(KurekState.SPEAKING)
+                try:
+                    self.tts.speak(failure_msg)
+                except Exception as e:
+                    print(f"[Kurek] TTS error: {e}")
+            return
 
         if not reply_text and last_tool_output:
             if "Contents of " in last_tool_output or ("\n" in last_tool_output and len(last_tool_output) > 120):
@@ -583,6 +650,7 @@ class KurekEngine:
         reply_text = re.sub(r"</[｜|].*?[｜|]>", "", reply_text)
         reply_text = reply_text.strip()
         if not reply_text:
+            # Successful tool path with no spoken content — not a transport failure.
             reply_text = "All set."
 
         print(f"[Kurek Reply] 💬 \"{reply_text}\"", flush=True)
@@ -607,12 +675,6 @@ class KurekEngine:
             except Exception as e:
                 print(f"[Kurek] TTS error: {e}")
 
-        # Wait for audio playback to finish (or interrupt)
-        while self.tts.is_playing:
-            if self._cancel_requested:
-                break
-            time.sleep(0.05)
-        self.set_state(KurekState.IDLE)
         return
 
     @staticmethod
@@ -842,6 +904,7 @@ def run_uds_server(engine: KurekEngine):
     print(f"[Kurek UDS] 🚀 Listening at Unix Domain Socket: {sock_path}", flush=True)
 
     def _client_handler(conn: socket.socket):
+        is_subscriber = False
         try:
             conn.settimeout(None)
             f = conn.makefile("r", encoding="utf-8", errors="replace")
@@ -882,6 +945,15 @@ def run_uds_server(engine: KurekEngine):
                     with engine.uds_lock:
                         engine.uds_subscribers.append(conn)
                     conn.sendall(json.dumps({"event": "state", "state": engine.state}).encode("utf-8") + b"\n")
+                    is_subscriber = True
+                    # Keep the socket open for state broadcasts until the peer disconnects.
+                    # Do not return immediately — the outer finally would close the socket and
+                    # leave a dead entry that breaks Waybar/AGS state streaming.
+                    try:
+                        for _ in f:
+                            pass
+                    except Exception:
+                        pass
                     return
 
                 else:
@@ -890,6 +962,13 @@ def run_uds_server(engine: KurekEngine):
         except Exception:
             pass
         finally:
+            if is_subscriber:
+                with engine.uds_lock:
+                    if conn in engine.uds_subscribers:
+                        try:
+                            engine.uds_subscribers.remove(conn)
+                        except ValueError:
+                            pass
             try:
                 conn.close()
             except Exception:

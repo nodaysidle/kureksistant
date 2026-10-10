@@ -763,6 +763,7 @@ def stream_deepseek(
     key = get_deepseek_key()
     if not key:
         print("[DeepSeek Stream] ⚠️ No DEEPSEEK_API_KEY found")
+        yield {"type": "error", "error": "No DEEPSEEK_API_KEY configured"}
         return
 
     req_messages = []
@@ -783,68 +784,79 @@ def stream_deepseek(
     if tools:
         payload["tools"] = tools
 
-    resp = requests.post(
-        "https://api.deepseek.com/chat/completions",
-        headers={
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-        stream=True,
-        timeout=30,
-    )
+    try:
+        resp = requests.post(
+            "https://api.deepseek.com/chat/completions",
+            headers={
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            stream=True,
+            timeout=30,
+        )
+    except Exception as e:
+        print(f"[DeepSeek Stream] Request error: {e}")
+        yield {"type": "error", "error": str(e)}
+        return
 
     if resp.status_code != 200:
-        print(f"[DeepSeek Stream] HTTP {resp.status_code}: {resp.text}")
-        yield {"type": "error", "error": resp.text}
+        err_msg = f"HTTP {resp.status_code}: {resp.text}"
+        print(f"[DeepSeek Stream] {err_msg}")
+        yield {"type": "error", "error": err_msg}
         return
 
     full_text = ""
     tool_calls_map: dict[int, dict] = {}
     has_tool_calls = False
 
-    for line in resp.iter_lines():
-        if not line:
-            continue
-        line_str = line.decode("utf-8") if isinstance(line, bytes) else line
-        if not line_str.startswith("data: "):
-            continue
-        raw_data = line_str[6:].strip()
-        if raw_data == "[DONE]":
-            break
+    try:
+        for line in resp.iter_lines():
+            if not line:
+                continue
+            line_str = line.decode("utf-8") if isinstance(line, bytes) else line
+            if not line_str.startswith("data: "):
+                continue
+            raw_data = line_str[6:].strip()
+            if raw_data == "[DONE]":
+                break
 
-        try:
-            chunk = json.loads(raw_data)
-        except Exception:
-            continue
+            try:
+                chunk = json.loads(raw_data)
+            except Exception:
+                continue
 
-        choices = chunk.get("choices", [])
-        if not choices:
-            continue
-        delta = choices[0].get("delta", {})
+            choices = chunk.get("choices", [])
+            if not choices:
+                continue
+            delta = choices[0].get("delta", {})
 
-        # Check for tool call stream chunks
-        if delta.get("tool_calls"):
-            has_tool_calls = True
-            for tc in delta["tool_calls"]:
-                idx = tc.get("index", 0)
-                if idx not in tool_calls_map:
-                    tool_calls_map[idx] = {
-                        "id": tc.get("id", f"call_{idx}_{int(time.time())}"),
-                        "type": "function",
-                        "function": {"name": "", "arguments": ""},
-                    }
-                fn = tc.get("function", {})
-                if fn.get("name"):
-                    tool_calls_map[idx]["function"]["name"] += fn["name"]
-                if fn.get("arguments"):
-                    tool_calls_map[idx]["function"]["arguments"] += fn["arguments"]
+            # Check for tool call stream chunks
+            if delta.get("tool_calls"):
+                has_tool_calls = True
+                for tc in delta["tool_calls"]:
+                    idx = tc.get("index", 0)
+                    if idx not in tool_calls_map:
+                        tool_calls_map[idx] = {
+                            "id": tc.get("id", f"call_{idx}_{int(time.time())}"),
+                            "type": "function",
+                            "function": {"name": "", "arguments": ""},
+                        }
+                    fn = tc.get("function", {})
+                    if fn.get("name"):
+                        tool_calls_map[idx]["function"]["name"] += fn["name"]
+                    if fn.get("arguments"):
+                        tool_calls_map[idx]["function"]["arguments"] += fn["arguments"]
 
-        # Text content
-        content = delta.get("content", "")
-        if content:
-            full_text += content
-            yield {"type": "token", "token": content}
+            # Text content
+            content = delta.get("content", "")
+            if content:
+                full_text += content
+                yield {"type": "token", "token": content}
+    except Exception as e:
+        print(f"[DeepSeek Stream] Stream read error: {e}")
+        yield {"type": "error", "error": str(e)}
+        return
 
     if has_tool_calls:
         compiled_calls = list(tool_calls_map.values())

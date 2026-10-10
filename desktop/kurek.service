@@ -12,9 +12,9 @@ RestartSec=2
 StandardOutput=journal
 StandardError=journal
 
-# Resource Envelope (Comfortably accommodates faster-whisper base.en)
-MemoryHigh=250M
-MemoryMax=450M
+# Resource Envelope (Comfortably accommodates faster-whisper base.en ~333MB)
+MemoryHigh=400M
+MemoryMax=600M
 
 [Install]
 WantedBy=graphical-session.target

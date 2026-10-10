@@ -24,6 +24,15 @@ STATE_FILE = HOME / "ALIGNMENT_STATE.yaml"
 REPAIRS_FILE = HOME / "REPAIR_THREADS.yaml"
 
 
+def text_from_llm_response(resp, default: str = "") -> str:
+    """Normalise query_deepseek return values (str | dict | None) to plain text."""
+    if isinstance(resp, str):
+        return resp.strip()
+    if isinstance(resp, dict):
+        return (resp.get("content") or default).strip()
+    return default
+
+
 def execute_dream_cycle(force: bool = False) -> dict:
     DREAMS_DIR.mkdir(parents=True, exist_ok=True)
     today = datetime.now().strftime("%Y-%m-%d")
@@ -63,12 +72,9 @@ Do not output robotic bullet points. Write 2-3 atmospheric paragraphs.
         messages=[{"role": "user", "content": dream_prompt}],
         model="deepseek-flash"
     )
-    if isinstance(resp, str):
-        dream_prose = resp.strip()
-    elif isinstance(resp, dict):
-        dream_prose = (resp.get("content") or "Reflections settle over the workspace.").strip()
-    else:
-        dream_prose = "Reflections settle over the workspace."
+    dream_prose = text_from_llm_response(
+        resp, default="Reflections settle over the workspace."
+    ) or "Reflections settle over the workspace."
 
     # Write Dream Journal
     dream_header = f"""# Dream Journal: {today}
@@ -95,7 +101,7 @@ Return a concise Markdown block with:
         messages=[{"role": "user", "content": align_prompt}],
         model="deepseek-flash"
     )
-    extracted_guidance = align_resp.get("content", "").strip()
+    extracted_guidance = text_from_llm_response(align_resp)
 
     # Update ALIGNMENT_SYNTHESIS.md
     if extracted_guidance:
