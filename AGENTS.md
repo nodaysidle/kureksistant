@@ -1,6 +1,6 @@
 # AGENTS.md — Developer & AI Agent Guide for Kurek (Kureksistant)
 
-> **Kurek** is a headless personal AI assistant for **Arch Linux / Omarchy Quattro (Hyprland)** and **macOS** (~450MB peak RAM with faster-whisper loaded, observed). Features Middle Click mouse summon (~0.8ms median trigger via `bench_trigger.py`), native desktop launcher, DeepSeek-Flash reasoning, xAI Grok speech (**Sol** voice), Hermes bidirectional memory continuity, and 24 tool modules in `actions/`. Release: v0.1.0.
+> **Kurek** is a headless personal AI assistant for **Arch Linux / Omarchy Quattro (Hyprland)** and **macOS** (~450MB peak RAM with faster-whisper loaded, observed). Features Middle Click mouse summon (~0.8ms median trigger via `bench_trigger.py`), native desktop launcher, DeepSeek-Flash reasoning, xAI Grok speech (**Sol** voice), Hermes bidirectional memory continuity, and 24 tool modules in `actions/`. Release: v0.2.0.
 
 ---
 

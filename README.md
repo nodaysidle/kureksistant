@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/nodaysidle/kureksistant/releases/tag/v0.1.0"><img src="https://img.shields.io/badge/Release-v0.1.0-blue.svg?style=flat-square" alt="Latest Release"></a>
+  <a href="https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.0"><img src="https://img.shields.io/badge/Release-v0.2.0-blue.svg?style=flat-square" alt="Latest Release"></a>
   <img src="https://img.shields.io/badge/Platform-Arch%20Linux%20(Hyprland)%20%7C%20macOS-1793D1?style=flat-square&logo=arch-linux&logoColor=white" alt="Platform">
   <img src="https://img.shields.io/badge/Footprint-~450MB%20peak%20(Whisper)-brightgreen?style=flat-square" alt="Memory">
   <img src="https://img.shields.io/badge/Brain-DeepSeek--Flash-4E6EF2?style=flat-square&logo=deepseek&logoColor=white" alt="DeepSeek">
@@ -37,13 +37,13 @@
 
 ### Option A: Download Pre-packaged Release (Recommended)
 
-Download the verified `v0.1.0` Linux bundle from the [GitHub Releases](https://github.com/nodaysidle/kureksistant/releases/tag/v0.1.0) page:
+Download the verified `v0.2.0` Linux bundle from the [GitHub Releases](https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.0) page:
 
 ```bash
-# 1. Download and extract v0.1.0 release archive
-curl -LO https://github.com/nodaysidle/kureksistant/releases/download/v0.1.0/kureksistant-v0.1.0-linux-x86_64.tar.gz
-tar -xzf kureksistant-v0.1.0-linux-x86_64.tar.gz
-cd kureksistant-0.1.0
+# 1. Download and extract v0.2.0 release archive
+curl -LO https://github.com/nodaysidle/kureksistant/releases/download/v0.2.0/kureksistant-v0.2.0-linux-x86_64.tar.gz
+tar -xzf kureksistant-v0.2.0-linux-x86_64.tar.gz
+cd kureksistant-0.2.0
 
 # 2. Run automated installer (sets up venv, ~/.local/bin/kurek, and desktop icon)
 ./install_linux.sh
