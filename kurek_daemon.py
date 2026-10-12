@@ -12,7 +12,9 @@ Connects with:
   • xAI Grok TTS (Sol) via persistent mpv PipeWire sink
 """
 import asyncio
+import hmac
 import io
+import ipaddress
 import json
 import os
 import re
@@ -65,6 +67,165 @@ CHANNELS = 1
 SILENCE_THRESHOLD = 0.003  # Sensitive threshold for USB/desk mics
 SILENCE_DURATION = 1.2   # Seconds of silence after speech to auto-submit
 MAX_RECORD_SECONDS = 12.0 # Maximum listen window
+
+# HTTP remote-access hardening
+HTTP_MAX_BODY_BYTES = 64 * 1024
+REMOTE_TOKEN_MIN_LEN = 32
+# Tools that execute model-generated code or shell commands — blocked for remote
+# clients unless KUREK_REMOTE_ALLOW_EXEC=1.
+REMOTE_BLOCKED_EXEC_TOOLS = frozenset({
+    "desktop_control",
+    "code_helper",
+    "dev_agent",
+})
+
+
+def remote_allow_exec() -> bool:
+    flag = (os.environ.get("KUREK_REMOTE_ALLOW_EXEC") or "").strip().lower()
+    return flag in ("1", "true", "yes", "on")
+
+
+def remote_token_is_strong(token: str | None) -> bool:
+    return bool(token) and len(token) >= REMOTE_TOKEN_MIN_LEN
+
+
+def parse_bearer_token(authorization: str | None) -> str | None:
+    """Strict ``Authorization: Bearer <token>`` parse (single space, case-sensitive)."""
+    if authorization is None:
+        return None
+    prefix = "Bearer "
+    if not authorization.startswith(prefix):
+        return None
+    token = authorization[len(prefix):]
+    if not token or token != token.strip() or any(ch.isspace() for ch in token):
+        return None
+    return token
+
+
+def tokens_match(provided: str, expected: str) -> bool:
+    try:
+        return hmac.compare_digest(provided, expected)
+    except (TypeError, ValueError):
+        return False
+
+
+def is_loopback_host(host: str | None) -> bool:
+    if not host:
+        return False
+    h = host.strip().lower()
+    if h in ("localhost", "::1"):
+        return True
+    try:
+        return ipaddress.ip_address(h.split("%")[0]).is_loopback
+    except ValueError:
+        return h.startswith("127.")
+
+
+def is_tailscale_cgnat_ip(host: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if ip.version != 4:
+        return False
+    return ip in ipaddress.ip_network("100.64.0.0/10")
+
+
+def detect_tailscale_ipv4() -> str | None:
+    """Best-effort Tailscale IPv4: CLI first, then tailscale0 addresses."""
+    try:
+        proc = subprocess.run(
+            ["tailscale", "ip", "-4"],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+            check=False,
+        )
+        if proc.returncode == 0:
+            for line in proc.stdout.splitlines():
+                cand = line.strip()
+                if cand and is_tailscale_cgnat_ip(cand):
+                    return cand
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+
+    try:
+        proc = subprocess.run(
+            ["ip", "-4", "-o", "addr", "show", "dev", "tailscale0"],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+            check=False,
+        )
+        if proc.returncode == 0:
+            for part in proc.stdout.replace("/", " ").split():
+                if is_tailscale_cgnat_ip(part):
+                    return part
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+    return None
+
+
+def require_strong_remote_token_for_bind() -> str:
+    token = get_remote_token()
+    if not remote_token_is_strong(token):
+        raise RuntimeError(
+            "Remote HTTP bind refused: set KUREK_REMOTE_TOKEN to a secret of at least "
+            f"{REMOTE_TOKEN_MIN_LEN} characters (e.g. openssl rand -hex 32)."
+        )
+    return token  # type: ignore[return-value]
+
+
+def resolve_http_bind_hosts() -> tuple[list[str], bool]:
+    """
+    Return (hosts_to_bind_now, watch_tailscale).
+
+    Default is loopback only. Remote bind is opt-in via KUREK_REMOTE_BIND=tailscale
+    or an explicit KUREK_BIND address. Never binds 0.0.0.0 unless explicitly set.
+    """
+    explicit = (os.environ.get("KUREK_BIND") or "").strip()
+    remote_mode = (os.environ.get("KUREK_REMOTE_BIND") or "").strip().lower()
+
+    if explicit:
+        if explicit in ("0.0.0.0", "::"):
+            require_strong_remote_token_for_bind()
+            print(
+                "[Kurek Server] ⚠️  SECURITY WARNING: binding HTTP to "
+                f"{explicit} exposes the daemon on ALL interfaces. "
+                "Prefer KUREK_REMOTE_BIND=tailscale.",
+                flush=True,
+            )
+            return [explicit], False
+        if is_loopback_host(explicit):
+            return [explicit], False
+        require_strong_remote_token_for_bind()
+        hosts = ["127.0.0.1"]
+        if explicit not in hosts:
+            hosts.append(explicit)
+        return hosts, False
+
+    hosts = ["127.0.0.1"]
+    if remote_mode in ("", "off", "0", "false", "no", "loopback", "localhost"):
+        return hosts, False
+
+    if remote_mode == "tailscale":
+        require_strong_remote_token_for_bind()
+        ts_ip = detect_tailscale_ipv4()
+        if ts_ip:
+            hosts.append(ts_ip)
+            return hosts, True
+        print(
+            "[Kurek Server] KUREK_REMOTE_BIND=tailscale but Tailscale IPv4 not found yet "
+            "— listening on 127.0.0.1 only; will retry when Tailscale comes up.",
+            flush=True,
+        )
+        return hosts, True
+
+    # Treat unknown KUREK_REMOTE_BIND values as an explicit host address.
+    require_strong_remote_token_for_bind()
+    if remote_mode not in hosts:
+        hosts.append(remote_mode)
+    return hosts, False
 
 
 def _normalize_json_schema(obj):
@@ -414,11 +575,22 @@ class KurekEngine:
         except Exception:
             pass
 
-    def handle_text_query(self, user_prompt: str, callback=None, mute_speaker: bool = False):
+    def handle_text_query(
+        self,
+        user_prompt: str,
+        callback=None,
+        mute_speaker: bool = False,
+        remote: bool = False,
+    ):
         begin_query()
         self.set_state(KurekState.THINKING)
         try:
-            return self._handle_text_query_inner(user_prompt, callback=callback, mute_speaker=mute_speaker)
+            return self._handle_text_query_inner(
+                user_prompt,
+                callback=callback,
+                mute_speaker=mute_speaker,
+                remote=remote,
+            )
         except Exception as e:
             print(f"[Kurek] Unhandled query error: {e}", flush=True)
             self._notify_failure("Something went wrong handling that request.")
@@ -446,7 +618,26 @@ class KurekEngine:
                 self.set_state(KurekState.IDLE)
             end_query()
 
-    def _handle_text_query_inner(self, user_prompt: str, callback=None, mute_speaker: bool = False):
+    def _run_tool(self, fn_name: str, fn_args: dict, *, remote: bool = False) -> str:
+        """Dispatch a tool call; block exec/shell tools for remote clients by default."""
+        if (
+            remote
+            and not remote_allow_exec()
+            and fn_name in REMOTE_BLOCKED_EXEC_TOOLS
+        ):
+            return (
+                f"Tool '{fn_name}' is disabled for remote prompts "
+                "(set KUREK_REMOTE_ALLOW_EXEC=1 to allow)."
+            )
+        return self.actions.run(fn_name, fn_args)
+
+    def _handle_text_query_inner(
+        self,
+        user_prompt: str,
+        callback=None,
+        mute_speaker: bool = False,
+        remote: bool = False,
+    ):
         now_str = datetime.now().strftime("%Y-%m-%d %A, %I:%M %p")
 
         # Load long-term user memories & context
@@ -614,7 +805,7 @@ class KurekEngine:
 
                         print(f"[Kurek Tool Dispatch] ⚙️ {fn_name}({fn_args})", flush=True)
                         try:
-                            tool_result = self.actions.run(fn_name, fn_args)
+                            tool_result = self._run_tool(fn_name, fn_args, remote=remote)
                         except Exception as e:
                             tool_result = f"Error executing {fn_name}: {e}"
                         last_tool_output = str(tool_result)
@@ -944,80 +1135,176 @@ class KurekEngine:
 
 class KurekHTTPHandler(BaseHTTPRequestHandler):
     engine: KurekEngine = None
+    # Tests may force non-loopback semantics while connecting via 127.0.0.1.
+    force_remote_client: bool | None = None
 
     def log_message(self, format, *args):
         # Suppress routine polling logs
         pass
 
-    def do_GET(self):
-        if self.path == "/status":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            payload = json.dumps({"state": self.engine.state})
-            self.wfile.write(payload.encode("utf-8"))
+    def _peer_is_loopback(self) -> bool:
+        if self.force_remote_client is True:
+            return False
+        if self.force_remote_client is False:
+            return True
+        host = self.client_address[0] if self.client_address else ""
+        return is_loopback_host(host)
+
+    def _send_json(self, code: int, payload: dict | list | str | bytes) -> None:
+        if isinstance(payload, (dict, list)):
+            body = json.dumps(payload).encode("utf-8")
+        elif isinstance(payload, str):
+            body = payload.encode("utf-8")
         else:
+            body = payload
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _loopback_csrf_blocked(self) -> bool:
+        """Block browser CSRF to loopback: Origin present, or non-JSON Content-Type."""
+        if self.headers.get("Origin"):
+            return True
+        if self.command == "POST":
+            ctype_raw = self.headers.get("Content-Type")
+            if ctype_raw is not None:
+                ctype = ctype_raw.split(";")[0].strip().lower()
+                if ctype != "application/json":
+                    return True
+        return False
+
+    def _authorize(self, *, allow_unauth_remote_status: bool = False) -> bool:
+        """
+        Return True if the request may proceed.
+
+        Loopback: /status, /toggle, /prompt stay token-free (Hyprland/Waybar/macOS),
+        but CSRF probes are rejected. Remote: GET /status may stay unauthenticated
+        for APK online checks; every remote POST requires Bearer auth.
+        """
+        if self._peer_is_loopback():
+            if self._loopback_csrf_blocked():
+                self._send_json(403, {"error": "Forbidden"})
+                return False
+            return True
+
+        if allow_unauth_remote_status and self.command == "GET" and self.path == "/status":
+            return True
+
+        configured = get_remote_token()
+        if not remote_token_is_strong(configured):
+            self._send_json(401, {"error": "Unauthorized: remote token not configured"})
+            return False
+
+        provided = parse_bearer_token(self.headers.get("Authorization"))
+        if provided is None or not tokens_match(provided, configured):
+            self._send_json(401, {"error": "Unauthorized: invalid or missing token"})
+            return False
+        return True
+
+    def _read_json_body(self) -> dict | None:
+        length_hdr = self.headers.get("Content-Length")
+        if length_hdr is None or length_hdr == "":
+            length = 0
+        else:
+            try:
+                length = int(length_hdr)
+            except ValueError:
+                self._send_json(400, {"error": "Invalid Content-Length"})
+                return None
+        if length < 0:
+            self._send_json(400, {"error": "Invalid Content-Length"})
+            return None
+        if length > HTTP_MAX_BODY_BYTES:
+            self._send_json(413, {"error": "Payload too large"})
+            return None
+        raw = self.rfile.read(length) if length else b""
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self._send_json(400, {"error": "Invalid JSON"})
+            return None
+        if data is None:
+            return {}
+        if not isinstance(data, dict):
+            self._send_json(400, {"error": "JSON object required"})
+            return None
+        return data
+
+    def do_GET(self):
+        if self.path != "/status":
             self.send_response(404)
             self.end_headers()
+            return
+        if not self._authorize(allow_unauth_remote_status=True):
+            return
+        self._send_json(200, {"state": self.engine.state})
 
     def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        # No CORS: the Android app does not need browser cross-origin access.
+        self.send_response(405)
         self.end_headers()
 
     def do_POST(self):
         if self.path == "/toggle":
+            if not self._authorize():
+                return
+            # Drain optional empty/small body without requiring JSON fields.
+            if self._read_json_body() is None:
+                return
             self.engine.toggle()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            payload = json.dumps({"ok": True, "state": self.engine.state})
-            self.wfile.write(payload.encode("utf-8"))
-        elif self.path == "/prompt":
-            length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(length).decode("utf-8")
-            data = json.loads(body) if body else {}
-            prompt_text = data.get("prompt", "")
-            threading.Thread(target=self.engine.handle_text_query, args=(prompt_text,), daemon=True).start()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"status":"processing"}')
-        elif self.path == "/remote/prompt":
-            # Security verification
-            configured_token = get_remote_token()
-            if configured_token:
-                auth_hdr = self.headers.get("Authorization", "")
-                token_provided = auth_hdr.replace("Bearer ", "").strip()
-                if token_provided != configured_token.strip():
-                    self.send_response(401)
-                    self.send_header("Content-Type", "application/json")
-                    self.end_headers()
-                    self.wfile.write(b'{"error":"Unauthorized: invalid or missing token"}\n')
-                    return
+            self._send_json(200, {"ok": True, "state": self.engine.state})
+            return
 
-            length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(length).decode("utf-8")
-            data = json.loads(body) if body else {}
+        if self.path == "/prompt":
+            if not self._authorize():
+                return
+            data = self._read_json_body()
+            if data is None:
+                return
+            prompt_text = data.get("prompt", "")
+            is_remote = not self._peer_is_loopback()
+            threading.Thread(
+                target=self.engine.handle_text_query,
+                kwargs={
+                    "user_prompt": prompt_text,
+                    "remote": is_remote,
+                },
+                daemon=True,
+            ).start()
+            self._send_json(200, {"status": "processing"})
+            return
+
+        if self.path == "/remote/prompt":
+            # Always require Bearer auth on this endpoint (APK path), even on loopback.
+            if self._peer_is_loopback() and self._loopback_csrf_blocked():
+                self._send_json(403, {"error": "Forbidden"})
+                return
+            configured = get_remote_token()
+            if not remote_token_is_strong(configured):
+                self._send_json(401, {"error": "Unauthorized: remote token not configured"})
+                return
+            provided = parse_bearer_token(self.headers.get("Authorization"))
+            if provided is None or not tokens_match(provided, configured):
+                self._send_json(401, {"error": "Unauthorized: invalid or missing token"})
+                return
+
+            data = self._read_json_body()
+            if data is None:
+                return
             prompt_text = data.get("prompt", "")
             mute_speaker = bool(data.get("remote", True))
-
             if not prompt_text:
-                self.send_response(400)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(b'{"error":"prompt is required"}\n')
+                self._send_json(400, {"error": "prompt is required"})
                 return
 
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "keep-alive")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
 
             stream_lock = threading.Lock()
@@ -1031,11 +1318,18 @@ class KurekHTTPHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
+            is_remote = not self._peer_is_loopback()
             # Execute query synchronously inside this HTTP thread so the SSE connection stays open
-            self.engine.handle_text_query(prompt_text, callback=_sse_callback, mute_speaker=mute_speaker)
-        else:
-            self.send_response(404)
-            self.end_headers()
+            self.engine.handle_text_query(
+                prompt_text,
+                callback=_sse_callback,
+                mute_speaker=mute_speaker,
+                remote=is_remote,
+            )
+            return
+
+        self.send_response(404)
+        self.end_headers()
 
 
 def _private_runtime_dir() -> Path:
@@ -1217,13 +1511,97 @@ def run_uds_server(engine: KurekEngine):
             time.sleep(0.5)
 
 
+def _start_http_server(host: str, port: int) -> ThreadingHTTPServer:
+    server = ThreadingHTTPServer((host, port), KurekHTTPHandler)
+    threading.Thread(
+        target=server.serve_forever,
+        name=f"kurek-http-{host}:{port}",
+        daemon=True,
+    ).start()
+    print(f"[Kurek Server] 🚀 Listening at http://{host}:{port}", flush=True)
+    return server
+
+
+def _tailscale_rebind_loop(port: int, bound_hosts: set[str], stop_event: threading.Event) -> None:
+    """Retry Tailscale bind until an IPv4 appears; never crash the daemon."""
+    while not stop_event.wait(5.0):
+        try:
+            require_strong_remote_token_for_bind()
+        except RuntimeError as exc:
+            print(f"[Kurek Server] Tailscale re-bind paused: {exc}", flush=True)
+            continue
+        ts_ip = detect_tailscale_ipv4()
+        if not ts_ip or ts_ip in bound_hosts:
+            continue
+        try:
+            _start_http_server(ts_ip, port)
+            bound_hosts.add(ts_ip)
+            print(
+                f"[Kurek Server] Tailscale interface ready — bound remote HTTP on {ts_ip}:{port}",
+                flush=True,
+            )
+        except OSError as exc:
+            print(
+                f"[Kurek Server] Could not bind Tailscale address {ts_ip}:{port}: {exc}",
+                flush=True,
+            )
+
+
 def run_server(engine: KurekEngine, port: int = 8790):
     KurekHTTPHandler.engine = engine
     # Launch UDS listener in background
     threading.Thread(target=run_uds_server, args=(engine,), daemon=True).start()
-    server = ThreadingHTTPServer(("0.0.0.0", port), KurekHTTPHandler)
-    print(f"[Kurek Server] 🚀 Listening at http://0.0.0.0:{port}")
-    server.serve_forever()
+
+    try:
+        hosts, watch_tailscale = resolve_http_bind_hosts()
+    except RuntimeError as exc:
+        print(f"[Kurek Server] {exc}", flush=True)
+        print(
+            "[Kurek Server] Falling back to loopback-only bind (127.0.0.1).",
+            flush=True,
+        )
+        hosts, watch_tailscale = ["127.0.0.1"], False
+
+    bound: set[str] = set()
+    primary: ThreadingHTTPServer | None = None
+    for host in hosts:
+        try:
+            server = ThreadingHTTPServer((host, port), KurekHTTPHandler)
+            bound.add(host)
+            print(f"[Kurek Server] 🚀 Listening at http://{host}:{port}", flush=True)
+            if primary is None:
+                primary = server
+            else:
+                threading.Thread(
+                    target=server.serve_forever,
+                    name=f"kurek-http-{host}:{port}",
+                    daemon=True,
+                ).start()
+        except OSError as exc:
+            print(
+                f"[Kurek Server] Failed to bind http://{host}:{port}: {exc}",
+                flush=True,
+            )
+
+    if primary is None:
+        # Last-resort loopback so local trigger/status still work.
+        primary = ThreadingHTTPServer(("127.0.0.1", port), KurekHTTPHandler)
+        bound.add("127.0.0.1")
+        print(f"[Kurek Server] 🚀 Listening at http://127.0.0.1:{port}", flush=True)
+
+    stop_event = threading.Event()
+    if watch_tailscale:
+        threading.Thread(
+            target=_tailscale_rebind_loop,
+            args=(port, bound, stop_event),
+            name="kurek-tailscale-rebind",
+            daemon=True,
+        ).start()
+
+    try:
+        primary.serve_forever()
+    finally:
+        stop_event.set()
 
 
 if __name__ == "__main__":

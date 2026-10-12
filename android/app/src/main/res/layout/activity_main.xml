@@ -44,7 +44,7 @@
                 android:id="@+id/txtHostLabel"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Workstation: 100.116.190.97"
+                android:text="Set host and token in Settings"
                 android:textSize="11sp"
                 android:textColor="@color/text_muted" />
         </LinearLayout>

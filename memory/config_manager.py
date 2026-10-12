@@ -122,8 +122,16 @@ def get_openrouter_api_key() -> str | None:
 
 def get_remote_token() -> str | None:
     import os
+    # Prefer process environment so systemd/unit overrides and tests win over .env.
+    env_tok = (os.environ.get("KUREK_REMOTE_TOKEN") or "").strip()
+    if env_tok:
+        return env_tok
     keys = load_api_keys()
-    return keys.get("KUREK_REMOTE_TOKEN") or keys.get("kurek_remote_token") or os.environ.get("KUREK_REMOTE_TOKEN")
+    token = keys.get("KUREK_REMOTE_TOKEN") or keys.get("kurek_remote_token")
+    if token is None:
+        return None
+    token = str(token).strip()
+    return token or None
 
 def is_configured() -> bool:
     return bool(get_deepseek_key() or get_gemini_key())

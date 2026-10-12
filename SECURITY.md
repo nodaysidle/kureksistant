@@ -33,4 +33,6 @@ Release packaging must never include `config/api_keys.json` or `.env`. The scrip
 
 ## Local threat model notes
 
-Kurek’s headless daemon listens on `127.0.0.1:8790` and can drive powerful workstation tools. Treat any local process as able to call `/toggle` and `/prompt`. Do not expose that port to the network.
+Kurek’s headless daemon listens on `127.0.0.1:8790` by default and can drive powerful workstation tools. Treat any local process as able to call `/toggle` and `/prompt` on loopback (browser CSRF probes with an `Origin` header are rejected). Do **not** bind `0.0.0.0` unless you understand the risk.
+
+Remote HTTP (Android over Tailscale) is opt-in via `KUREK_REMOTE_BIND=tailscale` and requires `KUREK_REMOTE_TOKEN` (≥ 32 characters). Non-loopback POSTs require `Authorization: Bearer <token>`. Rotate the token if it was ever shared or shipped in an old build.

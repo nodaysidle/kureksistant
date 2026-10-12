@@ -27,7 +27,7 @@ public class KurekClient {
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
-    public void checkStatus(String host, int port, StatusCallback cb) {
+    public void checkStatus(String host, int port, String token, StatusCallback cb) {
         new Thread(() -> {
             try {
                 URL url = new URL("http://" + host + ":" + port + "/status");
@@ -35,6 +35,10 @@ public class KurekClient {
                 conn.setConnectTimeout(2500);
                 conn.setReadTimeout(2500);
                 conn.setRequestMethod("GET");
+                // Send Bearer on /status for future tightening (server still allows unauthenticated remote GET /status).
+                if (token != null && !token.trim().isEmpty()) {
+                    conn.setRequestProperty("Authorization", "Bearer " + token.trim());
+                }
                 if (conn.getResponseCode() == 200) {
                     BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
                     StringBuilder sb = new StringBuilder();

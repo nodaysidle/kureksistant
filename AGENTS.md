@@ -70,7 +70,7 @@
 | **External Memory** | `HERMES_PROFILE` / `HERMES_MEMORIES_DIR` / `~/.hermes/memories` | Optional Hermes `USER.md` + `MEMORY.md` continuity. |
 | **Knowledge Vault** | [`actions/vault_knowledge.py`](actions/vault_knowledge.py) | `vault_knowledge(action='list_projects'\|'read'\|'search'\|'add_inbox')`. Accesses nodaysidle-knowledge Obsidian vault notes, PRDs, roadmaps, and social media plans. |
 | **Decision Client** | [`core/decision_client.py`](core/decision_client.py) | Optional OpenRouter Decision-1 `needs_screen` gate for auto screen-context; TypeSafe Jev remains the fallback. |
-| **Android Remote APK** | [`android/`](android/) | Native Android client with voice dictation, live SSE streaming tokens, and Bearer token auth (`/remote/prompt`). |
+| **Android Remote APK** | [`android/`](android/) | Native Android client with voice dictation, live SSE streaming tokens, and Bearer token auth (`/remote/prompt`) over Tailscale (opt-in `KUREK_REMOTE_BIND`). |
 
 ---
 
@@ -87,6 +87,10 @@ OPENROUTER_API_KEY=       # Optional: Decision-1 auto screen-context (prompt tex
 TYPESAFE_API_KEY=         # Optional: Jev triage + Decision-1 fallback for needs_screen
 KUREK_AUTO_SCREEN=1       # Set 0 to disable auto screen-context detection
 # KUREK_DECISION_TIMEOUT=1.5
+KUREK_REMOTE_TOKEN=       # openssl rand -hex 32 — required for any non-loopback HTTP bind
+KUREK_REMOTE_BIND=        # empty=loopback only; "tailscale" binds 127.0.0.1 + Tailscale IPv4
+KUREK_BIND=               # optional explicit bind host; 0.0.0.0 only if intentional
+KUREK_REMOTE_ALLOW_EXEC=  # set 1 to allow remote prompts to run exec/shell tools
 ```
 
 > [!IMPORTANT]
@@ -175,3 +179,13 @@ kurek prompt "Open browser and check latest Rust news"
 ```bash
 tail -f /tmp/kurek_daemon.log
 ```
+
+### Phone remote (Android, over Tailscale)
+
+HTTP defaults to `127.0.0.1:8790`. For the Android app over Tailscale:
+
+1. In `.env` set `KUREK_REMOTE_TOKEN=$(openssl rand -hex 32)` and `KUREK_REMOTE_BIND=tailscale`, then restart the daemon.
+2. Build/install the APK from [`android/`](android/) (`./gradlew :app:assembleDebug`, then `adb install -r app/build/outputs/apk/debug/app-debug.apk`).
+3. In the app Settings, enter the PC Tailscale IP/MagicDNS name, port `8790`, and the same token.
+
+The app uses GET `/status` and POST `/remote/prompt` (JSON + `Authorization: Bearer …`, SSE). Transport security is Tailscale/WireGuard (no daemon TLS). Remote prompts block `desktop_control` / `code_helper` / `dev_agent` unless `KUREK_REMOTE_ALLOW_EXEC=1`. Rotate the token if it was ever shared.

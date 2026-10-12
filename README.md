@@ -226,29 +226,64 @@ flowchart TD
 ```
 
 1. **The Monolith GUI Era (PyQt6 Desktop Client):** In its earliest iteration, Kurek lived as a traditional desktop window app written in PyQt6. While functional, it consumed a large resident RAM footprint, required window switching, and lost context on restart.
-2. **The Headless OS Daemon Revolution:** We dismantled the GUI window entirely and rebuilt Kurek as a dedicated Unix-style headless daemon (UDS + `0.0.0.0:8790`). With faster-whisper loaded, observed peak RSS is about ~450MB, and invocation is wired to a mouse Middle Click (`mouse:274`) via `kurek-trigger` (~0.8ms median on a mock daemon).
+2. **The Headless OS Daemon Revolution:** We dismantled the GUI window entirely and rebuilt Kurek as a dedicated Unix-style headless daemon (UDS + loopback HTTP `:8790`). With faster-whisper loaded, observed peak RSS is about ~450MB, and invocation is wired to a mouse Middle Click (`mouse:274`) via `kurek-trigger` (~0.8ms median on a mock daemon).
 3. **The Cognitive Leap (Muse Memory & TypeSafe Jev):** Integrated three-tier memory separation and TypeSafe Jev cognitive snap-judgment gating. Casual chat is discarded while durable personal preferences and negative boundaries are automatically hoisted into permanent storage.
-4. **The Mobile Pocket Jarvis (Android APK):** Built a native, glassmorphic Android app (`android/`) with voice-to-text dictation, live Server-Sent Events (SSE) streaming, real-time tool execution badges, and tokenized Bearer authentication over local Wi-Fi or Tailscale VPN. Untethered control of your workstation from anywhere.
+4. **The Mobile Pocket Jarvis (Android APK):** Built a native Android app (`android/`) with voice-to-text dictation, live Server-Sent Events (SSE) streaming, tool execution badges, and Bearer authentication over Tailscale. Opt-in remote bind; see below.
 
 ---
 
-## 📱 Kurek Remote (Android App)
+## Phone remote (Android, over Tailscale)
 
-Kurek includes a dedicated native Android client located in [`android/`](android/) with pre-compiled binary available at [`release/kurek-remote.apk`](release/kurek-remote.apk):
+The Android app in [`android/`](android/) talks to the daemon over your Tailscale network using plain HTTP on port `8790`. Encryption is provided by Tailscale/WireGuard; the daemon does **not** terminate TLS itself.
 
-* **Real-time SSE Streaming:** Streams thoughts and tool executions token-by-token directly to your phone.
-* **Voice-First Input:** Tap-to-talk speech dictation with Android speech recognition and tactile haptics.
-* **Action Badges:** Collapsible activity pills displaying executed desktop commands (`open_app`, `file_controller`, `screen_vision`, `system_monitor`, etc.).
-* **Zero WAN Exposure:** Protected via `KUREK_REMOTE_TOKEN` Bearer authentication; connects securely via home Wi-Fi or Tailscale mesh.
+**Default:** the daemon binds HTTP to `127.0.0.1` only. Remote access is opt-in.
 
-### Quick Install on Android:
-1. Download or transfer [`release/kurek-remote.apk`](release/kurek-remote.apk) to your Android device.
-2. Tap to install the APK (allow install from unknown sources if prompted).
-3. Open the app → Tap the Settings gear ⚙️ in the top right:
-   * **Host:** Your workstation's LAN IP (e.g. `192.168.1.251`) or Tailscale IP (e.g. `100.116.190.97`).
-   * **Port:** `8790`
-   * **Token:** The `KUREK_REMOTE_TOKEN` defined in your `.env` file.
-4. Tap **Save & Reconnect** — the status pill turns green (`ONLINE`) and you're ready to command your workstation from your pocket!
+### Enable on the PC
+
+Add these lines to `.env` (token must be ≥ 32 characters):
+
+```bash
+# Generate once: openssl rand -hex 32
+KUREK_REMOTE_TOKEN=
+KUREK_REMOTE_BIND=tailscale
+```
+
+Fill `KUREK_REMOTE_TOKEN` with the output of `openssl rand -hex 32`, keep `KUREK_REMOTE_BIND=tailscale`, then restart:
+
+```bash
+kurek stop && kurek start
+# Confirm bind in the log: loopback plus a Tailscale CGNAT address (100.64.0.0/10)
+tail -f /tmp/kurek_daemon.log
+```
+
+If Tailscale is not up yet at boot, the daemon stays on loopback and retries binding the Tailscale IPv4 without crashing.
+
+**Security note:** If a remote token was ever committed, shared, or shipped in an old APK, rotate it (`openssl rand -hex 32`) and update the app settings. Remote prompts cannot run code/shell tools (`desktop_control`, `code_helper`, `dev_agent`) unless you explicitly set `KUREK_REMOTE_ALLOW_EXEC=1`.
+
+### Build / install the APK
+
+Gradle/Android SDK required on the build machine:
+
+```bash
+cd android
+# With Android SDK + Gradle wrapper available:
+./gradlew :app:assembleDebug
+# APK output (debug):
+#   app/build/outputs/apk/debug/app-debug.apk
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+Sideload the APK if `adb` is unavailable (allow install from unknown sources).
+
+### Configure the app
+
+1. Open **Kurek Remote** → Settings (gear).
+2. **Host:** your PC’s Tailscale IPv4 or MagicDNS name (`tailscale ip -4` on the PC).
+3. **Port:** `8790`
+4. **Token:** the same `KUREK_REMOTE_TOKEN` value from `.env`.
+5. Save — status should show **ONLINE** (GET `/status` may omit the token for older builds; current app sends Bearer on `/status` too). Prompts use `POST /remote/prompt` with `Authorization: Bearer <token>` and SSE events (`sentence` / `tool` / `done`).
+
+Owner-tested on mobile data over Tailscale; no latency claims.
 
 ---
 
