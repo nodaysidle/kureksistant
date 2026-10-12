@@ -240,7 +240,7 @@ The Android app in [`android/`](android/) talks to the daemon over your Tailscal
 
 ### Enable on the PC
 
-Add these lines to `.env` (token must be ≥ 32 characters):
+Add these lines to `.env` (token must be ≥ 32 characters). The systemd user unit loads that file via `EnvironmentFile=-@KUREK_DIR@/.env` (optional; leading `-`), so remote settings apply when the service starts:
 
 ```bash
 # Generate once: openssl rand -hex 32
@@ -248,10 +248,12 @@ KUREK_REMOTE_TOKEN=
 KUREK_REMOTE_BIND=tailscale
 ```
 
-Fill `KUREK_REMOTE_TOKEN` with the output of `openssl rand -hex 32`, keep `KUREK_REMOTE_BIND=tailscale`, then restart:
+Fill `KUREK_REMOTE_TOKEN` with the output of `openssl rand -hex 32`, keep `KUREK_REMOTE_BIND=tailscale`, then refresh the unit and restart:
 
 ```bash
-kurek stop && kurek start
+# Re-run once if your installed unit predates EnvironmentFile:
+./install_linux.sh
+systemctl --user daemon-reload && systemctl --user restart kurek
 # Confirm bind in the log: loopback plus a Tailscale CGNAT address (100.64.0.0/10)
 tail -f /tmp/kurek_daemon.log
 ```
@@ -262,11 +264,10 @@ If Tailscale is not up yet at boot, the daemon stays on loopback and retries bin
 
 ### Build / install the APK
 
-Gradle/Android SDK required on the build machine:
+Android SDK required on the build machine. The repo includes the standard Gradle wrapper under `android/` (`./gradlew`):
 
 ```bash
 cd android
-# With Android SDK + Gradle wrapper available:
 ./gradlew :app:assembleDebug
 # APK output (debug):
 #   app/build/outputs/apk/debug/app-debug.apk

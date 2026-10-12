@@ -22,6 +22,11 @@ def test_unit_template_has_placeholders_not_hardcoded_paths() -> None:
     assert "%h/dev/" not in text
 
 
+def test_unit_template_loads_optional_env_file() -> None:
+    text = UNIT_TEMPLATE.read_text(encoding="utf-8")
+    assert "EnvironmentFile=-@KUREK_DIR@/.env" in text
+
+
 def test_render_unit_sed_produces_no_hardcoded_arch_path(tmp_path: Path) -> None:
     install_dir = "/opt/example/kureksistant"
     dest = tmp_path / "kurek.service"
@@ -40,6 +45,7 @@ def test_render_unit_sed_produces_no_hardcoded_arch_path(tmp_path: Path) -> None
     rendered = dest.read_text(encoding="utf-8")
     assert "@KUREK_DIR@" not in rendered
     assert f"WorkingDirectory={install_dir}" in rendered
+    assert f"EnvironmentFile=-{install_dir}/.env" in rendered
     assert f"ExecStart={install_dir}/.venv/bin/python -u {install_dir}/kurek_daemon.py" in rendered
     assert "/home/arch" not in rendered
     assert "MemoryHigh=512M" in rendered
@@ -130,6 +136,7 @@ def test_installer_writes_install_path_and_renders_unit(tmp_path: Path) -> None:
     unit_text = unit.read_text(encoding="utf-8")
     assert str(fake_root) in unit_text
     assert "@KUREK_DIR@" not in unit_text
+    assert f"EnvironmentFile=-{fake_root}/.env" in unit_text
     assert "/home/arch" not in unit_text
 
     trigger = home / ".local" / "bin" / "kurek-trigger"

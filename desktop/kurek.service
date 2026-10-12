@@ -6,6 +6,7 @@ PartOf=graphical-session.target
 [Service]
 Type=simple
 WorkingDirectory=@KUREK_DIR@
+EnvironmentFile=-@KUREK_DIR@/.env
 ExecStart=@KUREK_DIR@/.venv/bin/python -u @KUREK_DIR@/kurek_daemon.py
 Restart=on-failure
 RestartSec=2
