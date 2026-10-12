@@ -15,7 +15,8 @@ from core.decision_client import (
     query_openrouter_needs_screen,
 )
 
-SECRET_KEY = "sk-or-v1-TEST-SECRET-KEY-DO-NOT-LEAK"
+# Deliberately not an sk-/xai-/AIza-shaped token — packaging deny-list scans tests.
+SECRET_KEY = "or-test-secret-DO-NOT-LEAK-9f82d28"
 
 
 class _FakeHTTPResponse:
