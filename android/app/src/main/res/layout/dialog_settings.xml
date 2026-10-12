@@ -32,7 +32,7 @@
         android:paddingEnd="12dp"
         android:textColor="@color/text_primary"
         android:textColorHint="@color/text_muted"
-        android:hint="100.116.190.97 or tailscale-host"
+        android:hint="tailscale-ip or magicdns-name"
         android:inputType="textUri"
         android:textSize="14sp"
         android:layout_marginBottom="12dp" />

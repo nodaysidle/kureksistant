@@ -51,9 +51,9 @@ public class MainActivity extends AppCompatActivity {
     private boolean isListeningSpeech = false;
 
     private final KurekClient client = new KurekClient();
-    private String host = "100.116.190.97";
+    private String host = "";
     private int port = 8790;
-    private String token = "kurek_sec_99a8b7c6d5e4f3a2";
+    private String token = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -68,14 +68,16 @@ public class MainActivity extends AppCompatActivity {
         setupListeners();
         setupSpeechRecognizer();
 
-        pingServer();
+        refreshConnectionUi();
     }
 
     private void loadPreferences() {
         SharedPreferences sp = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-        host = sp.getString(KEY_HOST, "100.116.190.97");
+        host = sp.getString(KEY_HOST, "");
         port = sp.getInt(KEY_PORT, 8790);
-        token = sp.getString(KEY_TOKEN, "kurek_sec_99a8b7c6d5e4f3a2");
+        token = sp.getString(KEY_TOKEN, "");
+        if (host == null) host = "";
+        if (token == null) token = "";
     }
 
     private void savePreferences(String h, int p, String t) {
@@ -84,6 +86,20 @@ public class MainActivity extends AppCompatActivity {
         this.host = h;
         this.port = p;
         this.token = t;
+        refreshConnectionUi();
+    }
+
+    private boolean isConfigured() {
+        return host != null && !host.trim().isEmpty()
+                && token != null && !token.trim().isEmpty();
+    }
+
+    private void refreshConnectionUi() {
+        if (!isConfigured()) {
+            txtHostLabel.setText("Set host and token in Settings");
+            setStatusState("SETUP", getColor(R.color.status_amber));
+            return;
+        }
         txtHostLabel.setText("Workstation: " + host);
         pingServer();
     }
@@ -97,8 +113,6 @@ public class MainActivity extends AppCompatActivity {
         txtStatus = findViewById(R.id.txtStatus);
         txtHostLabel = findViewById(R.id.txtHostLabel);
         statusDot = findViewById(R.id.statusDot);
-
-        txtHostLabel.setText("Workstation: " + host);
 
         findViewById(R.id.chipGrokbot).setOnClickListener(v -> dispatchUserPrompt("Open Grokbot on my workstation"));
         findViewById(R.id.chipSysStatus).setOnClickListener(v -> dispatchUserPrompt("Check workstation system resources and CPU load"));
@@ -114,8 +128,10 @@ public class MainActivity extends AppCompatActivity {
         recyclerChat.setLayoutManager(lm);
         recyclerChat.setAdapter(chatAdapter);
 
-        // Add welcome message
-        ChatMessage welcome = new ChatMessage(ChatMessage.TYPE_KUREK, "Kurek Remote connected. Speak or type instructions for your Arch workstation.", getTime());
+        String welcomeText = isConfigured()
+                ? "Kurek Remote ready. Speak or type instructions for your Arch workstation."
+                : "Set your workstation host and remote token in Settings (gear icon) before sending prompts.";
+        ChatMessage welcome = new ChatMessage(ChatMessage.TYPE_KUREK, welcomeText, getTime());
         messageList.add(welcome);
         chatAdapter.notifyItemInserted(0);
     }
@@ -199,6 +215,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void dispatchUserPrompt(String prompt) {
+        if (!isConfigured()) {
+            Toast.makeText(this, "Set host and token in Settings first", Toast.LENGTH_LONG).show();
+            showSettingsDialog();
+            return;
+        }
+
         triggerHaptic(40);
         ChatMessage userMsg = new ChatMessage(ChatMessage.TYPE_USER, prompt, getTime());
         messageList.add(userMsg);
@@ -255,7 +277,11 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void pingServer() {
-        client.checkStatus(host, port, new KurekClient.StatusCallback() {
+        if (!isConfigured()) {
+            setStatusState("SETUP", getColor(R.color.status_amber));
+            return;
+        }
+        client.checkStatus(host, port, token, new KurekClient.StatusCallback() {
             @Override
             public void onStatus(String state) {
                 setStatusState("ONLINE", getColor(R.color.status_green));
@@ -300,11 +326,13 @@ public class MainActivity extends AppCompatActivity {
             try { newPort = Integer.parseInt(ePort.getText().toString().trim()); } catch (Exception ignored) {}
             String newToken = eToken.getText().toString().trim();
 
-            if (!newHost.isEmpty()) {
-                savePreferences(newHost, newPort, newToken);
-                dialog.dismiss();
-                Toast.makeText(this, "Settings saved!", Toast.LENGTH_SHORT).show();
+            if (newHost.isEmpty() || newToken.isEmpty()) {
+                Toast.makeText(this, "Host and token are required", Toast.LENGTH_LONG).show();
+                return;
             }
+            savePreferences(newHost, newPort, newToken);
+            dialog.dismiss();
+            Toast.makeText(this, "Settings saved!", Toast.LENGTH_SHORT).show();
         });
 
         dialog.show();

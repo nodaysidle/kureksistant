@@ -43,6 +43,10 @@ def test_daemon_status_idle_without_api_keys(tmp_path: Path) -> None:
         "DEEPGRAM_API_KEY",
         "TYPESAFE_API_KEY",
         "OPENROUTER_API_KEY",
+        "KUREK_REMOTE_TOKEN",
+        "KUREK_REMOTE_BIND",
+        "KUREK_BIND",
+        "KUREK_REMOTE_ALLOW_EXEC",
     ):
         env.pop(key, None)
 
