@@ -69,6 +69,7 @@
 | **Memory Tool** | [`actions/memory_tool.py`](actions/memory_tool.py) | `manage_memory(action='remember'|'recall')`. Bidirectionally syncs with Hermes `USER.md` & `MEMORY.md`. |
 | **External Memory** | `HERMES_PROFILE` / `HERMES_MEMORIES_DIR` / `~/.hermes/memories` | Optional Hermes `USER.md` + `MEMORY.md` continuity. |
 | **Knowledge Vault** | [`actions/vault_knowledge.py`](actions/vault_knowledge.py) | `vault_knowledge(action='list_projects'\|'read'\|'search'\|'add_inbox')`. Accesses nodaysidle-knowledge Obsidian vault notes, PRDs, roadmaps, and social media plans. |
+| **Decision Client** | [`core/decision_client.py`](core/decision_client.py) | Optional OpenRouter Decision-1 `needs_screen` gate for auto screen-context; TypeSafe Jev remains the fallback. |
 
 ---
 
@@ -81,10 +82,14 @@ KUREK_TIMING=1            # Optional: print per-query ms timing marks to the dae
 DEEPSEEK_API_KEY=sk-...   # Direct platform key for api.deepseek.com
 XAI_API_KEY=xai-...        # Direct platform key for api.x.ai (Grok TTS)
 DEEPGRAM_API_KEY=...      # Deepgram Nova-2 STT (falls back to local Whisper if omitted)
+OPENROUTER_API_KEY=       # Optional: Decision-1 auto screen-context (prompt text sent to OpenRouter)
+TYPESAFE_API_KEY=         # Optional: Jev triage + Decision-1 fallback for needs_screen
+KUREK_AUTO_SCREEN=1       # Set 0 to disable auto screen-context detection
+# KUREK_DECISION_TIMEOUT=1.5
 ```
 
 > [!IMPORTANT]
-> Never use OpenRouter for Kurek. All DeepSeek calls route straight to `https://api.deepseek.com/chat/completions`.
+> DeepSeek chat completions must route straight to `https://api.deepseek.com/chat/completions` (never via OpenRouter). Optional `OPENROUTER_API_KEY` is only for Decision-1 auto screen-context detection; when set, each prompt's text is sent to OpenRouter unless `KUREK_AUTO_SCREEN=0`.
 
 ---
 
@@ -105,7 +110,7 @@ On macOS, the status is rendered by `KurekBar.swift` in the system menu bar.
 
 ## 5. Memory System & Hermes Continuity
 
-Kurek uses the **Muse Memory** three-tier markdown memory plane, triaged by TypeSafe Jev:
+Kurek uses the **Muse Memory** three-tier markdown memory plane, triaged by TypeSafe Jev. Auto screen-context detection (`KurekEngine._check_auto_screen_context`) tries an optional fast decision model via OpenRouter Decision-1 first (`core/decision_client.py`), then TypeSafe Jev; with neither key—or with `KUREK_AUTO_SCREEN=0`—no screen context is injected.
 
 1. **Daily logs:** `~/memory/YYYY-MM-DD.md`, the day's captured context.
 2. **Durable core:** `~/MEMORY.md`, durable preferences and rules promoted by Jev.
