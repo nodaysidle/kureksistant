@@ -51,7 +51,7 @@ public class MainActivity extends AppCompatActivity {
     private boolean isListeningSpeech = false;
 
     private final KurekClient client = new KurekClient();
-    private String host = "192.168.1.251";
+    private String host = "100.116.190.97";
     private int port = 8790;
     private String token = "kurek_sec_99a8b7c6d5e4f3a2";
 
@@ -73,7 +73,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void loadPreferences() {
         SharedPreferences sp = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-        host = sp.getString(KEY_HOST, "192.168.1.251");
+        host = sp.getString(KEY_HOST, "100.116.190.97");
         port = sp.getInt(KEY_PORT, 8790);
         token = sp.getString(KEY_TOKEN, "kurek_sec_99a8b7c6d5e4f3a2");
     }
