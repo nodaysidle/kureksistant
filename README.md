@@ -12,12 +12,12 @@
 
 <p align="center">
   <a href="https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.0"><img src="https://img.shields.io/badge/Release-v0.2.0-blue.svg?style=flat-square" alt="Latest Release"></a>
-  <img src="https://img.shields.io/badge/Platform-Arch%20Linux%20(Hyprland)%20%7C%20macOS-1793D1?style=flat-square&logo=arch-linux&logoColor=white" alt="Platform">
+  <img src="https://img.shields.io/badge/Platform-Arch%20Linux%20%7C%20macOS%20%7C%20Android-1793D1?style=flat-square&logo=arch-linux&logoColor=white" alt="Platform">
+  <img src="https://img.shields.io/badge/Mobile-Android%20Remote%20APK-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android APK">
   <img src="https://img.shields.io/badge/Footprint-~450MB%20peak%20(Whisper)-brightgreen?style=flat-square" alt="Memory">
   <img src="https://img.shields.io/badge/Brain-DeepSeek--Flash-4E6EF2?style=flat-square&logo=deepseek&logoColor=white" alt="DeepSeek">
   <img src="https://img.shields.io/badge/Voice-xAI%20Grok%20(Sol)-1E1E1E?style=flat-square&logo=x&logoColor=white" alt="xAI Grok">
   <img src="https://img.shields.io/badge/Vision-Gemini%20Flash-4285F4?style=flat-square&logo=google&logoColor=white" alt="Gemini Vision">
-  <img src="https://img.shields.io/badge/Cognition-TypeSafe%20Jev-FF5722?style=flat-square" alt="TypeSafe Jev">
   <img src="https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey?style=flat-square" alt="License">
 </p>
 
@@ -234,12 +234,21 @@ flowchart TD
 
 ## 📱 Kurek Remote (Android App)
 
-Kurek includes a dedicated native Android client located in [`android/`](android/):
+Kurek includes a dedicated native Android client located in [`android/`](android/) with pre-compiled binary available at [`release/kurek-remote.apk`](release/kurek-remote.apk):
 
 * **Real-time SSE Streaming:** Streams thoughts and tool executions token-by-token directly to your phone.
 * **Voice-First Input:** Tap-to-talk speech dictation with Android speech recognition and tactile haptics.
-* **Action Badges:** Collapsible activity pills displaying executed desktop commands (`open_app`, `file_controller`, `screen_vision`, etc.).
+* **Action Badges:** Collapsible activity pills displaying executed desktop commands (`open_app`, `file_controller`, `screen_vision`, `system_monitor`, etc.).
 * **Zero WAN Exposure:** Protected via `KUREK_REMOTE_TOKEN` Bearer authentication; connects securely via home Wi-Fi or Tailscale mesh.
+
+### Quick Install on Android:
+1. Download or transfer [`release/kurek-remote.apk`](release/kurek-remote.apk) to your Android device.
+2. Tap to install the APK (allow install from unknown sources if prompted).
+3. Open the app → Tap the Settings gear ⚙️ in the top right:
+   * **Host:** Your workstation's LAN IP (e.g. `192.168.1.251`) or Tailscale IP (e.g. `100.116.190.97`).
+   * **Port:** `8790`
+   * **Token:** The `KUREK_REMOTE_TOKEN` defined in your `.env` file.
+4. Tap **Save & Reconnect** — the status pill turns green (`ONLINE`) and you're ready to command your workstation from your pocket!
 
 ---
 
