@@ -38,6 +38,7 @@ from memory.config_manager import (
     get_openrouter_api_key,
     get_typesafe_key,
     get_user_name,
+    get_xai_key,
     load_api_keys,
     get_remote_token,
     resolve_hermes_memory_dirs,
