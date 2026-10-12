@@ -106,6 +106,20 @@ def get_typesafe_key() -> str | None:
     keys = load_api_keys()
     return keys.get("TYPESAFE_API_KEY") or keys.get("typesafe_api_key") or os.environ.get("TYPESAFE_API_KEY")
 
+def get_openrouter_api_key() -> str | None:
+    """OpenRouter key for optional Decision-1 auto screen-context (env or api_keys.json)."""
+    import os
+    keys = load_api_keys()
+    key = (
+        keys.get("OPENROUTER_API_KEY")
+        or keys.get("openrouter_api_key")
+        or os.environ.get("OPENROUTER_API_KEY")
+    )
+    if key is None:
+        return None
+    key = str(key).strip()
+    return key or None
+
 def is_configured() -> bool:
     return bool(get_deepseek_key() or get_gemini_key())
 

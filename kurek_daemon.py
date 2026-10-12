@@ -35,9 +35,19 @@ sys.path.insert(0, str(BASE_DIR))
 import socket
 from memory.config_manager import (
     get_deepgram_key,
+    get_openrouter_api_key,
+    get_typesafe_key,
     get_user_name,
     get_xai_key,
+    load_api_keys,
     resolve_hermes_memory_dirs,
+)
+from core.decision_client import (
+    NEEDS_SCREEN_INSTRUCTIONS,
+    SCREEN_CONTEXT_THRESHOLD,
+    auto_screen_enabled,
+    decision_timeout_s,
+    query_openrouter_needs_screen,
 )
 from core.llm_client import query_deepseek, stream_deepseek_sentences
 from core.tts import create_tts_player
@@ -538,7 +548,7 @@ class KurekEngine:
         if mem_block:
             sys_prompt += f"\n\n[USER MEMORY & PREFERENCES]\n{mem_block}"
 
-        # Autonomous Screen Context Detection via TypeSafe Jev
+        # Autonomous screen-context detection (Decision-1 → TypeSafe fallback)
         auto_vision_ctx = self._check_auto_screen_context(user_prompt)
         effective_user_prompt = f"{user_prompt}\n\n{auto_vision_ctx}" if auto_vision_ctx else user_prompt
 
@@ -795,35 +805,95 @@ class KurekEngine:
             print(f"[Muse Jev Consolidation Notice] {e}", flush=True)
 
     def _check_auto_screen_context(self, user_prompt: str) -> str | None:
-        """Uses TypeSafe Jev to detect if prompt requires on-screen / terminal visual context."""
+        """Detect whether the prompt needs on-screen / terminal visual context.
+
+        Uses an optional fast decision model (OpenRouter Decision-1) first, then
+        TypeSafe Jev as fallback. With neither key (or ``KUREK_AUTO_SCREEN=0``),
+        returns None and skips screen capture. When OpenRouter is used, the
+        prompt text is sent to OpenRouter.
+        """
         try:
-            import os
-            from memory.config_manager import load_api_keys
-            load_api_keys()
-            if not os.environ.get("TYPESAFE_API_KEY"):
+            if not auto_screen_enabled():
                 return None
-            from typesafe_sdk import TypeSafeClient, Noul
-            client = TypeSafeClient()
-            resp = client.system_one(
-                state={"prompt": user_prompt},
-                questions={
-                    "needs_screen": Noul(
-                        instructions="Does `prompt` ask about visual UI layout, a compiler error, terminal output, a bug on screen, what is visible, or code currently in view?"
+
+            load_api_keys()
+
+            prob: float | None = None
+            source_engine = "Heuristic"
+
+            openrouter_key = get_openrouter_api_key()
+            if openrouter_key:
+                prob = query_openrouter_needs_screen(
+                    user_prompt,
+                    openrouter_key,
+                    timeout=decision_timeout_s(),
+                )
+                if prob is not None:
+                    source_engine = "Microsoft-Decision-1"
+
+            if prob is None and get_typesafe_key():
+                try:
+                    from typesafe_sdk import Noul, TypeSafeClient
+
+                    client = TypeSafeClient()
+                    resp = client.system_one(
+                        state={"prompt": user_prompt},
+                        questions={
+                            "needs_screen": Noul(instructions=NEEDS_SCREEN_INSTRUCTIONS)
+                        },
                     )
-                }
-            )
-            prob = resp.answers["needs_screen"].noul
-            if prob > 0.75:
-                print(f"[Kurek Jev Vision] 👁️ Auto screen context triggered (P={prob:.2f}). Capturing active window...", flush=True)
-                from actions.screen_vision import capture_screen_jpeg, query_vision, get_hyprland_context
+                    noul = resp.answers["needs_screen"].noul
+                    if (
+                        isinstance(noul, (int, float))
+                        and not isinstance(noul, bool)
+                        and 0.0 <= float(noul) <= 1.0
+                    ):
+                        prob = float(noul)
+                        source_engine = "TypeSafe Jev"
+                except Exception as ex_ts:
+                    msg = str(ex_ts)
+                    if len(msg) > 120:
+                        msg = msg[:117] + "..."
+                    print(
+                        f"[Kurek Jev Notice] TypeSafe fallback failed "
+                        f"({type(ex_ts).__name__}: {msg})",
+                        flush=True,
+                    )
+
+            if prob is not None and prob > SCREEN_CONTEXT_THRESHOLD:
+                print(
+                    f"[Kurek Vision Engine] Auto screen context triggered by "
+                    f"{source_engine} (P={prob:.2f}). Capturing active window...",
+                    flush=True,
+                )
+                from actions.screen_vision import (
+                    capture_screen_jpeg,
+                    get_hyprland_context,
+                    query_vision,
+                )
+
                 hypr = get_hyprland_context()
                 win_title = hypr.get("title", "Unknown")
                 win_class = hypr.get("class", "Unknown")
                 jpeg_bytes, _ = capture_screen_jpeg()
-                vision_summary = query_vision(jpeg_bytes, f"Identify any relevant code, error, or UI context in this window relating to: {user_prompt}")
-                return f"[AUTOMATIC LIVE SCREEN CONTEXT]\nActive Window: '{win_title}' (App: {win_class})\nVision Analysis:\n{vision_summary}"
+                vision_summary = query_vision(
+                    jpeg_bytes,
+                    f"Identify any relevant code, error, or UI context in this "
+                    f"window relating to: {user_prompt}",
+                )
+                return (
+                    f"[AUTOMATIC LIVE SCREEN CONTEXT]\n"
+                    f"Active Window: '{win_title}' (App: {win_class})\n"
+                    f"Vision Analysis:\n{vision_summary}"
+                )
         except Exception as e:
-            print(f"[Kurek Jev Vision Notice] {e}", flush=True)
+            msg = str(e)
+            if len(msg) > 120:
+                msg = msg[:117] + "..."
+            print(
+                f"[Kurek Vision Engine Notice] {type(e).__name__}: {msg}",
+                flush=True,
+            )
         return None
 
     def _hourly_consolidation_loop(self):
