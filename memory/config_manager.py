@@ -120,6 +120,11 @@ def get_openrouter_api_key() -> str | None:
     key = str(key).strip()
     return key or None
 
+def get_remote_token() -> str | None:
+    import os
+    keys = load_api_keys()
+    return keys.get("KUREK_REMOTE_TOKEN") or keys.get("kurek_remote_token") or os.environ.get("KUREK_REMOTE_TOKEN")
+
 def is_configured() -> bool:
     return bool(get_deepseek_key() or get_gemini_key())
 

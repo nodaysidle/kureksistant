@@ -38,8 +38,8 @@ from memory.config_manager import (
     get_openrouter_api_key,
     get_typesafe_key,
     get_user_name,
-    get_xai_key,
     load_api_keys,
+    get_remote_token,
     resolve_hermes_memory_dirs,
 )
 from core.decision_client import (
@@ -413,20 +413,25 @@ class KurekEngine:
         except Exception:
             pass
 
-    def handle_text_query(self, user_prompt: str):
+    def handle_text_query(self, user_prompt: str, callback=None, mute_speaker: bool = False):
         begin_query()
         self.set_state(KurekState.THINKING)
         try:
-            self._handle_text_query_inner(user_prompt)
+            return self._handle_text_query_inner(user_prompt, callback=callback, mute_speaker=mute_speaker)
         except Exception as e:
             print(f"[Kurek] Unhandled query error: {e}", flush=True)
             self._notify_failure("Something went wrong handling that request.")
             try:
-                if not self._cancel_requested:
+                if not self._cancel_requested and not mute_speaker:
                     self.set_state(KurekState.SPEAKING)
                     self.tts.speak("Something went wrong handling that request.")
             except Exception as tts_err:
                 print(f"[Kurek] TTS error during failure report: {tts_err}")
+            if callback:
+                try:
+                    callback({"type": "error", "error": str(e)})
+                except Exception:
+                    pass
         finally:
             # Always return to a resting state — never leave the daemon stuck in THINKING.
             try:
@@ -440,7 +445,7 @@ class KurekEngine:
                 self.set_state(KurekState.IDLE)
             end_query()
 
-    def _handle_text_query_inner(self, user_prompt: str):
+    def _handle_text_query_inner(self, user_prompt: str, callback=None, mute_speaker: bool = False):
         now_str = datetime.now().strftime("%Y-%m-%d %A, %I:%M %p")
 
         # Load long-term user memories & context
@@ -614,6 +619,13 @@ class KurekEngine:
                         last_tool_output = str(tool_result)
                         print(f"[Kurek Tool Result] → {tool_result}", flush=True)
 
+                        if callback:
+                            try:
+                                arg_summary = ", ".join(f"{k}='{v}'" for k, v in list(fn_args.items())[:2]) if isinstance(fn_args, dict) else ""
+                                callback({"type": "tool", "name": fn_name, "description": f"⚙️ {fn_name}({arg_summary})", "result": str(tool_result)[:100]})
+                            except Exception:
+                                pass
+
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tc.get("id", f"call_{fn_name}_{turn_idx}"),
@@ -626,11 +638,17 @@ class KurekEngine:
                     raw_sentence = ev.get("sentence", "")
                     clean_sentence = self.sanitize_text_for_speech(raw_sentence)
                     if clean_sentence and not self._cancel_requested:
-                        if sentence_count == 0:
-                            self.set_state(KurekState.SPEAKING)
-                        self.tts.speak_chunk(clean_sentence, append=(sentence_count > 0))
+                        if not mute_speaker:
+                            if sentence_count == 0:
+                                self.set_state(KurekState.SPEAKING)
+                            self.tts.speak_chunk(clean_sentence, append=(sentence_count > 0))
                         sentence_count += 1
                         streamed_sentences.append(raw_sentence)
+                        if callback:
+                            try:
+                                callback({"type": "sentence", "sentence": raw_sentence})
+                            except Exception:
+                                pass
 
                 elif ev_type == "done":
                     reply_text = ev.get("full_content", "") or " ".join(streamed_sentences)
@@ -691,7 +709,7 @@ class KurekEngine:
         threading.Thread(target=self._consolidate_with_jev, args=(user_prompt,), daemon=True).start()
 
         # Fallback speak if sentences were not streamed directly
-        if sentence_count == 0 and not self._cancel_requested:
+        if sentence_count == 0 and not self._cancel_requested and not mute_speaker:
             clean_speech = self.sanitize_text_for_speech(reply_text)
             if not clean_speech:
                 clean_speech = "All set."
@@ -701,7 +719,13 @@ class KurekEngine:
             except Exception as e:
                 print(f"[Kurek] TTS error: {e}")
 
-        return
+        if callback:
+            try:
+                callback({"type": "done", "reply": reply_text})
+            except Exception:
+                pass
+
+        return reply_text
 
     @staticmethod
     def sanitize_text_for_speech(text: str) -> str:
@@ -871,7 +895,6 @@ class KurekEngine:
                     get_hyprland_context,
                     query_vision,
                 )
-
                 hypr = get_hyprland_context()
                 win_title = hypr.get("title", "Unknown")
                 win_class = hypr.get("class", "Unknown")
@@ -937,6 +960,13 @@ class KurekHTTPHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.end_headers()
+
     def do_POST(self):
         if self.path == "/toggle":
             self.engine.toggle()
@@ -956,6 +986,52 @@ class KurekHTTPHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(b'{"status":"processing"}')
+        elif self.path == "/remote/prompt":
+            # Security verification
+            configured_token = get_remote_token()
+            if configured_token:
+                auth_hdr = self.headers.get("Authorization", "")
+                token_provided = auth_hdr.replace("Bearer ", "").strip()
+                if token_provided != configured_token.strip():
+                    self.send_response(401)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(b'{"error":"Unauthorized: invalid or missing token"}\n')
+                    return
+
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length).decode("utf-8")
+            data = json.loads(body) if body else {}
+            prompt_text = data.get("prompt", "")
+            mute_speaker = bool(data.get("remote", True))
+
+            if not prompt_text:
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"error":"prompt is required"}\n')
+                return
+
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+
+            stream_lock = threading.Lock()
+
+            def _sse_callback(event: dict):
+                try:
+                    with stream_lock:
+                        payload = f"data: {json.dumps(event)}\n\n".encode("utf-8")
+                        self.wfile.write(payload)
+                        self.wfile.flush()
+                except Exception:
+                    pass
+
+            # Execute query synchronously inside this HTTP thread so the SSE connection stays open
+            self.engine.handle_text_query(prompt_text, callback=_sse_callback, mute_speaker=mute_speaker)
         else:
             self.send_response(404)
             self.end_headers()
@@ -1144,8 +1220,8 @@ def run_server(engine: KurekEngine, port: int = 8790):
     KurekHTTPHandler.engine = engine
     # Launch UDS listener in background
     threading.Thread(target=run_uds_server, args=(engine,), daemon=True).start()
-    server = ThreadingHTTPServer(("127.0.0.1", port), KurekHTTPHandler)
-    print(f"[Kurek Server] 🚀 Listening at http://127.0.0.1:{port}")
+    server = ThreadingHTTPServer(("0.0.0.0", port), KurekHTTPHandler)
+    print(f"[Kurek Server] 🚀 Listening at http://0.0.0.0:{port}")
     server.serve_forever()
 
 

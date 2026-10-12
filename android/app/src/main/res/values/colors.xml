@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg_main">#0B0D11</color>
+    <color name="bg_card">#13171F</color>
+    <color name="bg_input">#1A1F2B</color>
+    <color name="accent_primary">#00E5FF</color>
+    <color name="accent_glow">#3300E5FF</color>
+    <color name="status_green">#00E676</color>
+    <color name="status_amber">#FFD600</color>
+    <color name="status_blue">#2979FF</color>
+    <color name="text_primary">#F1F5F9</color>
+    <color name="text_secondary">#94A3B8</color>
+    <color name="text_muted">#64748B</color>
+    <color name="bubble_user">#1E2638</color>
+    <color name="bubble_kurek">#141923</color>
+    <color name="tool_card">#0F131C</color>
+    <color name="tool_border">#222C3D</color>
+</resources>

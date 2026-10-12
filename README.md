@@ -216,18 +216,30 @@ flowchart TD
 ## 📜 The Evolution of Kurek
 
 ```
-  ┌──────────────────────────────┐       ┌──────────────────────────────┐       ┌──────────────────────────────┐
-  │  Phase 1: The Monolith GUI   │       │  Phase 2: The Headless OS    │       │  Phase 3: Cognitive Memory   │
-  │ • Heavy PyQt6 interface      │  ───► │ • Lean Python daemon (:8790) │  ───► │ • Muse Memory 3-Tier Split   │
-  │ • Heavy RAM GUI footprint    │       │ • ~450MB peak w/ Whisper     │       │ • TypeSafe Jev System One    │
-  │ • Slow visual cold-start     │       │ • Middle Click mouse summon  │       │ • Hourly auto-consolidation  │
-  │ • Flat history array         │       │ • 24 Linux tool modules      │       │ • Instant boundary hoisting  │
-  └──────────────────────────────┘       └──────────────────────────────┘       └──────────────────────────────┘
+  ┌──────────────────────────────┐       ┌──────────────────────────────┐       ┌──────────────────────────────┐       ┌──────────────────────────────┐
+  │  Phase 1: The Monolith GUI   │       │  Phase 2: The Headless OS    │       │  Phase 3: Cognitive Memory   │       │   Phase 4: Remote Android    │
+  │ • Heavy PyQt6 interface      │  ───► │ • Lean Python daemon (:8790) │  ───► │ • Muse Memory 3-Tier Split   │  ───► │ • Native Glassmorphic APK    │
+  │ • Heavy RAM GUI footprint    │       │ • ~450MB peak w/ Whisper     │       │ • TypeSafe Jev System One    │       │ • Voice-First Remote Summon  │
+  │ • Slow visual cold-start     │       │ • Middle Click mouse summon  │       │ • Hourly auto-consolidation  │       │ • Real-Time SSE Token Stream │
+  │ • Flat history array         │       │ • 24 Linux tool modules      │       │ • Instant boundary hoisting  │       │ • Bearer Auth LAN/Tailscale  │
+  └──────────────────────────────┘       └──────────────────────────────┘       └──────────────────────────────┘       └──────────────────────────────┘
 ```
 
 1. **The Monolith GUI Era (PyQt6 Desktop Client):** In its earliest iteration, Kurek lived as a traditional desktop window app written in PyQt6. While functional, it consumed a large resident RAM footprint, required window switching, and lost context on restart.
-2. **The Headless OS Daemon Revolution:** We dismantled the GUI window entirely and rebuilt Kurek as a dedicated Unix-style headless daemon (UDS + `127.0.0.1:8790`). With faster-whisper loaded, observed peak RSS is about ~450MB, and invocation is wired to a mouse Middle Click (`mouse:274`) via `kurek-trigger` (~0.8ms median on a mock daemon).
+2. **The Headless OS Daemon Revolution:** We dismantled the GUI window entirely and rebuilt Kurek as a dedicated Unix-style headless daemon (UDS + `0.0.0.0:8790`). With faster-whisper loaded, observed peak RSS is about ~450MB, and invocation is wired to a mouse Middle Click (`mouse:274`) via `kurek-trigger` (~0.8ms median on a mock daemon).
 3. **The Cognitive Leap (Muse Memory & TypeSafe Jev):** Integrated three-tier memory separation and TypeSafe Jev cognitive snap-judgment gating. Casual chat is discarded while durable personal preferences and negative boundaries are automatically hoisted into permanent storage.
+4. **The Mobile Pocket Jarvis (Android APK):** Built a native, glassmorphic Android app (`android/`) with voice-to-text dictation, live Server-Sent Events (SSE) streaming, real-time tool execution badges, and tokenized Bearer authentication over local Wi-Fi or Tailscale VPN. Untethered control of your workstation from anywhere.
+
+---
+
+## 📱 Kurek Remote (Android App)
+
+Kurek includes a dedicated native Android client located in [`android/`](android/):
+
+* **Real-time SSE Streaming:** Streams thoughts and tool executions token-by-token directly to your phone.
+* **Voice-First Input:** Tap-to-talk speech dictation with Android speech recognition and tactile haptics.
+* **Action Badges:** Collapsible activity pills displaying executed desktop commands (`open_app`, `file_controller`, `screen_vision`, etc.).
+* **Zero WAN Exposure:** Protected via `KUREK_REMOTE_TOKEN` Bearer authentication; connects securely via home Wi-Fi or Tailscale mesh.
 
 ---
 

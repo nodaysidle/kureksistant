@@ -70,6 +70,7 @@
 | **External Memory** | `HERMES_PROFILE` / `HERMES_MEMORIES_DIR` / `~/.hermes/memories` | Optional Hermes `USER.md` + `MEMORY.md` continuity. |
 | **Knowledge Vault** | [`actions/vault_knowledge.py`](actions/vault_knowledge.py) | `vault_knowledge(action='list_projects'\|'read'\|'search'\|'add_inbox')`. Accesses nodaysidle-knowledge Obsidian vault notes, PRDs, roadmaps, and social media plans. |
 | **Decision Client** | [`core/decision_client.py`](core/decision_client.py) | Optional OpenRouter Decision-1 `needs_screen` gate for auto screen-context; TypeSafe Jev remains the fallback. |
+| **Android Remote APK** | [`android/`](android/) | Native Android client with voice dictation, live SSE streaming tokens, and Bearer token auth (`/remote/prompt`). |
 
 ---
 
