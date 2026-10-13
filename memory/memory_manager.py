@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -19,6 +20,7 @@ MEMORY_DIR = BASE_DIR / "memory"
 MEMORY_PATH = MEMORY_DIR / "long_term.json"
 DB_PATH = MEMORY_DIR / "kurek_memory.db"
 _lock = Lock()
+_log = logging.getLogger("kurek.memory")
 
 MAX_VALUE_LENGTH = 380
 MEMORY_MAX_CHARS = 200_000
@@ -166,14 +168,36 @@ def _migrate_from_json_if_needed(conn: sqlite3.Connection) -> None:
                 conn.commit()
                 print("[Memory] 📦 Migrated legacy long_term.json into kurek_memory.db (WAL + FTS5)")
         except Exception as e:
-            print(f"[Memory] Migration error: {e}")
+            # Leave 'migrated' unset so the next start retries, and discard any
+            # half-written rows so a retry cannot duplicate sessions.
+            conn.rollback()
+            _log.exception("Migration from %s failed; will retry on next start", MEMORY_PATH)
+            print(f"[Memory] Migration error (will retry next start): {e}")
     else:
         cur.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('migrated', '1')")
         conn.commit()
 
 
+def _is_migrated() -> bool:
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=10.0)
+        try:
+            row = conn.execute("SELECT value FROM metadata WHERE key='migrated'").fetchone()
+            return bool(row and row[0] == "1")
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
 def _sync_to_legacy_json(memory_dict: dict) -> None:
-    """Keep long_term.json in sync as a compatibility mirror."""
+    """Keep long_term.json in sync as a compatibility mirror.
+
+    Never overwrite the legacy file before its contents were migrated, or a
+    failed migration would destroy the only copy of the user's memory."""
+    if MEMORY_PATH.exists() and not _is_migrated():
+        _log.warning("Skipping long_term.json mirror: migration not complete")
+        return
     try:
         MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
         MEMORY_PATH.write_text(

@@ -285,6 +285,34 @@ class KurekState:
     SPEAKING = "speaking"
 
 
+
+_CONFIRM_AFFIRMATIVE = frozenset({
+    "yes", "y", "yep", "yeah", "yup", "sure", "ok", "okay", "confirm", "confirmed",
+    "do it", "go ahead", "proceed", "ja", "yes please", "yes do it", "ok do it",
+    "okay do it", "sure do it", "yes go ahead", "yes confirm",
+})
+_CONFIRM_NEGATIVE = frozenset({
+    "no", "n", "nope", "nah", "cancel", "stop", "abort", "nein", "dont", "do not",
+    "dont do it", "do not do it", "no thanks", "no cancel", "cancel it",
+    "no dont", "no stop", "never mind", "nevermind",
+})
+
+
+def classify_confirmation_reply(text: str) -> bool | None:
+    """True/False when the WHOLE reply is a yes/no word or phrase, else None.
+
+    Matching is on the full normalized utterance, never on a prefix, so
+    "notes", "now open x", "ok, what's the time", "surely" or "stop the music"
+    are not treated as confirmations.
+    """
+    norm = re.sub(r"[^a-z0-9\s]", "", (text or "").lower().replace("\u2019", "'").replace("'", ""))
+    norm = " ".join(norm.split())
+    if norm in _CONFIRM_AFFIRMATIVE:
+        return True
+    if norm in _CONFIRM_NEGATIVE:
+        return False
+    return None
+
 class KurekEngine:
     def __init__(self):
         self.state = KurekState.IDLE
@@ -660,27 +688,18 @@ class KurekEngine:
         mute_speaker: bool = False,
         remote: bool = False,
     ):
-        # Check if a confirmation is pending
-        clean_lower = re.sub(r"[^a-zA-Z0-9\s]", "", user_prompt).strip().lower()
+        # Pending-confirmation shortcut. A short reply that is ONLY a yes/no
+        # word or phrase resolves the waiting confirmation; anything else
+        # ("notes...", "now...", "ok, what's...", "stop the music") is handled
+        # as a normal prompt. Deliberate design (owner decision 2026-10-14):
+        # this applies to remote /remote/prompt requests too, so the
+        # authenticated Kurek Remote phone app MAY confirm or cancel a
+        # confirmation that was raised on the PC.
         if confirm.is_pending():
-            affirmative = {"yes", "confirm", "do it", "sure", "ja", "yep", "yeah", "ok", "proceed"}
-            negative = {"no", "cancel", "stop", "abort", "nein", "dont", "don't"}
-            if clean_lower in affirmative or any(clean_lower.startswith(w) for w in affirmative):
-                confirm.resolve(True)
-                reply = "Confirmed and executed."
-                if callback:
-                    try:
-                        callback({"type": "sentence", "sentence": reply})
-                        callback({"type": "done", "reply": reply})
-                    except Exception:
-                        pass
-                if not mute_speaker and not self._cancel_requested:
-                    self.set_state(KurekState.SPEAKING)
-                    self.tts.speak(reply)
-                return reply
-            elif clean_lower in negative or any(clean_lower.startswith(w) for w in negative):
-                confirm.resolve(False)
-                reply = "Action cancelled."
+            verdict = classify_confirmation_reply(user_prompt)
+            if verdict is not None:
+                confirm.resolve(verdict)
+                reply = "Confirmed and executed." if verdict else "Action cancelled."
                 if callback:
                     try:
                         callback({"type": "sentence", "sentence": reply})
