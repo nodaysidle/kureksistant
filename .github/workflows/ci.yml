@@ -17,7 +17,8 @@ jobs:
       - name: Install system audio / tk / build deps
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq libportaudio2 python3-tk gcc shellcheck
+          # xvfb: headless DISPLAY for pyautogui/mouseinfo at pytest collection
+          sudo apt-get install -y -qq libportaudio2 python3-tk gcc shellcheck xvfb
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -65,4 +66,6 @@ jobs:
           VERSION=0.2.0 OUT_DIR="$RUNNER_TEMP/kurek-dist" ./scripts/package_release.sh
 
       - name: Test suite (offline / no API keys)
-        run: pytest -q tests/
+        # pyautogui imports mouseinfo, which requires DISPLAY (KeyError without X).
+        # Deselect: needs host-installed grok-bot.desktop (absent on GitHub runners).
+        run: xvfb-run -a pytest -q tests/ --deselect tests/test_open_app_grokbot.py::test_find_grok_desktop_file
