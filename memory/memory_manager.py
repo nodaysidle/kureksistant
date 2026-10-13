@@ -325,6 +325,8 @@ def save_memory(memory: dict) -> None:
     with _lock:
         conn = _get_db()
         try:
+            # Migrate first, so a write before any read can't skip the import.
+            _migrate_from_json_if_needed(conn)
             cur = conn.cursor()
             cur.execute("DELETE FROM entries")
             for cat, items in memory.items():

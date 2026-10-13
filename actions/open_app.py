@@ -221,10 +221,10 @@ def _focus_hyprland_app(app_query: str) -> bool:
 
         ws_id = match.get("workspace", {}).get("id")
         if ws_id is not None:
-            subprocess.run(["hyprctl", "dispatch", f'hl.dsp.focus({{ workspace = "{ws_id}" }})'], capture_output=True, timeout=2.0)
+            subprocess.run(["hyprctl", "dispatch", "workspace", str(ws_id)], capture_output=True, timeout=2.0)
         addr = match.get("address")
         if addr:
-            subprocess.run(["hyprctl", "eval", f'hl.dispatch(hl.dsp.focus({{ window = "address:{addr}" }}))'], capture_output=True, timeout=2.0)
+            subprocess.run(["hyprctl", "dispatch", "focuswindow", f"address:{addr}"], capture_output=True, timeout=2.0)
         return True
     except Exception as e:
         print(f"[open_app] Hyprland focus check failed: {e}")

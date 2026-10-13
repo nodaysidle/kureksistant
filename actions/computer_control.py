@@ -322,10 +322,10 @@ def _focus_window(title: str) -> str:
                     if match:
                         ws_id = match.get("workspace", {}).get("id")
                         if ws_id is not None:
-                            subprocess.run(["hyprctl", "dispatch", f'hl.dsp.focus({{ workspace = "{ws_id}" }})'], capture_output=True, timeout=2.0)
+                            subprocess.run(["hyprctl", "dispatch", "workspace", str(ws_id)], capture_output=True, timeout=2.0)
                         addr = match.get("address")
                         if addr:
-                            subprocess.run(["hyprctl", "eval", f'hl.dispatch(hl.dsp.focus({{ window = "address:{addr}" }}))'], capture_output=True, text=True, timeout=2.0)
+                            subprocess.run(["hyprctl", "dispatch", "focuswindow", f"address:{addr}"], capture_output=True, text=True, timeout=2.0)
                         time.sleep(0.3)
                         return f"Focused window: {match.get('title') or title} (workspace {ws_id})"
             except Exception as e:

@@ -257,6 +257,8 @@ def close_app():
         pyautogui.hotkey("alt", "f4")
 
 def close_window():
+    """Explicit 'close the window' request. On Hyprland this closes the whole
+    active window (killactive). Tab/document closes go through close_tab()."""
     if _OS == "Darwin":
         pyautogui.hotkey("command", "w")
     elif _OS == "Linux" and _is_hyprland():
@@ -285,7 +287,7 @@ def maximize_window():
     elif _OS == "Windows":
         pyautogui.hotkey("win", "up")
     elif _OS == "Linux" and _is_hyprland():
-        subprocess.run(["hyprctl", "dispatch", "fullscreen", "0"], capture_output=True)
+        subprocess.run(["hyprctl", "dispatch", "fullscreen", "1"], capture_output=True)
     else:
         try:
             subprocess.run(["wmctrl", "-r", ":ACTIVE:", "-b", "add,maximized_vert,maximized_horz"],
@@ -752,7 +754,10 @@ _ALIASES = {
     "mute":            ("silence", "sound off", "no sound"),
     "brightness_up":   ("brighter", "raise brightness", "increase brightness"),
     "brightness_down": ("dimmer", "dim", "lower brightness", "decrease brightness"),
-    "close_window":    ("close this", "close it"),
+    # close_window first: "close this window" also contains "close this".
+    "close_window":    ("close window", "close this window", "close the window"),
+    "close_tab":       ("close this", "close it", "close tab", "close this tab",
+                        "close the tab"),
     "full_screen":     ("fullscreen", "maximise screen"),
     "show_desktop":    ("minimise everything", "go to desktop"),
     "lock_screen":     ("lock", "lock the pc", "lock computer"),

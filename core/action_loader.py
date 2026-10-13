@@ -75,18 +75,27 @@ class ActionRegistry:
         if rec is None or not rec.valid:
             return f"Action '{name}' is not available."
         import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(_call_handler, rec.handler, parameters, ctx or {})
-            try:
-                res = future.result(timeout=timeout)
-                return res or "Done."
-            except concurrent.futures.TimeoutError:
-                self._logger(f"Action '{name}' timed out after {timeout}s.")
-                return f"Tool '{name}' timed out after {timeout}s."
-            except Exception as e:
-                self._logger(f"Action '{name}' crashed during run(): {e}")
-                traceback.print_exc()
-                return f"Tool '{name}' failed: {e}"
+        # NOTE: Python cannot kill a running thread. On timeout we return to the
+        # caller immediately and shut the executor down with wait=False, so the
+        # stuck handler's worker thread may linger in the background until it
+        # finishes on its own. It never blocks the caller (or a remote request).
+        executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix=f"action-{name}"
+        )
+        future = executor.submit(_call_handler, rec.handler, parameters, ctx or {})
+        try:
+            res = future.result(timeout=timeout)
+            return res or "Done."
+        except concurrent.futures.TimeoutError:
+            future.cancel()
+            self._logger(f"Action '{name}' timed out after {timeout}s.")
+            return f"Tool '{name}' timed out after {timeout}s."
+        except Exception as e:
+            self._logger(f"Action '{name}' crashed during run(): {e}")
+            traceback.print_exc()
+            return f"Tool '{name}' failed: {e}"
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
 
 def _call_handler(fn: Callable, parameters: dict, ctx: dict) -> str:
