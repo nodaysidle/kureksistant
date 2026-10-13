@@ -1,290 +1,241 @@
 <p align="center">
-  <img src="desktop/kurek.png" alt="Kureksistant Icon" width="128" style="border-radius: 24px;" />
+  <img src="desktop/kurek.png" alt="Kureksistant icon" width="128" />
+</p>
+
+<h1 align="center">Kureksistant (Kurek)</h1>
+
+<p align="center">
+  <strong>A voice assistant daemon for an Omarchy / Hyprland Linux desktop, with an optional phone remote over Tailscale.</strong>
 </p>
 
 <p align="center">
-  <strong>Kureksistant (Kurek)</strong>
-</p>
-
-<p align="center">
-  <strong>Autonomous personal AI assistant with native screen vision, xAI Grok voice, Wayland clipboard manager, TypeSafe Jev cognition, and Muse Memory. Built for Arch Linux (Hyprland / Omarchy) and macOS. ~450MB peak RAM with faster-whisper loaded (observed).</strong>
-</p>
-
-<p align="center">
-  <a href="https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.0"><img src="https://img.shields.io/badge/Release-v0.2.0-blue.svg?style=flat-square" alt="Latest Release"></a>
-  <img src="https://img.shields.io/badge/Platform-Arch%20Linux%20%7C%20macOS%20%7C%20Android-1793D1?style=flat-square&logo=arch-linux&logoColor=white" alt="Platform">
-  <img src="https://img.shields.io/badge/Mobile-Android%20Remote%20APK-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android APK">
-  <img src="https://img.shields.io/badge/Footprint-~450MB%20peak%20(Whisper)-brightgreen?style=flat-square" alt="Memory">
-  <img src="https://img.shields.io/badge/Brain-DeepSeek--Flash-4E6EF2?style=flat-square&logo=deepseek&logoColor=white" alt="DeepSeek">
-  <img src="https://img.shields.io/badge/Voice-xAI%20Grok%20(Sol)-1E1E1E?style=flat-square&logo=x&logoColor=white" alt="xAI Grok">
-  <img src="https://img.shields.io/badge/Vision-Gemini%20Flash-4285F4?style=flat-square&logo=google&logoColor=white" alt="Gemini Vision">
+  <a href="https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.1"><img src="https://img.shields.io/badge/Release-v0.2.1-blue.svg?style=flat-square" alt="Release v0.2.1"></a>
+  <img src="https://img.shields.io/badge/Desktop-Arch%20%2F%20Omarchy%20%2F%20Hyprland-1793D1?style=flat-square&logo=arch-linux&logoColor=white" alt="Arch / Omarchy / Hyprland">
+  <img src="https://img.shields.io/badge/Remote-Android%20app%20(build%20from%20source)-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android remote">
   <img src="https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey?style=flat-square" alt="License">
 </p>
 
 ---
 
-> **The Problem:** Modern desktop AI assistants are bloated 500MB+ Electron web apps that hijack workstation RAM, require manual window-switching, and lack direct hardware input integration.
->
-> **The Result:** Kureksistant is a headless local daemon (~450MB peak with faster-whisper loaded, observed) summoned via mouse Middle-Click (`mouse:274`) or Fn key, featuring DeepSeek-Flash reasoning, xAI Grok voice (Sol), screen vision, and 25 native tool modules. Trigger dispatch is ~0.8ms median (`scripts/bench_trigger.py`, mock daemon); end-to-end latency is reported by `KUREK_TIMING=1` logs.
+Kurek is a headless Python daemon (`kurek_daemon.py`) that runs as a systemd user service on your Linux desktop. You summon it with a mouse middle-click, a hotkey or the `kurek` CLI. It listens, thinks with DeepSeek-Flash, talks back with xAI Grok TTS (voice **Sol**), and can act on your desktop through about two dozen tool modules in [`actions/`](actions/), including windows, apps, the browser, files, the clipboard, screen vision and memory.
 
-<p align="center">
-  <img src="docs/demo.gif" alt="Kureksistant v0.2.0 promo — 25 tools, ~450MB peak with Whisper, ~0.8ms trigger median" width="800" />
-</p>
+It is built and tested first on **Arch Linux with Omarchy / Hyprland**. A macOS menu-bar client exists ([`menubar/`](menubar/)) but is less exercised. The old PyQt6 GUI lives in [`legacy/`](legacy/) and is unsupported.
+
+**Latest release: [v0.2.1, Omarchy Integration & Stability Refactor](https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.1)** (see also [CHANGELOG.md](CHANGELOG.md)).
 
 ---
 
-## ⚡ Quick Install
+## ✨ Features (v0.2.1)
 
-### Option A: Download Pre-packaged Release (Recommended)
+### Omarchy / Hyprland desktop integration
+- **Terminals and shell:** Ghostty and Herdr are preferred, and there's a Fish shell alias. btop/htop open in a terminal.
+- **Native `hyprctl dispatch` window control:**
+  - cycle windows;
+  - focus an already-open app (`workspace` + `focuswindow address:`);
+  - full-screen toggle, which reads the current state and sets the opposite;
+  - maximize (`fullscreen 1`);
+  - snap the active window to the left or right half of the focused monitor;
+  - display off (`dpms`).
+- **Close:** "close this", "close it" and "close tab" close the current tab (Ctrl+W). Only an explicit "close window" closes the whole window (`killactive`).
+- **Screen vision:** `grim` captures the active window and sends it to Gemini Flash. Hyprland context comes from the `.socket2.sock` event stream.
+- **Summon:** a compiled C trigger (`bin/kurek-trigger`) over the Unix socket `$XDG_RUNTIME_DIR/kurek.sock`.
 
-Download the verified `v0.2.0` Linux bundle from the [GitHub Releases](https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.0) page:
+### Phone remote over Tailscale (opt-in)
+- An Android app, **Kurek Remote**, is built from [`android/`](android/). It sends prompts to `POST /remote/prompt` and receives the reply as a Server-Sent Events stream (`sentence` / `tool` / `done`).
+- Off by default. Enable it with `KUREK_REMOTE_BIND=tailscale` and a Bearer token of **32+ characters** (`KUREK_REMOTE_TOKEN`).
+- **Silent on the PC by default:** remote prompts don't speak through the PC's speakers. Opt in per request with `"speak_local": true`, or globally with `KUREK_REMOTE_LOCAL_TTS=1`.
+- No APK release has been published. Build it yourself (see below).
 
-```bash
-# 1. Download and extract v0.2.0 release archive
-curl -LO https://github.com/nodaysidle/kureksistant/releases/download/v0.2.0/kureksistant-v0.2.0-linux-x86_64.tar.gz
-tar -xzf kureksistant-v0.2.0-linux-x86_64.tar.gz
-cd kureksistant-0.2.0
+### Conversational yes/no confirmations
+- Risky actions ask for confirmation, shown on the PC via `notify-send`.
+- While one is pending, a reply that is **entirely** a yes/no word or phrase confirms or cancels it ("yes", "ok", "do it", "no", "cancel", "never mind" and so on).
+- Anything longer, such as "notes for today" or "stop the music", is handled as a normal prompt.
+- **By design**, an authenticated phone request may confirm or cancel a confirmation that was raised on the PC.
 
-# 2. Run automated installer (sets up venv, ~/.local/bin/kurek, and desktop icon)
-./install_linux.sh
+### Memory: SQLite (WAL + FTS5) with auto-migration
+- Long-term memory lives in `memory/kurek_memory.db`, in SQLite WAL mode with an FTS5 full-text index. Recall falls back to plain word matching.
+- On first start, the legacy `memory/long_term.json` is imported automatically.
+  - If the import fails, it is rolled back, logged and retried on the next start.
+  - The JSON file is never overwritten before migration has completed, and it is then kept up to date as a compatibility copy.
+- Separately, the Muse memory layer keeps daily logs in `~/memory/`, a durable core in `~/MEMORY.md` and standing alignment in `~/ALIGNMENT_SYNTHESIS.md`. Optional TypeSafe Jev triage decides what gets promoted. Optional Hermes continuity is available via `HERMES_PROFILE` / `HERMES_MEMORIES_DIR`.
 
-# 3. Add your API keys to .env
-cp .env.example .env
-nano .env
+### Stability: the 600M systemd memory limit
+- `kurek.service` runs with `MemoryHigh=512M` / `MemoryMax=600M` and `Restart=on-failure`.
+- Heavy child jobs (dev-agent builds, pip installs, project runs) are started in their own `systemd-run --user --scope`, so their memory isn't counted against the service. Chromium is launched with low-memory flags.
+- Tool calls time out after **120 s**. A timed-out tool is reported as **timed out, never as success, and never retried**. Calling the same tool again while the earlier call is still running is refused.
 
-# 4. Start assistant daemon
-kurek start
-```
+### Environment-first API keys
+- Keys are read from the environment / `.env` first.
+- For the Gemini key, `config/api_keys.json` is the legacy fallback. A missing key no longer crashes the actions that use it.
 
-### Option B: Clone from Source
+### Other tools (unchanged)
+- `process_sentinel`: announces when long builds or tests finish.
+- `draft_to_clipboard`: dictate commit messages and PR text into `wl-copy`.
+- `workstation_radar`: git status across `~/Projects` and `~/dev`.
+- `vault_knowledge`: queries the nodaysidle-knowledge Obsidian vault.
+- `dream_tool`: nightly reflection journal.
+- Also: Playwright browser control, web search, file management (deletion requires confirmation), volume/brightness, alarms, and the clipboard manager.
+
+---
+
+## ⚡ Install (Linux)
+
+### 1. Clone and run the installer
 
 ```bash
 git clone https://github.com/nodaysidle/kureksistant.git
 cd kureksistant
 ./install_linux.sh
-cp .env.example .env   # add DEEPSEEK_API_KEY and XAI_API_KEY
-kurek start
+```
+
+`install_linux.sh` does the following:
+- creates `.venv` and installs `requirements.txt` plus the Playwright Chromium;
+- compiles `kurek-trigger`;
+- installs `~/.local/bin/kurek`, the icon and the desktop entry;
+- renders the systemd user unit into `~/.config/systemd/user/kurek.service`. The unit loads your settings with `EnvironmentFile=-<install dir>/.env`;
+- creates `.env` from `.env.example` only if it doesn't exist yet.
+
+### 2. Configure `.env`
+
+```bash
+nano .env
+```
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `DEEPSEEK_API_KEY` | **Yes** | Reasoning and tool dispatch (DeepSeek-Flash). |
+| `XAI_API_KEY` | **Yes** | Speech (xAI Grok TTS, voice Sol). |
+| `GEMINI_API_KEY` | Optional | Screen vision and Gemini-backed tools. |
+| `DEEPGRAM_API_KEY` | Optional | Deepgram Nova-2 STT. Falls back to local `faster-whisper`. |
+| `TYPESAFE_API_KEY` | Optional | TypeSafe Jev triage / screen-context fallback. |
+| `OPENROUTER_API_KEY` | Optional | Decision-1 auto screen-context (prompt text is sent to OpenRouter when set). |
+| `KUREK_AUTO_SCREEN` | Optional | `0` disables auto screen-context. |
+| `KUREK_DECISION_TIMEOUT` | Optional | Decision-1 HTTP timeout in seconds. |
+| `KUREK_USER_NAME` | Optional | How Kurek addresses you. |
+| `HERMES_PROFILE` / `HERMES_MEMORIES_DIR` | Optional | Hermes memory continuity. |
+| `INPUT_DEVICE` | Optional | Microphone name substring. |
+| `KUREK_PROJECT_DIR` | Optional | Install path for the macOS menu-bar client. |
+| `KUREK_TIMING` | Optional | `1` logs per-query timing deltas. |
+| `KUREK_REMOTE_BIND` | For phone | `tailscale` enables the remote bind (see below). |
+| `KUREK_REMOTE_TOKEN` | For phone | Bearer token, **at least 32 characters** (`openssl rand -hex 32`). |
+| `KUREK_REMOTE_ALLOW_EXEC` | Optional | `1` lets remote prompts use exec-capable tools. Leave it empty unless you need that. |
+| `KUREK_REMOTE_LOCAL_TTS` | Optional | `1` makes remote prompts also speak on the PC. |
+| `KUREK_BIND` | Optional | Explicit bind host. Never use `0.0.0.0` unless you understand the risk. |
+
+Phone-remote example:
+
+```bash
+# openssl rand -hex 32  → paste the output as the token
+KUREK_REMOTE_TOKEN=<64-hex-char token>
+KUREK_REMOTE_BIND=tailscale
+```
+
+### 3. Start the service
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now kurek     # or: kurek start
+systemctl --user status kurek
+journalctl --user -u kurek -f           # the log shows the bind addresses
 curl -s http://127.0.0.1:8790/status
 ```
 
-Canonical entrypoint: the headless daemon (`kurek_daemon.py`) via `kurek start` / `./launch_kurek.sh`.  
-The old PyQt6 JARVIS GUI lives under [`legacy/`](legacy/) and is **unsupported**.
+With `KUREK_REMOTE_BIND=tailscale`, the log shows two listeners: `127.0.0.1:8790` and your Tailscale IPv4 (`100.x.y.z:8790`). If Tailscale isn't up yet at boot, the daemon stays on loopback and retries.
 
-### macOS Native Menu Bar App
+**System dependencies (Linux):**
+- PipeWire with `mpv`;
+- `notify-send`;
+- `grim`;
+- `wl-clipboard`;
+- `hyprctl` (Hyprland);
+- a C compiler for `kurek-trigger`;
+- Tailscale for the phone remote.
 
-```bash
-# Start background daemon
-./launch_kurek.sh
+### Hyprland bindings
 
-# Compile and launch native Swift menu bar indicator
-swiftc -O -o menubar/KurekBar menubar/KurekBar.swift
-./menubar/KurekBar &
-```
-
-Set `KUREK_PROJECT_DIR` (or rely on `~/.config/kurek/install_path`) so the menu bar app can locate the daemon if needed.
-
----
-
-## 🔑 Requirements & Keys (`.env`)
-
-Kureksistant relies on direct high-speed cloud APIs for reasoning and realistic voice synthesis:
-
-| Environment Variable | Required | Description |
-|----------------------|----------|-------------|
-| `DEEPSEEK_API_KEY`   | **Yes**  | Direct platform API key from `api.deepseek.com` for `deepseek-flash` reasoning. |
-| `XAI_API_KEY`        | **Yes**  | xAI Grok Cloud API key from `api.x.ai` for natural speech generation (**Sol** voice). |
-| `GEMINI_API_KEY`     | Optional | Google Gemini Flash key for autonomous Wayland monitor vision (`screen_vision`). |
-| `DEEPGRAM_API_KEY`   | Optional | Deepgram Nova-2 voice transcription. If omitted, falls back to local `faster-whisper`. |
-| `TYPESAFE_API_KEY`   | Optional | TypeSafe Jev System One engine for cognitive snap-judgment triage and auto screen-context fallback. |
-| `OPENROUTER_API_KEY` | Optional | OpenRouter key for optional Decision-1 auto screen-context detection (prompt text is sent to OpenRouter when set). Falls back to TypeSafe when unset or on failure. |
-| `KUREK_AUTO_SCREEN`  | Optional | Set to `0` to disable automatic screen-context detection (no Decision-1 / TypeSafe needs_screen call). Default: enabled. |
-| `KUREK_DECISION_TIMEOUT` | Optional | Seconds for the Decision-1 HTTP call (default `1.5`). |
-| `KUREK_USER_NAME`    | Optional | Display name used in the system prompt (default: neutral `"the user"`). |
-| `HERMES_PROFILE`     | Optional | Hermes profile name → `~/.hermes/profiles/<name>/memories`. |
-| `HERMES_MEMORIES_DIR`| Optional | Absolute/tilde override for Hermes memories (wins over profile). |
-| `INPUT_DEVICE`       | Optional | Microphone name substring; empty uses the system default. |
-| `KUREK_PROJECT_DIR`  | Optional | Install path for menu-bar daemon auto-spawn (also `~/.config/kurek/install_path`). |
-| `KUREK_TIMING`       | Optional | Set to `1` to print per-query ms deltas (trigger receipt, first DeepSeek token/sentence, first `speak_chunk`, mpv `loadfile`). |
-
-**System dependencies:**
-- **Linux:** PipeWire with `mpv` (audio playback), `notify-send` (desktop notifications), `grim` (Wayland screen capture), `wl-clipboard` (`wl-copy` / `wl-paste`).
-- **macOS:** macOS 14+ with Xcode command line tools (`swiftc`, `afplay`).
-
----
-
-## ⚠️ Known Limits
-
-- **Arch Linux & Hyprland first:** The mouse shortcut bindings (`mouse:274`) and `grim` screen vision are optimized for Arch Linux under Wayland/Hyprland. Other Wayland environments (Sway, River) require corresponding hotkey binds.
-- **Not fully offline:** While audio transcription can fall back to local `faster-whisper`, LLM reasoning (DeepSeek-Flash) and conversational voice output (xAI Grok Sol) require valid cloud API keys and active internet.
-- **macOS maturity:** The macOS background daemon and Swift menu bar app (`KurekBar.swift`) are functional, but Wayland-specific tools (`grim` screen capture, `wl-clipboard`) are replaced by standard macOS utilities (`pbcopy`, `screencapture`).
-- **Security & Permissions:** Tools execute with local workstation permissions. File creation is unrestricted; file deletion requires mandatory spoken confirmation (*"Yes or No?"*).
-
----
-
-## ⌨️ Desktop Bindings & CLI
-
-### Hyprland Bindings (`~/.config/hypr/bindings.lua`)
 ```lua
--- Middle click mouse scroll-wheel: UDS trigger (~0.8ms median, bench_trigger.py)
+-- ~/.config/hypr/bindings.lua
 o.bind("mouse:274", "Summon Kurek Middle Click", "~/.local/bin/kurek-trigger toggle", { mouse = true })
 o.bind("SUPER + mouse:274", "Summon Kurek Super+Middle Click", "~/.local/bin/kurek-trigger toggle", { mouse = true })
 ```
 
-### CLI Commands (`kurek` / `kurek-trigger`)
-```bash
-kurek toggle           # Toggle microphone listening (~0.8ms median via C trigger)
-kurek status           # Check current daemon state & RAM
-kurek prompt "..."     # Send text query directly without mic
-kurek start            # Launch daemon via systemd user unit
-kurek stop             # Stop assistant daemon
-kurek-trigger toggle   # Direct C trigger dispatch (~0.8ms median, mock daemon)
-```
-
----
-
-## ⚡ Key Capabilities
-
-- **⚡ Streaming Voice Pipeline:** Sentence-buffered streaming splits response boundaries (with abbreviation/decimal guards). The first complete sentence dispatches to xAI Grok TTS (**Sol** voice) while later tokens still arrive. Enable `KUREK_TIMING=1` for measured TTFB / first-speak / mpv loadfile deltas.
-- **🎧 Persistent PipeWire mpv Audio Sink & Instant Barge-in:** Maintains an idle PipeWire `mpv` background process via `$XDG_RUNTIME_DIR/kurek_mpv.sock`. Plays audio chunks straight from `/dev/shm` (POSIX shared RAM tmpfs) with zero NVMe disk writes. Clicking middle-mouse while Kurek is speaking instantly cuts off playback via IPC.
-- **🪟 Event-Driven Hyprland Cortex (`.socket2.sock`):** Connects to Hyprland's broadcast event stream and caches focused window class, title, address, and workspace in RAM. `hyprctl` is used once at startup to seed state, then once per vision/screen-capture request for lazy geometry (not on every focus event).
-- **👁️ Zero-Disk Window-Targeted Screen Vision:** Crops active window coordinates via `grim -g "<coords>" -t jpeg -q 80 -` piped straight to memory buffers (`io.BytesIO`) into Gemini Flash (no temporary disk writes on the Wayland path). Auto screen-context uses an optional fast decision model (OpenRouter Decision-1) with TypeSafe Jev fallback; when `OPENROUTER_API_KEY` is set, prompt text is sent to OpenRouter (disable with `KUREK_AUTO_SCREEN=0`).
-- **🔌 Unix Domain Socket IPC & C Trigger Client:** Asynchronous socket listener at `$XDG_RUNTIME_DIR/kurek.sock`. Middle-click summon dispatches JSON via a compiled C binary (`bin/kurek-trigger`) — **~0.8ms median** (`scripts/bench_trigger.py`, mock daemon). Real-time state event streaming (`IDLE`, `LISTENING`, `THINKING`, `SPEAKING`) available for Waybar/AGS widgets.
-- **📦 Native systemd User Service (`kurek.service`):** Bound to `graphical-session.target` with journald logging, auto-restart on failure, and a resource envelope sized for observed Whisper peak (`MemoryHigh=512M`, `MemoryMax=600M`). The repo unit is a template (`@KUREK_DIR@`); `install_linux.sh` renders it into `~/.config/systemd/user/kurek.service`.
-- **🧠 Muse Memory Architecture & TypeSafe Jev:** Three-tier memory plane (Daily Logs `~/memory/`, Durable Core `~/MEMORY.md`, Standing Alignment `~/ALIGNMENT_SYNTHESIS.md`). Cognitive snap-judgment triage powered by TypeSafe Jev auto-promotes durable rules and hoists negative boundaries.
-- **⏱️ Process & Build Sentinel (`process_sentinel`):** Monitors long-running compiles, training runs, or test suites (`cargo`, `npm`, `make`, `python`). When the process exits, Kurek dispatches a notification and verbally announces completion time over the speaker via Sol TTS.
-- **📋 Voice-to-Clipboard Drafter (`draft_to_clipboard`):** Dictate conventional commits (`feat:`, `fix:`), GitHub PR descriptions, issue reports, or docstrings directly into the Wayland clipboard (`wl-copy`) ready for instant pasting with `Ctrl+V`.
-- **📡 Parallel Git Workstation Radar (`workstation_radar`):** Sub-second parallel scan across repositories in `~/Projects` and `~/dev`. Instant voice triage of dirty working trees, untracked files, unpushed commits ahead of upstream, and stashes.
-- **🌙 Nightly Dream & Reflection Cycle (`dream_tool`):** Daily subconscious reflection layer that writes an atmospheric prose journal to `~/dreams/YYYY-MM-DD.md` and dynamically distills active behavioral guidance into `~/ALIGNMENT_SYNTHESIS.md`.
-- **🔬 Universal Autonomous Research & File Creation:** Deep search across multiple live sources, automated Markdown synthesis, and instant file creation on disk without asking permission. Strict safety confirmation gate required only for file deletion (*"Are you sure you want to delete [file]? Yes or No?"*).
-- **🧠 Bidirectional Hermes Memory Continuity:** Optionally synchronizes knowledge with Hermes (`HERMES_PROFILE` or `HERMES_MEMORIES_DIR` in `.env`; default probe `~/.hermes/memories`).
-- **📚 nodaysidle-knowledge Vault Integration (`vault_knowledge`):** Deep integration with the 70+ project Obsidian llm-wiki vault. Instant voice queries for project architecture, roadmap, releases, PRDs, social media / X promotion calendars, and quick inbox capturing.
-- **🛠️ 25 Native Tool Modules:** Full file management, Playwright browser control, volume/brightness adjusters, Hyprland window tiling, alarms, process watchers, clipboard managers, vault queries, and application launchers.
-
----
-
-## 🏗️ Architecture
-
-```mermaid
-flowchart TD
-    subgraph Inputs ["Summon Triggers"]
-        Mouse["🖱️ Middle Click (mouse:274)\nSuper + Middle Click\n(kurek-trigger ~0.8ms median)"]
-        Launcher["🚀 Desktop Launcher (kurek.desktop)\nkurek toggle | prompt"]
-        MacBar["🍏 macOS Menu Bar (KurekBar.swift)\nFn Global Push-to-Talk"]
-    end
-
-    subgraph Daemon ["Kurek Daemon (UDS kurek.sock + HTTP :8790)"]
-        State["State Engine (IDLE / LISTENING / THINKING / SPEAKING)"]
-        Audio["sounddevice • Adaptive RMS Gate • 1.2s Silence Auto-Submit"]
-        STT["STT Engine: Deepgram Nova-2 (Fallback: faster-whisper)"]
-        LLM["Brain: DeepSeek-Flash (stream_deepseek_sentences)"]
-        TTS["Speech: xAI Grok Cloud Sol (Sentence-Buffered Streaming)"]
-        Sink["Audio Sink: Persistent mpv PipeWire Sink (kurek_mpv.sock)\nRAM /dev/shm tmpfs • Instant Barge-in"]
-        HyprWatcher["Hyprland Watcher: .socket2.sock (RAM Context)"]
-    end
-
-    subgraph Cognition ["Cognitive Plane & Memory"]
-        Jev["⚡ TypeSafe Jev (System One Snap Judgment)\nNoul • Choice • Score • Boundary Gate"]
-        Muse["🧠 Muse Memory Architecture\n• Daily: ~/memory/YYYY-MM-DD.md\n• Core: ~/MEMORY.md\n• Alignment: ~/ALIGNMENT_SYNTHESIS.md\n• Bank: ~/memory/bank/*.md"]
-        Hermes["📡 Hermes Profile Continuity (~/.hermes)"]
-    end
-
-    subgraph Tools ["Discovered Actions (actions/)"]
-        Vision["👁️ screen_vision • grim + Hyprland Context + Gemini"]
-        Clip["📋 manage_clipboard • Persistent Pinning & Recall"]
-        Monitor["📈 system_monitor • Live Metrics & 5m Moving Averages"]
-        Web["🌐 web_search • DuckDuckGo + Live News Engine"]
-        Files["📂 file_controller • Unrestricted Create / Confirmed Delete"]
-        Desktop["🖥️ desktop_control & settings • Window Tiling & Audio"]
-        Browser["🧭 browser_control • Playwright Headless / Headed"]
-        Dev["🛠️ dev_agent • Autonomous Project & App Creator"]
-    end
-
-    Inputs -->|HTTP / Socket| State
-    State --> Audio --> STT --> LLM
-    LLM -->|Cognitive Triage & Hoisting| Jev
-    Jev --> Muse
-    Muse <--> Hermes
-    Muse -->|Prompt Injection| LLM
-    LLM -->|Tool Calling| Tools
-    Tools -->|Context & Results| LLM
-    LLM --> TTS
-    Watchers -->|Alerts| TTS
-```
-
----
-
-## 📜 The Evolution of Kurek
-
-```
-  ┌──────────────────────────────┐       ┌──────────────────────────────┐       ┌──────────────────────────────┐       ┌──────────────────────────────┐
-  │  Phase 1: The Monolith GUI   │       │  Phase 2: The Headless OS    │       │  Phase 3: Cognitive Memory   │       │   Phase 4: Remote Android    │
-  │ • Heavy PyQt6 interface      │  ───► │ • Lean Python daemon (:8790) │  ───► │ • Muse Memory 3-Tier Split   │  ───► │ • Native Glassmorphic APK    │
-  │ • Heavy RAM GUI footprint    │       │ • ~450MB peak w/ Whisper     │       │ • TypeSafe Jev System One    │       │ • Voice-First Remote Summon  │
-  │ • Slow visual cold-start     │       │ • Middle Click mouse summon  │       │ • Hourly auto-consolidation  │       │ • Real-Time SSE Token Stream │
-  │ • Flat history array         │       │ • 24 Linux tool modules      │       │ • Instant boundary hoisting  │       │ • Bearer Auth LAN/Tailscale  │
-  └──────────────────────────────┘       └──────────────────────────────┘       └──────────────────────────────┘       └──────────────────────────────┘
-```
-
-1. **The Monolith GUI Era (PyQt6 Desktop Client):** In its earliest iteration, Kurek lived as a traditional desktop window app written in PyQt6. While functional, it consumed a large resident RAM footprint, required window switching, and lost context on restart.
-2. **The Headless OS Daemon Revolution:** We dismantled the GUI window entirely and rebuilt Kurek as a dedicated Unix-style headless daemon (UDS + loopback HTTP `:8790`). With faster-whisper loaded, observed peak RSS is about ~450MB, and invocation is wired to a mouse Middle Click (`mouse:274`) via `kurek-trigger` (~0.8ms median on a mock daemon).
-3. **The Cognitive Leap (Muse Memory & TypeSafe Jev):** Integrated three-tier memory separation and TypeSafe Jev cognitive snap-judgment gating. Casual chat is discarded while durable personal preferences and negative boundaries are automatically hoisted into permanent storage.
-4. **The Mobile Pocket Jarvis (Android APK):** Built a native Android app (`android/`) with voice-to-text dictation, live Server-Sent Events (SSE) streaming, tool execution badges, and Bearer authentication over Tailscale. Opt-in remote bind; see below.
-
----
-
-## Phone remote (Android, over Tailscale)
-
-The Android app in [`android/`](android/) talks to the daemon over your Tailscale network using plain HTTP on port `8790`. Encryption is provided by Tailscale/WireGuard; the daemon does **not** terminate TLS itself.
-
-**Default:** the daemon binds HTTP to `127.0.0.1` only. Remote access is opt-in.
-
-### Enable on the PC
-
-Add these lines to `.env` (token must be ≥ 32 characters). The systemd user unit loads that file via `EnvironmentFile=-@KUREK_DIR@/.env` (optional; leading `-`), so remote settings apply when the service starts:
+### CLI
 
 ```bash
-# Generate once: openssl rand -hex 32
-KUREK_REMOTE_TOKEN=
-KUREK_REMOTE_BIND=tailscale
+kurek toggle           # start/stop listening
+kurek status           # daemon state
+kurek prompt "..."     # text prompt without the mic
+kurek start | stop     # systemd user service
+kurek-trigger toggle   # C trigger over the Unix socket
 ```
 
-Fill `KUREK_REMOTE_TOKEN` with the output of `openssl rand -hex 32`, keep `KUREK_REMOTE_BIND=tailscale`, then refresh the unit and restart:
+---
 
-```bash
-# Re-run once if your installed unit predates EnvironmentFile:
-./install_linux.sh
-systemctl --user daemon-reload && systemctl --user restart kurek
-# Confirm bind in the log: loopback plus a Tailscale CGNAT address (100.64.0.0/10)
-tail -f /tmp/kurek_daemon.log
-```
+## 📱 Android remote (Kurek Remote)
 
-If Tailscale is not up yet at boot, the daemon stays on loopback and retries binding the Tailscale IPv4 without crashing.
-
-**Security note:** If a remote token was ever committed, shared, or shipped in an old APK, rotate it (`openssl rand -hex 32`) and update the app settings. Remote prompts cannot run code/shell tools (`desktop_control`, `code_helper`, `dev_agent`) unless you explicitly set `KUREK_REMOTE_ALLOW_EXEC=1`.
-
-### Build / install the APK
-
-Android SDK required on the build machine. The repo includes the standard Gradle wrapper under `android/` (`./gradlew`):
+There is **no published APK**. Build it from [`android/`](android/) (the Android SDK is required; the Gradle wrapper is included):
 
 ```bash
 cd android
 ./gradlew :app:assembleDebug
-# APK output (debug):
-#   app/build/outputs/apk/debug/app-debug.apk
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Sideload the APK if `adb` is unavailable (allow install from unknown sources).
+In the app's settings, fill in:
+- **Host:** the PC's Tailscale IPv4 (`tailscale ip -4`) or MagicDNS name.
+- **Port:** `8790`.
+- **Token:** the same `KUREK_REMOTE_TOKEN`.
 
-### Configure the app
+The status should show **ONLINE**.
 
-1. Open **Kurek Remote** → Settings (gear).
-2. **Host:** your PC’s Tailscale IPv4 or MagicDNS name (`tailscale ip -4` on the PC).
-3. **Port:** `8790`
-4. **Token:** the same `KUREK_REMOTE_TOKEN` value from `.env`.
-5. Save — status should show **ONLINE** (GET `/status` may omit the token for older builds; current app sends Bearer on `/status` too). Prompts use `POST /remote/prompt` with `Authorization: Bearer <token>` and SSE events (`sentence` / `tool` / `done`).
+**Check it from another Tailscale device:**
+- A prompt with the correct token returns `200` with `text/event-stream`.
+- A wrong or missing token returns **`401`**.
 
-Owner-tested on mobile data over Tailscale; no latency claims.
+Traffic is plain HTTP inside Tailscale/WireGuard. The daemon doesn't terminate TLS itself.
+
+---
+
+## 🔒 Security model (summary)
+
+Full details and how to report issues: **[SECURITY.md](SECURITY.md)**.
+
+- **Bind:** HTTP binds to `127.0.0.1:8790` by default. Remote access is opt-in with `KUREK_REMOTE_BIND=tailscale`, which adds only the Tailscale IPv4.
+- **Token:** if the remote token is missing or shorter than 32 characters, the daemon **refuses** to bind remotely. Non-loopback requests need `Authorization: Bearer <token>`, compared in constant time (`hmac.compare_digest`).
+- **Browser requests:** cross-origin/CSRF requests carrying an `Origin` header are rejected, and there is no `CORS *`.
+- **Body limit:** request bodies are capped at 64 KB.
+- **Exec tools:** remote prompts can't use exec-capable tools (`desktop_control`, `code_helper`, `dev_agent`) unless `KUREK_REMOTE_ALLOW_EXEC=1`.
+- **Phone confirmations:** a remote client with the token can confirm pending confirmations, as described above. Treat the token like a password, and rotate it (`openssl rand -hex 32`) if it was ever shared or shipped in a build.
+- **Local access:** the loopback API is unauthenticated by design. Any local process can call it.
+- **Secrets:** `.env` and `config/api_keys.json` must never be committed or packaged.
+
+---
+
+## ⬆️ Upgrading from v0.2.0
+
+1. **Back up your memory first:**
+   ```bash
+   cp memory/long_term.json memory/long_term.json.bak-$(date +%F)
+   ```
+2. Update the code (`git pull`) and re-run `./install_linux.sh`. This re-renders the unit with `EnvironmentFile` and keeps your `.env`.
+3. Restart at a quiet time:
+   ```bash
+   systemctl --user daemon-reload && systemctl --user restart kurek
+   ```
+4. Check the log for `Migrated legacy long_term.json into kurek_memory.db`. If you see `Migration error (will retry next start)`, your JSON file is untouched. Fix the cause and restart.
+5. If you use the phone remote, send a test prompt from the app, and check that a wrong token returns `401`.
+
+---
+
+## ⚠️ Known limits
+
+- **Not offline:** reasoning (DeepSeek) and voice (xAI) need cloud API keys and internet. Only speech-to-text can fall back to local `faster-whisper`.
+- **Desktop scope:** Hyprland/Omarchy comes first. Other Wayland compositors need their own keybinds, and the Hyprland-specific window actions won't apply there.
+- **Timed-out tools keep running:** they can't be killed. After 120 s Kurek reports the timeout, but the tool may finish in the background.
+- **Confirmation wording:** after a "yes", Kurek replies "Confirmed and executed." as soon as the action is started, before its result is known.
+- **Memory headroom:** the service can run close to `MemoryHigh=512M` with faster-whisper and Chromium loaded. If it exceeds `MemoryMax=600M`, systemd restarts it, and an in-flight request is dropped.
+- **Local tool permissions:** tools run with your user's permissions. Creating files is unrestricted, and deleting needs confirmation.
+- **Lint:** older modules still have ruff warnings.
 
 ---
 
