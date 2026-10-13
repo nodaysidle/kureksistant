@@ -295,6 +295,35 @@ def maximize_window():
         except Exception:
             pyautogui.hotkey("super", "up")
 
+
+def _hypr_snap_half(side: str) -> bool:
+    """Snap the active window to the left/right half of its monitor on Hyprland:
+    make it floating, then size and place it exactly (logical pixels, minus
+    reserved bar areas)."""
+    import json as _json
+    try:
+        res = subprocess.run(["hyprctl", "monitors", "-j"],
+                             capture_output=True, text=True, timeout=2.0)
+        mons = _json.loads(res.stdout or "[]")
+        mon = next((m for m in mons if m.get("focused")), mons[0] if mons else None)
+        if not mon:
+            return False
+        scale = float(mon.get("scale") or 1.0) or 1.0
+        rl, rt, rr, rb = (list(mon.get("reserved") or []) + [0, 0, 0, 0])[:4]
+        width = int(int(mon["width"]) / scale) - rl - rr
+        height = int(int(mon["height"]) / scale) - rt - rb
+        half = width // 2
+        x = int(mon.get("x", 0)) + rl + (half if side == "right" else 0)
+        y = int(mon.get("y", 0)) + rt
+        batch = (f"dispatch setfloating active ; "
+                 f"dispatch resizeactive exact {half} {height} ; "
+                 f"dispatch moveactive exact {x} {y}")
+        subprocess.run(["hyprctl", "--batch", batch], capture_output=True, timeout=2.0)
+        return True
+    except Exception as e:
+        print(f"[computer_settings] Hyprland snap failed: {e}")
+        return False
+
 def snap_left():
     if _OS == "Windows":
         pyautogui.hotkey("win", "left")
@@ -306,7 +335,7 @@ def snap_left():
             pass
         pyautogui.hotkey("ctrl", "option", "left")
     elif _OS == "Linux" and _is_hyprland():
-        subprocess.run(["hyprctl", "dispatch", "movewindow", "l"], capture_output=True)
+        _hypr_snap_half("left")
     else:  # Linux
         try:
             subprocess.run(["wmctrl", "-r", ":ACTIVE:", "-e", "0,0,0,960,1080"],
@@ -324,7 +353,7 @@ def snap_right():
             pass
         pyautogui.hotkey("ctrl", "option", "right")
     elif _OS == "Linux" and _is_hyprland():
-        subprocess.run(["hyprctl", "dispatch", "movewindow", "r"], capture_output=True)
+        _hypr_snap_half("right")
     else:  # Linux
         try:
             subprocess.run(["wmctrl", "-r", ":ACTIVE:", "-e", "0,960,0,960,1080"],

@@ -51,11 +51,12 @@ def test_computer_settings_hyprland_dispatch(monkeypatch):
     computer_settings.full_screen()
     assert ["hyprctl", "dispatch", "fullscreen", "0"] in calls
 
+    # Snapping queries the monitor geometry (see test_gate_fixes_v021 for the
+    # exact half-screen batch); it must never fall back to movewindow l/r.
     computer_settings.snap_left()
-    assert ["hyprctl", "dispatch", "movewindow", "l"] in calls
-
     computer_settings.snap_right()
-    assert ["hyprctl", "dispatch", "movewindow", "r"] in calls
+    assert ["hyprctl", "monitors", "-j"] in calls
+    assert not any("movewindow" in c for c in calls)
 
     computer_settings.sleep_display()
     assert ["hyprctl", "dispatch", "dpms", "off"] in calls

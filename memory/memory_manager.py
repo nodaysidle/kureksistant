@@ -704,6 +704,9 @@ def pop_last_session() -> dict | None:
                 entry["language"] = row["language"]
             cur.execute("DELETE FROM sessions WHERE id=?", (sess_id,))
             conn.commit()
-            return entry
         finally:
             conn.close()
+    # Keep the legacy long_term.json mirror in step, so nothing reading it can
+    # replay a session that was already consumed. (No-op until migrated.)
+    _sync_to_legacy_json(load_memory())
+    return entry

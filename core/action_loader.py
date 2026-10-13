@@ -74,6 +74,17 @@ class ActionRegistry:
         rec = self._actions.get(name)
         if rec is None or not rec.valid:
             return f"Action '{name}' is not available."
+        running = getattr(self, "_timed_out_running", None)
+        if running is None:
+            running = self._timed_out_running = {}
+        prev = running.get(name)
+        if prev is not None and not prev.done():
+            # Never start a second copy while an earlier timed-out call may
+            # still be producing side effects.
+            return (f"TIMED OUT (not retried): tool '{name}' is still running from an "
+                    "earlier call that timed out. It was NOT run again. Do not report "
+                    "success; tell the user it may still be in progress.")
+        running.pop(name, None)
         import concurrent.futures
         # NOTE: Python cannot kill a running thread. On timeout we return to the
         # caller immediately and shut the executor down with wait=False, so the
@@ -87,15 +98,23 @@ class ActionRegistry:
             res = future.result(timeout=timeout)
             return res or "Done."
         except concurrent.futures.TimeoutError:
-            future.cancel()
+            if not future.cancel():
+                running[name] = future
             self._logger(f"Action '{name}' timed out after {timeout}s.")
-            return f"Tool '{name}' timed out after {timeout}s."
+            return timeout_result(name, timeout)
         except Exception as e:
             self._logger(f"Action '{name}' crashed during run(): {e}")
             traceback.print_exc()
             return f"Tool '{name}' failed: {e}"
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
+
+
+def timeout_result(name: str, timeout: float) -> str:
+    """Result text for a timed-out tool: never success, never retried."""
+    return (f"TIMED OUT: tool '{name}' did not finish within {timeout:g}s. It may "
+            "still be running in the background and was NOT retried. Do not report "
+            "success and do not call it again; tell the user the outcome is unknown.")
 
 
 def _call_handler(fn: Callable, parameters: dict, ctx: dict) -> str:

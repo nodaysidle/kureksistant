@@ -30,7 +30,7 @@ def test_action_timeout_returns_promptly_without_waiting_for_stuck_thread():
     out = reg.run("stuck", {}, timeout=0.3)
     elapsed = time.monotonic() - t0
     release.set()
-    assert "timed out" in out
+    assert out.startswith("TIMED OUT") and "NOT retried" in out
     assert elapsed < 2.0
 
 
@@ -120,3 +120,75 @@ def test_computer_control_source_has_no_invalid_hypr_syntax():
     src = inspect.getsource(computer_control._focus_window)
     assert "hl.dsp" not in src and '"eval"' not in src
     assert '"focuswindow"' in src
+
+
+def test_timed_out_tool_is_not_success_and_not_retried():
+    release = threading.Event()
+    calls = []
+
+    def stuck(parameters=None, **_):
+        calls.append(1)
+        release.wait(10)
+        return "Done."
+
+    reg = action_loader.ActionRegistry.__new__(action_loader.ActionRegistry)
+    reg._actions = {"stuck": _Rec(stuck)}
+    reg._logger = lambda *_: None
+    first = reg.run("stuck", {}, timeout=0.2)
+    assert first.startswith("TIMED OUT")
+    assert "NOT retried" in first and "Done" not in first
+    second = reg.run("stuck", {}, timeout=0.2)
+    assert second.startswith("TIMED OUT") and "NOT run again" in second
+    assert len(calls) == 1
+    release.set()
+    for _ in range(50):
+        if not reg._timed_out_running["stuck"].done():
+            time.sleep(0.02)
+    assert reg.run("stuck", {}, timeout=2) == "Done."
+    assert len(calls) == 2
+
+
+def test_pop_last_session_updates_legacy_json(tmp_path, monkeypatch):
+    import json
+
+    from memory import memory_manager as mm
+    test_json = tmp_path / "long_term.json"
+    test_json.write_text(json.dumps({"sessions": [
+        {"date": "2026-10-01", "summary": "one"},
+        {"date": "2026-10-02", "summary": "two"}]}), encoding="utf-8")
+    monkeypatch.setattr(mm, "DB_PATH", tmp_path / "m.db")
+    monkeypatch.setattr(mm, "MEMORY_PATH", test_json)
+    popped = mm.pop_last_session()
+    assert popped["summary"] == "two"
+    legacy = json.loads(test_json.read_text(encoding="utf-8"))
+    assert [s["summary"] for s in legacy.get("sessions", [])] == ["one"]
+
+
+@pytest.mark.parametrize("side,x", [("left", 0), ("right", 1270)])
+def test_hyprland_snap_is_real_half_screen(monkeypatch, side, x):
+    import json
+    calls = []
+
+    def fake_run(cmd, *a, **k):
+        calls.append(list(cmd))
+
+        class R:
+            returncode = 0
+            stderr = ""
+            stdout = json.dumps([{"focused": True, "x": 0, "y": 0,
+                                  "width": 2560, "height": 1440, "scale": 1.0,
+                                  "reserved": [0, 30, 20, 0]}]) \
+                if cmd[:2] == ["hyprctl", "monitors"] else ""
+        return R()
+
+    monkeypatch.setattr(computer_settings, "_OS", "Linux")
+    monkeypatch.setattr(computer_settings, "_is_hyprland", lambda: True)
+    monkeypatch.setattr(computer_settings.subprocess, "run", fake_run)
+    (computer_settings.snap_left if side == "left" else computer_settings.snap_right)()
+    batch = [c for c in calls if c[:2] == ["hyprctl", "--batch"]]
+    assert batch, calls
+    b = batch[0][2]
+    assert "movewindow" not in b
+    assert "dispatch setfloating active" in b
+    assert "dispatch resizeactive exact 1270 1410" in b
+    assert f"dispatch moveactive exact {x} 30" in b
