@@ -266,11 +266,34 @@ def close_window():
     else:
         pyautogui.hotkey("ctrl", "w")
 
+
+def _hypr_toggle_fullscreen() -> None:
+    """Toggle true fullscreen on the active Hyprland window.
+
+    Reads the current state from `hyprctl activewindow -j` ("fullscreen" is an
+    int mode on Hyprland >= 0.42 where 2 = fullscreen, or a bool on older
+    versions) and sets the opposite state explicitly with `fullscreenstate`,
+    so "full screen" turns it on and asking again turns it off."""
+    import json as _json
+    try:
+        res = subprocess.run(["hyprctl", "activewindow", "-j"],
+                             capture_output=True, text=True, timeout=2.0)
+        win = _json.loads(res.stdout or "{}")
+        state = win.get("fullscreen", 0)
+        is_full = state is True or (isinstance(state, int)
+                                    and not isinstance(state, bool) and state >= 2)
+        target = "0" if is_full else "2"
+        subprocess.run(["hyprctl", "dispatch", "fullscreenstate", target, "-1"],
+                       capture_output=True, timeout=2.0)
+    except Exception as e:
+        print(f"[computer_settings] Hyprland fullscreen toggle failed: {e}")
+        pyautogui.press("f11")
+
 def full_screen():
     if _OS == "Darwin":
         pyautogui.hotkey("ctrl", "command", "f")
     elif _OS == "Linux" and _is_hyprland():
-        subprocess.run(["hyprctl", "dispatch", "fullscreen", "0"], capture_output=True)
+        _hypr_toggle_fullscreen()
     else:
         pyautogui.press("f11")
 

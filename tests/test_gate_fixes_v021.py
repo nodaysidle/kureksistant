@@ -192,3 +192,32 @@ def test_hyprland_snap_is_real_half_screen(monkeypatch, side, x):
     assert "dispatch setfloating active" in b
     assert "dispatch resizeactive exact 1270 1410" in b
     assert f"dispatch moveactive exact {x} 30" in b
+
+
+@pytest.mark.parametrize("state,target", [
+    (0, "2"),                    # windowed -> fullscreen
+    (1, "2"),                    # maximized -> fullscreen
+    (2, "0"),                    # fullscreen -> off
+    (True, "0"),                 # older Hyprland bool form
+    (False, "2"),
+])
+def test_hyprland_fullscreen_toggles(monkeypatch, state, target):
+    import json
+    calls = []
+
+    def fake_run(cmd, *a, **k):
+        calls.append(list(cmd))
+
+        class R:
+            returncode = 0
+            stderr = ""
+            stdout = json.dumps({"fullscreen": state}) \
+                if cmd[:2] == ["hyprctl", "activewindow"] else ""
+        return R()
+
+    monkeypatch.setattr(computer_settings, "_OS", "Linux")
+    monkeypatch.setattr(computer_settings, "_is_hyprland", lambda: True)
+    monkeypatch.setattr(computer_settings.subprocess, "run", fake_run)
+    computer_settings.full_screen()
+    assert ["hyprctl", "dispatch", "fullscreenstate", target, "-1"] in calls
+    assert ["hyprctl", "dispatch", "fullscreen", "0"] not in calls
