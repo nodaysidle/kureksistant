@@ -38,20 +38,12 @@ def _title_hash(title: str) -> str:
 # ── Memory I/O ─────────────────────────────────────────────────────────────────
 
 def _load() -> dict:
-    from memory.memory_manager import load_memory
-    data = load_memory().get("monitors", {})
-    return data if isinstance(data, dict) else {}
+    from memory.memory_manager import load_monitors
+    return load_monitors()
 
 def _save(monitors: dict) -> None:
-    from memory.memory_manager import load_memory, MEMORY_PATH, _lock
-    memory = load_memory()
-    memory["monitors"] = monitors
-    with _lock:
-        MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-        MEMORY_PATH.write_text(
-            json.dumps(memory, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+    from memory.memory_manager import save_monitors
+    save_monitors(monitors)
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────

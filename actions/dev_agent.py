@@ -1,9 +1,23 @@
+import json
+import os
+import re
+import shlex
+import shutil
 import subprocess
 import sys
-import json
-import re
 import time
 from pathlib import Path
+
+
+def _wrap_systemd_scope(cmd: list[str]) -> list[str]:
+    """Under systemd on Linux, wrap heavy build/run jobs so child memory isn't billed to kurek.service."""
+    if (
+        "INVOCATION_ID" in os.environ
+        and sys.platform.startswith("linux")
+        and shutil.which("systemd-run")
+    ):
+        return ["systemd-run", "--user", "--scope", "--quiet", "--"] + cmd
+    return cmd
 
 
 def get_base_dir():
@@ -12,16 +26,15 @@ def get_base_dir():
     return Path(__file__).resolve().parent.parent
 
 
+from memory.config_manager import get_gemini_key
 BASE_DIR         = get_base_dir()
-API_CONFIG_PATH  = BASE_DIR / "config" / "api_keys.json"
 PROJECTS_DIR     = Path.home() / "Desktop" / "JarvisProjects"
 MAX_FIX_ATTEMPTS = 5
 MODEL_PLANNER    = "gemini-flash-latest"
 MODEL_WRITER     = "gemini-flash-latest"
 
 def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+    return get_gemini_key()
 
 
 def _get_model(model_name: str):
@@ -255,8 +268,9 @@ def _install_dependencies(dependencies: list[str], project_dir: Path) -> str:
 
     print(f"[DevAgent] 📦 Installing: {to_install}")
     try:
+        cmd = _wrap_systemd_scope([sys.executable, "-m", "pip", "install"] + to_install)
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install"] + to_install,
+            cmd,
             capture_output=True, text=True,
             encoding="utf-8", errors="replace",
             timeout=120, cwd=str(project_dir)
@@ -276,26 +290,32 @@ def _open_vscode(project_dir: Path) -> bool:
         r"C:\Program Files\Microsoft VS Code\bin\code.cmd",
     ]
     for cmd in vscode_candidates:
-        try:
-            subprocess.Popen(
-                [cmd, str(project_dir)],
-                shell=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-            time.sleep(1.5)
-            print(f"[DevAgent] 💻 VSCode opened: {project_dir}")
-            return True
-        except Exception:
-            continue
+        if shutil.which(cmd) or Path(cmd).exists():
+            try:
+                subprocess.Popen(
+                    [cmd, str(project_dir)],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                time.sleep(1.5)
+                print(f"[DevAgent] 💻 VSCode opened: {project_dir}")
+                return True
+            except Exception:
+                continue
     return False
 
 def _run_project(run_command: str, project_dir: Path, timeout: int = 30) -> str:
     print(f"[DevAgent] 🚀 Running: {run_command}")
     try:
-        parts = run_command.split()
+        parts = shlex.split(run_command) if isinstance(run_command, str) else list(run_command)
+        if not parts:
+            return "Empty run command."
         if parts[0].lower() == "python":
             parts[0] = sys.executable
+
+        parts = _wrap_systemd_scope(parts)
 
         result = subprocess.run(
             parts,
@@ -335,8 +355,9 @@ def _try_auto_install(error_output: str, project_dir: Path) -> bool:
     pkg = match.group(1).replace("_", "-").split(".")[0]
     print(f"[DevAgent] 🔧 Auto-installing missing package: {pkg}")
     try:
+        cmd = _wrap_systemd_scope([sys.executable, "-m", "pip", "install", pkg])
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", pkg],
+            cmd,
             capture_output=True, text=True,
             encoding="utf-8", errors="replace",
             timeout=60, cwd=str(project_dir)

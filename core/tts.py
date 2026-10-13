@@ -488,6 +488,9 @@ class TTSPlayer:
                     self._engine.speak(text)
         except Exception as e:
             print(f"[TTS Chunk] Error: {e}")
+        finally:
+            with self._lock:
+                self._playing = False
 
     def stop(self) -> None:
         sd.stop()

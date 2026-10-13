@@ -70,16 +70,23 @@ class ActionRegistry:
         return set(self._actions.keys())
 
     # -- called by main.py from _execute_tool --
-    def run(self, name: str, parameters: dict, ctx: dict | None = None) -> str:
+    def run(self, name: str, parameters: dict, ctx: dict | None = None, timeout: float = 120.0) -> str:
         rec = self._actions.get(name)
         if rec is None or not rec.valid:
             return f"Action '{name}' is not available."
-        try:
-            return _call_handler(rec.handler, parameters, ctx or {}) or "Done."
-        except Exception as e:
-            self._logger(f"Action '{name}' crashed during run(): {e}")
-            traceback.print_exc()
-            return f"Tool '{name}' failed: {e}"
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_call_handler, rec.handler, parameters, ctx or {})
+            try:
+                res = future.result(timeout=timeout)
+                return res or "Done."
+            except concurrent.futures.TimeoutError:
+                self._logger(f"Action '{name}' timed out after {timeout}s.")
+                return f"Tool '{name}' timed out after {timeout}s."
+            except Exception as e:
+                self._logger(f"Action '{name}' crashed during run(): {e}")
+                traceback.print_exc()
+                return f"Tool '{name}' failed: {e}"
 
 
 def _call_handler(fn: Callable, parameters: dict, ctx: dict) -> str:

@@ -59,6 +59,7 @@ from core.action_loader import discover_actions
 from core.hyprland_watcher import get_hyprland_watcher
 from core.mpv_sink import get_mpv_sink
 from core.timing import begin_query, end_query
+from core import confirm
 from memory.memory_manager import load_memory, format_memory_for_prompt
 
 # Audio recording configuration
@@ -382,6 +383,26 @@ class KurekEngine:
         threading.Thread(target=self._hourly_consolidation_loop, daemon=True).start()
         print("[Kurek Memory] Hourly Muse consolidation worker initialized.")
 
+        # Wire headless notification callback to confirm system
+        def _confirm_show(title: str, detail: str) -> None:
+            icon = os.path.expanduser("~/.local/share/icons/kurek.png")
+            if not os.path.exists(icon):
+                icon = os.path.join(os.path.dirname(os.path.abspath(__file__)), "desktop", "kurek.png")
+            try:
+                subprocess.Popen([
+                    "notify-send", "-u", "critical",
+                    "-h", "string:x-canonical-private-synchronous:kurek-confirm",
+                    "-i", icon, f"Kurek Confirmation: {title}", detail
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+
+        def _confirm_hide() -> None:
+            pass
+
+        confirm.bind(_confirm_show, _confirm_hide)
+        print("[Kurek Confirm] Headless confirmation notifications bound.")
+
     def _load_history(self) -> list[dict]:
         try:
             if self.history_file.exists():
@@ -608,7 +629,8 @@ class KurekEngine:
         finally:
             # Always return to a resting state — never leave the daemon stuck in THINKING.
             try:
-                while getattr(self.tts, "is_playing", False):
+                deadline = time.time() + 30.0
+                while getattr(self.tts, "is_playing", False) and time.time() < deadline:
                     if self._cancel_requested:
                         break
                     time.sleep(0.05)
@@ -638,6 +660,38 @@ class KurekEngine:
         mute_speaker: bool = False,
         remote: bool = False,
     ):
+        # Check if a confirmation is pending
+        clean_lower = re.sub(r"[^a-zA-Z0-9\s]", "", user_prompt).strip().lower()
+        if confirm.is_pending():
+            affirmative = {"yes", "confirm", "do it", "sure", "ja", "yep", "yeah", "ok", "proceed"}
+            negative = {"no", "cancel", "stop", "abort", "nein", "dont", "don't"}
+            if clean_lower in affirmative or any(clean_lower.startswith(w) for w in affirmative):
+                confirm.resolve(True)
+                reply = "Confirmed and executed."
+                if callback:
+                    try:
+                        callback({"type": "sentence", "sentence": reply})
+                        callback({"type": "done", "reply": reply})
+                    except Exception:
+                        pass
+                if not mute_speaker and not self._cancel_requested:
+                    self.set_state(KurekState.SPEAKING)
+                    self.tts.speak(reply)
+                return reply
+            elif clean_lower in negative or any(clean_lower.startswith(w) for w in negative):
+                confirm.resolve(False)
+                reply = "Action cancelled."
+                if callback:
+                    try:
+                        callback({"type": "sentence", "sentence": reply})
+                        callback({"type": "done", "reply": reply})
+                    except Exception:
+                        pass
+                if not mute_speaker and not self._cancel_requested:
+                    self.set_state(KurekState.SPEAKING)
+                    self.tts.speak(reply)
+                return reply
+
         now_str = datetime.now().strftime("%Y-%m-%d %A, %I:%M %p")
 
         # Load long-term user memories & context
@@ -1296,7 +1350,11 @@ class KurekHTTPHandler(BaseHTTPRequestHandler):
             if data is None:
                 return
             prompt_text = data.get("prompt", "")
-            mute_speaker = bool(data.get("remote", True))
+            speak_local = (
+                data.get("speak_local") is True
+                or os.environ.get("KUREK_REMOTE_LOCAL_TTS") == "1"
+            )
+            mute_speaker = not speak_local
             if not prompt_text:
                 self._send_json(400, {"error": "prompt is required"})
                 return

@@ -1,8 +1,8 @@
-#computer_control.py
 import io
 import json
 import platform
 import re
+import shutil
 import string
 import subprocess
 import sys
@@ -51,11 +51,16 @@ def _platform_os() -> str:
     )
 
 def _get_os() -> str:
-    return _load_config().get("os_system", _platform_os()).lower()
+    real = _platform_os()
+    cfg = _load_config().get("os_system", "").lower()
+    if cfg in ("windows", "mac", "linux") and cfg == real:
+        return cfg
+    return real
 
 
 def _get_api_key() -> str:
-    return _load_config().get("gemini_api_key", "")
+    from memory.config_manager import get_gemini_key
+    return get_gemini_key()
 
 _SAFE_SCREENSHOT_ROOTS = (
     Path.home(),
@@ -240,8 +245,20 @@ def _clipboard_paste(text: str) -> str:
 
 
 def _screenshot(save_path: str | None = None) -> str:
-    _require_pyautogui()
     path = _safe_screenshot_path(save_path)
+    if shutil.which("grim"):
+        try:
+            subprocess.run(["grim", str(path)], check=True, capture_output=True, timeout=5.0)
+            return f"Screenshot saved: {path}"
+        except Exception as e:
+            print(f"[ComputerControl] grim screenshot failed: {e}")
+    if shutil.which("screencapture"):
+        try:
+            subprocess.run(["screencapture", "-x", str(path)], check=True, capture_output=True, timeout=5.0)
+            return f"Screenshot saved: {path}"
+        except Exception as e:
+            print(f"[ComputerControl] screencapture failed: {e}")
+    _require_pyautogui()
     img  = pyautogui.screenshot()
     img.save(str(path))
     return f"Screenshot saved: {path}"
@@ -286,6 +303,33 @@ def _focus_window(title: str) -> str:
             return f"focus_window (macOS) failed: {e}"
 
     if os_name == "linux":
+        if shutil.which("hyprctl"):
+            try:
+                res = subprocess.run(["hyprctl", "clients", "-j"], capture_output=True, text=True, timeout=2.0)
+                if res.returncode == 0 and res.stdout.strip():
+                    clients = json.loads(res.stdout)
+                    clean_target = re.sub(r"[^a-zA-Z0-9]", "", title).lower()
+                    target_lower = title.lower()
+                    match = None
+                    for c in clients:
+                        props = [c.get("class", ""), c.get("title", ""), c.get("initialClass", ""), c.get("initialTitle", "")]
+                        if any(target_lower in p.lower() for p in props if p):
+                            match = c
+                            break
+                        if any(clean_target in re.sub(r"[^a-zA-Z0-9]", "", p).lower() for p in props if p):
+                            match = c
+                            break
+                    if match:
+                        ws_id = match.get("workspace", {}).get("id")
+                        if ws_id is not None:
+                            subprocess.run(["hyprctl", "dispatch", f'hl.dsp.focus({{ workspace = "{ws_id}" }})'], capture_output=True, timeout=2.0)
+                        addr = match.get("address")
+                        if addr:
+                            subprocess.run(["hyprctl", "eval", f'hl.dispatch(hl.dsp.focus({{ window = "address:{addr}" }}))'], capture_output=True, text=True, timeout=2.0)
+                        time.sleep(0.3)
+                        return f"Focused window: {match.get('title') or title} (workspace {ws_id})"
+            except Exception as e:
+                print(f"[ComputerControl] Hyprland focus error: {e}")
         try:
             result = subprocess.run(
                 ["wmctrl", "-a", title],

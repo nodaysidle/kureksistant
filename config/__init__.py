@@ -19,7 +19,11 @@ def get_config() -> dict:
 
 def get_os() -> str:
     """Returns: 'windows' | 'mac' | 'linux'"""
-    return get_config().get("os_system", _platform_os()).lower()
+    real = _platform_os()
+    cfg = get_config().get("os_system", "").lower()
+    if cfg in ("windows", "mac", "linux") and cfg == real:
+        return cfg
+    return real
 
 def is_windows() -> bool: return get_os() == "windows"
 def is_mac()     -> bool: return get_os() == "mac"

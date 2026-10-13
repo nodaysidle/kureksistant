@@ -1,11 +1,16 @@
 #computer_settings.py
 import json
+import os
 import re
+import shutil
 import sys
 import time
 import subprocess
 import platform
 from pathlib import Path
+
+def _is_hyprland() -> bool:
+    return bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") or shutil.which("hyprctl"))
 
 try:
     import pyautogui
@@ -38,9 +43,8 @@ def _get_base_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 def _get_api_key() -> str:
-    path = _get_base_dir() / "config" / "api_keys.json"
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+    from memory.config_manager import get_gemini_key
+    return get_gemini_key()
 
 def _get_macos_wifi_interface() -> str:
     try:
@@ -245,16 +249,28 @@ def brightness_down():
             print(f"[Settings] Brightness down failed on Windows: {e}")
 
 def close_app():
-    if _OS == "Darwin": pyautogui.hotkey("command", "q")
-    else:               pyautogui.hotkey("alt", "f4")
+    if _OS == "Darwin":
+        pyautogui.hotkey("command", "q")
+    elif _OS == "Linux" and _is_hyprland():
+        subprocess.run(["hyprctl", "dispatch", "killactive"], capture_output=True)
+    else:
+        pyautogui.hotkey("alt", "f4")
 
 def close_window():
-    if _OS == "Darwin": pyautogui.hotkey("command", "w")
-    else:               pyautogui.hotkey("ctrl", "w")
+    if _OS == "Darwin":
+        pyautogui.hotkey("command", "w")
+    elif _OS == "Linux" and _is_hyprland():
+        subprocess.run(["hyprctl", "dispatch", "killactive"], capture_output=True)
+    else:
+        pyautogui.hotkey("ctrl", "w")
 
 def full_screen():
-    if _OS == "Darwin": pyautogui.hotkey("ctrl", "command", "f")
-    else:               pyautogui.press("f11")
+    if _OS == "Darwin":
+        pyautogui.hotkey("ctrl", "command", "f")
+    elif _OS == "Linux" and _is_hyprland():
+        subprocess.run(["hyprctl", "dispatch", "fullscreen", "0"], capture_output=True)
+    else:
+        pyautogui.press("f11")
 
 def minimize_window():
     if _OS == "Darwin": pyautogui.hotkey("command", "m")
@@ -268,6 +284,8 @@ def maximize_window():
             capture_output=True)
     elif _OS == "Windows":
         pyautogui.hotkey("win", "up")
+    elif _OS == "Linux" and _is_hyprland():
+        subprocess.run(["hyprctl", "dispatch", "fullscreen", "0"], capture_output=True)
     else:
         try:
             subprocess.run(["wmctrl", "-r", ":ACTIVE:", "-b", "add,maximized_vert,maximized_horz"],
@@ -285,6 +303,8 @@ def snap_left():
         except Exception:
             pass
         pyautogui.hotkey("ctrl", "option", "left")
+    elif _OS == "Linux" and _is_hyprland():
+        subprocess.run(["hyprctl", "dispatch", "movewindow", "l"], capture_output=True)
     else:  # Linux
         try:
             subprocess.run(["wmctrl", "-r", ":ACTIVE:", "-e", "0,0,0,960,1080"],
@@ -301,6 +321,8 @@ def snap_right():
         except Exception:
             pass
         pyautogui.hotkey("ctrl", "option", "right")
+    elif _OS == "Linux" and _is_hyprland():
+        subprocess.run(["hyprctl", "dispatch", "movewindow", "r"], capture_output=True)
     else:  # Linux
         try:
             subprocess.run(["wmctrl", "-r", ":ACTIVE:", "-e", "0,960,0,960,1080"],
@@ -309,8 +331,12 @@ def snap_right():
             pass
 
 def switch_window():
-    if _OS == "Darwin": pyautogui.hotkey("command", "tab")
-    else:               pyautogui.hotkey("alt", "tab")
+    if _OS == "Darwin":
+        pyautogui.hotkey("command", "tab")
+    elif _OS == "Linux" and _is_hyprland():
+        subprocess.run(["hyprctl", "dispatch", "cyclenext"], capture_output=True)
+    else:
+        pyautogui.hotkey("alt", "tab")
 
 def show_desktop():
     if _OS == "Darwin":   pyautogui.hotkey("fn", "f11")
@@ -323,8 +349,15 @@ def open_task_manager():
     elif _OS == "Darwin":
         subprocess.Popen(["open", "-a", "Activity Monitor"])
     else:
+        # Check ghostty/herdr terminal monitors first
+        for term in ["ghostty", "herdr", "alacritty", "kitty", "foot"]:
+            if shutil.which(term):
+                for mon in ["btop", "htop"]:
+                    if shutil.which(mon):
+                        subprocess.Popen([term, "-e", mon])
+                        return
         for cmd in [["gnome-system-monitor"], ["xfce4-taskmanager"], ["htop"]]:
-            if subprocess.run(["which", cmd[0]], capture_output=True).returncode == 0:
+            if shutil.which(cmd[0]):
                 subprocess.Popen(cmd)
                 break
 
@@ -451,8 +484,18 @@ def take_screenshot():
     elif _OS == "Darwin":
         pyautogui.hotkey("command", "shift", "3")
     else:
+        # Check Wayland grim first
+        if shutil.which("grim"):
+            pics_dir = Path.home() / "Pictures"
+            if not pics_dir.exists():
+                pics_dir = Path.home() / "Desktop"
+                pics_dir.mkdir(parents=True, exist_ok=True)
+            shot_file = pics_dir / f"screenshot_{int(time.time())}.png"
+            res = subprocess.run(["grim", str(shot_file)], capture_output=True)
+            if res.returncode == 0:
+                return
         for cmd in [["scrot"], ["gnome-screenshot"], ["import", "-window", "root", "screenshot.png"]]:
-            if subprocess.run(["which", cmd[0]], capture_output=True).returncode == 0:
+            if shutil.which(cmd[0]):
                 subprocess.Popen(cmd)
                 return
         pyautogui.hotkey("ctrl", "print_screen")
@@ -464,11 +507,13 @@ def lock_screen():
         subprocess.run(["pmset", "displaysleepnow"], capture_output=True)
     else:
         for cmd in [
+            ["hyprlock"],
+            ["swaylock"],
+            ["loginctl", "lock-session"],
             ["gnome-screensaver-command", "-l"],
             ["xdg-screensaver", "lock"],
-            ["loginctl", "lock-session"],
         ]:
-            if subprocess.run(["which", cmd[0]], capture_output=True).returncode == 0:
+            if shutil.which(cmd[0]):
                 subprocess.run(cmd, capture_output=True)
                 return
 
@@ -479,7 +524,7 @@ def open_system_settings():
         subprocess.Popen(["open", "-a", "System Preferences"])
     else:
         for cmd in [["gnome-control-center"], ["xfce4-settings-manager"], ["kcmshell5"]]:
-            if subprocess.run(["which", cmd[0]], capture_output=True).returncode == 0:
+            if shutil.which(cmd[0]):
                 subprocess.Popen(cmd)
                 return
 
@@ -490,7 +535,7 @@ def open_file_explorer():
         subprocess.Popen(["open", str(Path.home())])
     else:
         for cmd in [["nautilus"], ["thunar"], ["dolphin"], ["nemo"]]:
-            if subprocess.run(["which", cmd[0]], capture_output=True).returncode == 0:
+            if shutil.which(cmd[0]):
                 subprocess.Popen(cmd)
                 return
         subprocess.Popen(["xdg-open", str(Path.home())])
@@ -504,6 +549,8 @@ def sleep_display():
             print(f"[Settings] sleep_display failed: {e}")
     elif _OS == "Darwin":
         subprocess.run(["pmset", "displaysleepnow"], capture_output=True)
+    elif _OS == "Linux" and _is_hyprland():
+        subprocess.run(["hyprctl", "dispatch", "dpms", "off"], capture_output=True)
     else:
         subprocess.run(["xset", "dpms", "force", "off"], capture_output=True)
 

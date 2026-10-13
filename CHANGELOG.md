@@ -5,6 +5,25 @@ All notable changes to Kureksistant (Kurek) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project approximates [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] — 2026-10-13
+
+Targeted architectural and stability refactor for Arch Linux / Omarchy Quattro (Hyprland, Ghostty, Herdr, Fish) and Android Remote client over Tailscale.
+
+### Fixed
+- **Zero-config `.env` installs:** Eliminated raw `config/api_keys.json` file reads across `actions/` modules (`dev_agent`, `code_helper`, `flight_finder`, `desktop`, `file_processor`, `computer_settings`, `computer_control`, `youtube_video`). All key access routes through `memory.config_manager.get_gemini_key()`, checking environment variables first.
+- **Hyprland window controls:** Replaced X11 `pyautogui` hotkeys in `actions/computer_settings.py` with native `hyprctl dispatch` calls (`cyclenext`, `killactive`, `fullscreen 0`, `movewindow l/r`, `dpms off`), native Wayland screenshot capture via `grim`, and screen locking via `hyprlock`/`swaylock`.
+- **Systemd 600M envelope safety:** Protected `kurek.service` against OOM killer by passing low-memory Chromium flags in `browser_control.py` and delegating heavy builds in `dev_agent.py` to `systemd-run --user --scope`. Added 120s timeout guard in `ActionRegistry.run`.
+- **Private lock decoupling:** Removed private `_lock` import in `actions/background_monitor.py`, replacing with thread-safe public state persistence helpers.
+
+### Added
+- **Omarchy terminal & shell support:** Added first-class prioritization for `ghostty` and `herdr` in `_LINUX_TERMINAL_FALLBACKS` and `_APP_ALIASES`, and added `fish` shell execution support. Task manager launches `btop`/`htop` directly inside `ghostty` or `herdr`.
+- **SQLite WAL + FTS5 memory backend:** Upgraded `memory/memory_manager.py` from full-file JSON rewrites to SQLite in WAL mode with FTS5 full-text search indexing (`entries_fts`), automatic migration of legacy `long_term.json`, and 100% backward-compatible API.
+- **Remote prompt SSE optimization:** Muted local PipeWire workstation TTS during remote phone queries over Tailscale `/remote/prompt` unless `speak_local` is requested.
+- **Conversational confirmation gate:** Wired `core/confirm.py` with `notify-send` and conversational affirmative/negative turn detection in `kurek_daemon.py` to confirm or abort pending destructive operations.
+
+### Changed
+- **LLM prompt alignment:** Synchronized `core/prompt.txt` with actual runtime tool schemas (`screen_vision`, `manage_memory`, `system_monitor`, `vault_knowledge`, `workstation_radar`, `process_sentinel`), removing legacy PyQt6 HUD instructions and defunct tool names.
+
 ## [0.2.0] — 2026-10-10
 
 Hardening and measurement release on top of the v0.1.0 headless daemon:
@@ -51,5 +70,7 @@ Hyprland geometry, timing/bench tooling, and docs that claim only measured figur
 
 Initial public release: headless Linux/macOS daemon, Middle-Click summon, DeepSeek-Flash + xAI Grok (Sol) voice, Muse Memory / TypeSafe Jev, 24 tool modules, portable installer, and CC BY-NC 4.0 licensing (derived from FatihMakes' JARVIS).
 
+[0.2.1]: https://github.com/nodaysidle/kureksistant/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/nodaysidle/kureksistant/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nodaysidle/kureksistant/releases/tag/v0.1.0
+
