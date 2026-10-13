@@ -66,5 +66,16 @@ jobs:
           VERSION=0.2.0 OUT_DIR="$RUNNER_TEMP/kurek-dist" ./scripts/package_release.sh
 
       - name: Test suite (offline / no API keys)
-        # pyautogui imports mouseinfo, which requires DISPLAY (KeyError without X)
-        run: xvfb-run -a pytest -q tests/
+        # pyautogui imports mouseinfo, which requires DISPLAY (KeyError without X).
+        # Stub grok-bot.desktop so test_find_grok_desktop_file can resolve XDG apps
+        # without changing tests or requiring a real GrokBot install on the runner.
+        run: |
+          mkdir -p "$HOME/.local/share/applications"
+          printf '%s\n' \
+            '[Desktop Entry]' \
+            'Type=Application' \
+            'Name=Grok Bot' \
+            'Exec=true' \
+            'StartupWMClass=grok-bot' \
+            > "$HOME/.local/share/applications/grok-bot.desktop"
+          xvfb-run -a pytest -q tests/
