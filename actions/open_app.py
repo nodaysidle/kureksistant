@@ -1,7 +1,12 @@
+import os
+import re
+import json
+import shlex
 import time
 import subprocess
 import platform
 import shutil
+from pathlib import Path
 
 try:
     import psutil
@@ -12,6 +17,10 @@ except ImportError:
 _SYSTEM = platform.system()
 
 _APP_ALIASES: dict[str, dict[str, str]] = {
+    "grok":               {"Windows": "grok",                    "Darwin": "Grok",                 "Linux": "grok-bot"},
+    "grokbot":            {"Windows": "grok",                    "Darwin": "Grok",                 "Linux": "grok-bot"},
+    "grok bot":           {"Windows": "grok",                    "Darwin": "Grok",                 "Linux": "grok-bot"},
+    "grok-bot":           {"Windows": "grok",                    "Darwin": "Grok",                 "Linux": "grok-bot"},
 
     "chrome":             {"Windows": "chrome",                  "Darwin": "Google Chrome",        "Linux": "google-chrome"},
     "google chrome":      {"Windows": "chrome",                  "Darwin": "Google Chrome",        "Linux": "google-chrome"},
@@ -34,6 +43,9 @@ _APP_ALIASES: dict[str, dict[str, str]] = {
     "vscode":             {"Windows": "code",                    "Darwin": "Visual Studio Code",   "Linux": "code"},
     "visual studio code": {"Windows": "code",                    "Darwin": "Visual Studio Code",   "Linux": "code"},
     "code":               {"Windows": "code",                    "Darwin": "Visual Studio Code",   "Linux": "code"},
+    "ghostty":            {"Windows": "ghostty",                 "Darwin": "Ghostty",              "Linux": "ghostty"},
+    "herdr":              {"Windows": "herdr",                   "Darwin": "herdr",                "Linux": "herdr"},
+    "fish":               {"Windows": "powershell.exe",          "Darwin": "fish",                 "Linux": "ghostty -e fish"},
     "terminal":           {"Windows": "wt",                      "Darwin": "Terminal",             "Linux": "x-terminal-emulator"},
     "cmd":                {"Windows": "cmd.exe",                 "Darwin": "Terminal",             "Linux": "bash"},
     "powershell":         {"Windows": "powershell.exe",          "Darwin": "Terminal",             "Linux": "bash"},
@@ -65,14 +77,24 @@ _APP_ALIASES: dict[str, dict[str, str]] = {
 }
 
 
+def _clean_alphanumeric(s: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9]", "", s).lower()
+
+
 def _normalize(raw: str) -> str:
     key = raw.lower().strip()
 
     if key in _APP_ALIASES:
         return _APP_ALIASES[key].get(_SYSTEM, raw)
 
+    clean_key = _clean_alphanumeric(key)
     for alias_key, os_map in _APP_ALIASES.items():
-        if alias_key in key or key in alias_key:
+        if alias_key == key or _clean_alphanumeric(alias_key) == clean_key:
+            return os_map.get(_SYSTEM, raw)
+
+    for alias_key, os_map in _APP_ALIASES.items():
+        clean_alias = _clean_alphanumeric(alias_key)
+        if clean_alias in clean_key or clean_key in clean_alias:
             return os_map.get(_SYSTEM, raw)
 
     return raw
@@ -169,61 +191,221 @@ def _launch_macos(app_name: str) -> bool:
 
 
 _LINUX_TERMINAL_FALLBACKS = [
-    "x-terminal-emulator", "gnome-terminal", "konsole", "xfce4-terminal",
-    "xterm", "lxterminal", "mate-terminal", "tilix", "alacritty", "kitty",
+    "ghostty", "herdr", "alacritty", "kitty", "foot", "wezterm",
+    "x-terminal-emulator", "gnome-terminal", "konsole", "xfce4-terminal", "xterm",
 ]
 
-def _launch_linux(app_name: str) -> bool:
 
-    # terminal emulators: try common ones in order
-    if app_name in ("x-terminal-emulator", "gnome-terminal", "terminal"):
+def _focus_hyprland_app(app_query: str) -> bool:
+    """If app is already open in Hyprland, switch workspace and focus its window."""
+    if not shutil.which("hyprctl"):
+        return False
+    try:
+        res = subprocess.run(["hyprctl", "clients", "-j"], capture_output=True, text=True, timeout=2.0)
+        if res.returncode != 0 or not res.stdout.strip():
+            return False
+        clients = json.loads(res.stdout)
+        clean_q = _clean_alphanumeric(app_query)
+        q_lower = app_query.lower()
+        match = None
+        for c in clients:
+            props = [c.get("class", ""), c.get("title", ""), c.get("initialClass", ""), c.get("initialTitle", "")]
+            if any(q_lower in p.lower() for p in props if p):
+                match = c
+                break
+            if any(clean_q in _clean_alphanumeric(p) for p in props if p):
+                match = c
+                break
+        if not match:
+            return False
+
+        ws_id = match.get("workspace", {}).get("id")
+        if ws_id is not None:
+            subprocess.run(["hyprctl", "dispatch", "workspace", str(ws_id)], capture_output=True, timeout=2.0)
+        addr = match.get("address")
+        if addr:
+            subprocess.run(["hyprctl", "dispatch", "focuswindow", f"address:{addr}"], capture_output=True, timeout=2.0)
+        return True
+    except Exception as e:
+        print(f"[open_app] Hyprland focus check failed: {e}")
+        return False
+
+
+def _find_linux_desktop_file(app_name: str) -> Path | None:
+    """Find a .desktop file in standard XDG application directories matching app_name."""
+    clean_q = _clean_alphanumeric(app_name)
+    app_dirs = [
+        Path.home() / ".local/share/applications",
+        Path("/usr/local/share/applications"),
+        Path("/usr/share/applications"),
+    ]
+    xdg_data = os.environ.get("XDG_DATA_DIRS", "")
+    for d in xdg_data.split(":"):
+        if d:
+            cand = Path(d) / "applications"
+            if cand not in app_dirs:
+                app_dirs.append(cand)
+
+    for d in app_dirs:
+        if not d.exists():
+            continue
+        for f in d.glob("*.desktop"):
+            stem_clean = _clean_alphanumeric(f.stem)
+            if clean_q == stem_clean or (len(clean_q) >= 3 and clean_q in stem_clean):
+                return f
+            try:
+                for line in f.read_text(encoding="utf-8", errors="ignore").splitlines():
+                    if line.startswith("Name="):
+                        val = line.split("=", 1)[1].strip()
+                        if clean_q == _clean_alphanumeric(val) or (len(clean_q) >= 3 and clean_q in _clean_alphanumeric(val)):
+                            return f
+                    elif line.startswith("StartupWMClass="):
+                        val = line.split("=", 1)[1].strip()
+                        if clean_q == _clean_alphanumeric(val):
+                            return f
+            except Exception:
+                continue
+    return None
+
+
+def _launch_linux(app_name: str) -> bool:
+    # 1. If already running on Hyprland, switch workspace and focus
+    if _focus_hyprland_app(app_name):
+        return True
+
+    # 2. Terminal emulators and shells: try common ones in order
+    clean_name = app_name.strip().lower()
+    if clean_name in ("terminal", "x-terminal-emulator", "ghostty", "herdr", "shell", "bash", "gnome-terminal"):
         for term in _LINUX_TERMINAL_FALLBACKS:
             if shutil.which(term):
                 try:
-                    subprocess.Popen([term], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    subprocess.Popen(
+                        [term],
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
                     time.sleep(1.0)
+                    _focus_hyprland_app(term)
                     return True
                 except Exception:
                     continue
 
-    binary = (
-        shutil.which(app_name) or
-        shutil.which(app_name.lower()) or
-        shutil.which(app_name.lower().replace(" ", "-")) or
-        shutil.which(app_name.lower().replace(" ", "_"))
-    )
+    if clean_name in ("fish", "ghostty -e fish"):
+        for term in _LINUX_TERMINAL_FALLBACKS:
+            if shutil.which(term):
+                fish_bin = shutil.which("fish") or "fish"
+                try:
+                    subprocess.Popen(
+                        [term, "-e", fish_bin],
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                    time.sleep(1.0)
+                    _focus_hyprland_app(term)
+                    return True
+                except Exception:
+                    continue
+
+    # 3. Direct binary check (including camelCase / kebab-case splits)
+    candidates = [
+        app_name,
+        app_name.lower(),
+        app_name.lower().replace(" ", "-"),
+        app_name.lower().replace(" ", "_"),
+        re.sub(r"([a-z])([A-Z])", r"\1-\2", app_name).lower(),
+        re.sub(r"([a-z])([A-Z])", r"\1_\2", app_name).lower(),
+    ]
+    seen = set()
+    binary = None
+    for cand in candidates:
+        if cand in seen:
+            continue
+        seen.add(cand)
+        b = shutil.which(cand)
+        if b:
+            binary = b
+            break
+
     if binary:
         try:
             subprocess.Popen(
                 [binary],
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
             )
             time.sleep(1.0)
+            _focus_hyprland_app(app_name)
             return True
         except Exception:
             pass
 
-    try:
-        subprocess.run(
-            ["xdg-open", app_name],
-            capture_output=True, timeout=5
-        )
-        return True
-    except Exception:
-        pass
+    # 4. Search installed .desktop files
+    desktop_file = _find_linux_desktop_file(app_name)
+    if desktop_file:
+        try:
+            res = subprocess.run(
+                ["gtk-launch", desktop_file.stem],
+                capture_output=True, timeout=5,
+            )
+            if res.returncode == 0:
+                time.sleep(1.0)
+                _focus_hyprland_app(app_name)
+                return True
+        except Exception:
+            pass
 
+        try:
+            for line in desktop_file.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if line.startswith("Exec="):
+                    exec_cmd = line.split("=", 1)[1].strip()
+                    exec_cmd = re.sub(r"%[a-zA-Z]", "", exec_cmd).strip()
+                    if exec_cmd:
+                        subprocess.Popen(
+                            shlex.split(exec_cmd),
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            start_new_session=True,
+                        )
+                        time.sleep(1.0)
+                        _focus_hyprland_app(app_name)
+                        return True
+        except Exception:
+            pass
+
+    # 5. Try gtk-launch with candidate names
     for desktop_name in [
         app_name.lower(),
         app_name.lower().replace(" ", "-"),
         app_name.lower().replace(" ", ""),
+        re.sub(r"([a-z])([A-Z])", r"\1-\2", app_name).lower(),
     ]:
         try:
             result = subprocess.run(
                 ["gtk-launch", desktop_name],
-                capture_output=True, timeout=5
+                capture_output=True, timeout=5,
             )
             if result.returncode == 0:
+                time.sleep(1.0)
+                _focus_hyprland_app(app_name)
+                return True
+        except Exception:
+            pass
+
+    # 6. Only for URLs or existing files, try xdg-open with returncode verification
+    if app_name.startswith(("http://", "https://")) or Path(app_name).exists():
+        try:
+            res = subprocess.run(
+                ["xdg-open", app_name],
+                capture_output=True, timeout=5,
+            )
+            if res.returncode == 0:
                 return True
         except Exception:
             pass

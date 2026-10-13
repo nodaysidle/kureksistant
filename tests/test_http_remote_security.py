@@ -103,10 +103,11 @@ def test_remote_bind_refused_without_strong_token(monkeypatch) -> None:
     monkeypatch.delenv("KUREK_BIND", raising=False)
     monkeypatch.setenv("KUREK_REMOTE_BIND", "tailscale")
     monkeypatch.delenv("KUREK_REMOTE_TOKEN", raising=False)
+    monkeypatch.setattr(daemon, "get_remote_token", lambda: None)
     with pytest.raises(RuntimeError, match="Remote HTTP bind refused"):
         daemon.resolve_http_bind_hosts()
 
-    monkeypatch.setenv("KUREK_REMOTE_TOKEN", "too-short")
+    monkeypatch.setattr(daemon, "get_remote_token", lambda: "too-short")
     with pytest.raises(RuntimeError, match="Remote HTTP bind refused"):
         daemon.resolve_http_bind_hosts()
 
@@ -408,7 +409,16 @@ def test_uds_prompt_still_works(monkeypatch, tmp_path: Path) -> None:
 
     conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     conn.settimeout(2.0)
-    conn.connect(str(sock_path))
+    connect_deadline = time.time() + 5.0
+    while time.time() < connect_deadline:
+        try:
+            conn.connect(str(sock_path))
+            break
+        except ConnectionRefusedError:
+            time.sleep(0.05)
+    else:
+        conn.connect(str(sock_path))
+
     conn.sendall(b'{"action":"prompt","prompt":"from uds"}\n')
     data = conn.recv(4096)
     conn.close()

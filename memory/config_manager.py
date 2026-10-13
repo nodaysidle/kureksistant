@@ -83,8 +83,14 @@ def load_api_keys() -> dict:
             data[k.lower()] = os.environ[k]
     return data
 
-def get_gemini_key() -> str | None:
-    return load_api_keys().get("gemini_api_key")
+def get_gemini_key() -> str:
+    import os
+    env_key = os.environ.get("GEMINI_API_KEY")
+    if env_key:
+        return env_key.strip()
+    keys = load_api_keys()
+    val = keys.get("GEMINI_API_KEY") or keys.get("gemini_api_key") or ""
+    return str(val).strip() if val else ""
 
 def get_deepseek_key() -> str | None:
     import os

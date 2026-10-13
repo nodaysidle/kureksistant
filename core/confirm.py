@@ -151,6 +151,16 @@ def resolve(accepted: bool) -> None:
                      name=f"confirm-{p.key}").start()
 
 
+def is_pending() -> bool:
+    """Return True if a confirmation is currently pending and not expired."""
+    with _lock:
+        if _pending is None:
+            return False
+        if time.monotonic() - _pending.at > TIMEOUT_SECONDS:
+            return False
+        return True
+
+
 def pending_title() -> str:
     """'' when nothing is waiting. Lets an action avoid stacking two banners."""
     with _lock:

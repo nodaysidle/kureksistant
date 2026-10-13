@@ -1,9 +1,12 @@
 import json
+import logging
+import os
 import re
-from datetime import datetime
-from threading import Lock
-from pathlib import Path
+import sqlite3
 import sys
+from datetime import datetime
+from pathlib import Path
+from threading import Lock
 
 
 def get_base_dir() -> Path:
@@ -12,64 +15,274 @@ def get_base_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-BASE_DIR         = get_base_dir()
-MEMORY_PATH      = BASE_DIR / "memory" / "long_term.json"
-_lock            = Lock()
-MAX_VALUE_LENGTH = 380
+BASE_DIR = get_base_dir()
+MEMORY_DIR = BASE_DIR / "memory"
+MEMORY_PATH = MEMORY_DIR / "long_term.json"
+DB_PATH = MEMORY_DIR / "kurek_memory.db"
+_lock = Lock()
+_log = logging.getLogger("kurek.memory")
 
-# ── Why there are two very different numbers here ────────────────────────────
-#
-# There used to be one: MEMORY_MAX_CHARS = 2200, applied to the whole store. It
-# was a *storage* limit, and it existed only because the entire memory was
-# pasted into the system prompt on every connect — so growing the memory grew
-# every single request. When it filled, _trim_to_limit() deleted the oldest
-# entries and printed one line to a console nobody reads. A memory described as
-# "deeply remembers projects, preferences and personal context" was in practice
-# two pages long, and quietly forgot your sister's name after a few weeks.
-#
-# Storage and prompt budget are now separate concerns:
-#
-#   MEMORY_MAX_CHARS  — a runaway guard, not a feature limit. Nothing normal
-#                       reaches it; a bug writing in a loop does.
-#   PROMPT_CORE_CHARS — what actually rides in the system prompt every session.
-#                       Smaller than the old whole-memory dump, so sessions
-#                       start *faster* than before, not slower.
-#
-# Everything above the core stays on disk and is fetched on demand by the
-# recall_memory tool — see search_memory() and format_memory_for_prompt().
-MEMORY_MAX_CHARS  = 200_000
+MAX_VALUE_LENGTH = 380
+MEMORY_MAX_CHARS = 200_000
 PROMPT_CORE_CHARS = 900
 PROMPT_INDEX_CHARS = 420
-# Most entries any one category may contribute to the core block, so a person
-# with forty stored preferences still gets their sister into the prompt.
 PROMPT_MAX_PER_CATEGORY = 6
+
+_trim_notifier = None
+
+
+def set_trim_notifier(fn) -> None:
+    """Register a callable(str) that surfaces trims to the user."""
+    global _trim_notifier
+    _trim_notifier = fn
+
 
 def _empty_memory() -> dict:
     return {
-        "identity":      {},
-        "preferences":   {},
-        "projects":      {},
+        "identity": {},
+        "preferences": {},
+        "projects": {},
         "relationships": {},
-        "wishes":        {},
-        "notes":         {},
+        "wishes": {},
+        "notes": {},
     }
 
-def load_memory() -> dict:
-    if not MEMORY_PATH.exists():
-        return _empty_memory()
-    with _lock:
+
+def _get_db() -> sqlite3.Connection:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(DB_PATH), timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS entries (
+            category TEXT NOT NULL,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            updated TEXT NOT NULL,
+            PRIMARY KEY (category, key)
+        );
+        """
+    )
+    conn.execute(
+        """
+        CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
+            category,
+            key,
+            value,
+            content='entries',
+            content_rowid='rowid'
+        );
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS entries_ai AFTER INSERT ON entries BEGIN
+            INSERT INTO entries_fts(rowid, category, key, value)
+            VALUES (new.rowid, new.category, new.key, new.value);
+        END;
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS entries_ad AFTER DELETE ON entries BEGIN
+            INSERT INTO entries_fts(entries_fts, rowid, category, key, value)
+            VALUES('delete', old.rowid, old.category, old.key, old.value);
+        END;
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS entries_au AFTER UPDATE ON entries BEGIN
+            INSERT INTO entries_fts(entries_fts, rowid, category, key, value)
+            VALUES('delete', old.rowid, old.category, old.key, old.value);
+            INSERT INTO entries_fts(rowid, category, key, value)
+            VALUES (new.rowid, new.category, new.key, new.value);
+        END;
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            language TEXT
+        );
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        """
+    )
+    return conn
+
+
+def _migrate_from_json_if_needed(conn: sqlite3.Connection) -> None:
+    cur = conn.cursor()
+    cur.execute("SELECT value FROM metadata WHERE key='migrated'")
+    row = cur.fetchone()
+    if row and row["value"] == "1":
+        return
+
+    if MEMORY_PATH.exists():
         try:
             data = json.loads(MEMORY_PATH.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                base = _empty_memory()
-                for key in base:
-                    if key not in data:
-                        data[key] = {}
-                return data
-            return _empty_memory()
+                for cat, items in data.items():
+                    if cat == "sessions" and isinstance(items, list):
+                        for s in items:
+                            if isinstance(s, dict):
+                                cur.execute(
+                                    "INSERT INTO sessions (date, summary, language) VALUES (?, ?, ?)",
+                                    (
+                                        s.get("date", datetime.now().strftime("%Y-%m-%d")),
+                                        s.get("summary", ""),
+                                        s.get("language", ""),
+                                    ),
+                                )
+                    elif cat == "monitors" and isinstance(items, dict):
+                        cur.execute(
+                            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('monitors', ?)",
+                            (json.dumps(items),),
+                        )
+                    elif isinstance(items, dict):
+                        for k, v in items.items():
+                            val = v.get("value", "") if isinstance(v, dict) else str(v)
+                            upd = (
+                                v.get("updated", datetime.now().strftime("%Y-%m-%d"))
+                                if isinstance(v, dict)
+                                else datetime.now().strftime("%Y-%m-%d")
+                            )
+                            if val:
+                                cur.execute(
+                                    "INSERT OR REPLACE INTO entries (category, key, value, updated) VALUES (?, ?, ?, ?)",
+                                    (cat, k, val, upd),
+                                )
+                cur.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('migrated', '1')")
+                conn.commit()
+                print("[Memory] 📦 Migrated legacy long_term.json into kurek_memory.db (WAL + FTS5)")
         except Exception as e:
-            print(f"[Memory] ⚠️ Load error: {e}")
-            return _empty_memory()
+            # Leave 'migrated' unset so the next start retries, and discard any
+            # half-written rows so a retry cannot duplicate sessions.
+            conn.rollback()
+            _log.exception("Migration from %s failed; will retry on next start", MEMORY_PATH)
+            print(f"[Memory] Migration error (will retry next start): {e}")
+    else:
+        cur.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('migrated', '1')")
+        conn.commit()
+
+
+def _is_migrated() -> bool:
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=10.0)
+        try:
+            row = conn.execute("SELECT value FROM metadata WHERE key='migrated'").fetchone()
+            return bool(row and row[0] == "1")
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
+def _sync_to_legacy_json(memory_dict: dict) -> None:
+    """Keep long_term.json in sync as a compatibility mirror.
+
+    Never overwrite the legacy file before its contents were migrated, or a
+    failed migration would destroy the only copy of the user's memory."""
+    if MEMORY_PATH.exists() and not _is_migrated():
+        _log.warning("Skipping long_term.json mirror: migration not complete")
+        return
+    try:
+        MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        MEMORY_PATH.write_text(
+            json.dumps(memory_dict, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def load_memory() -> dict:
+    with _lock:
+        conn = _get_db()
+        try:
+            _migrate_from_json_if_needed(conn)
+            data = _empty_memory()
+            cur = conn.cursor()
+            cur.execute("SELECT category, key, value, updated FROM entries")
+            for row in cur.fetchall():
+                cat = row["category"]
+                if cat not in data:
+                    data[cat] = {}
+                data[cat][row["key"]] = {
+                    "value": row["value"],
+                    "updated": row["updated"],
+                }
+
+            cur.execute("SELECT date, summary, language FROM sessions ORDER BY id ASC")
+            sessions = []
+            for row in cur.fetchall():
+                s_entry = {"date": row["date"], "summary": row["summary"]}
+                if row["language"]:
+                    s_entry["language"] = row["language"]
+                sessions.append(s_entry)
+            if sessions:
+                data["sessions"] = sessions
+
+            cur.execute("SELECT value FROM metadata WHERE key='monitors'")
+            mon = cur.fetchone()
+            if mon and mon["value"]:
+                try:
+                    data["monitors"] = json.loads(mon["value"])
+                except Exception:
+                    pass
+
+            return data
+        finally:
+            conn.close()
+
+
+def load_monitors() -> dict:
+    with _lock:
+        conn = _get_db()
+        try:
+            _migrate_from_json_if_needed(conn)
+            cur = conn.cursor()
+            cur.execute("SELECT value FROM metadata WHERE key='monitors'")
+            row = cur.fetchone()
+            if row and row["value"]:
+                try:
+                    return json.loads(row["value"])
+                except Exception:
+                    pass
+            return {}
+        finally:
+            conn.close()
+
+
+def save_monitors(monitors: dict) -> None:
+    with _lock:
+        conn = _get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT OR REPLACE INTO metadata (key, value) VALUES ('monitors', ?)",
+                (json.dumps(monitors),),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    # Mirror update to legacy JSON
+    mem = load_memory()
+    mem["monitors"] = monitors
+    _sync_to_legacy_json(mem)
+
 
 def _all_entries(memory: dict) -> list[tuple]:
     entries = []
@@ -80,17 +293,6 @@ def _all_entries(memory: dict) -> list[tuple]:
             if isinstance(entry, dict) and "value" in entry:
                 entries.append((cat, key, entry))
     return entries
-
-
-# Set by main.py so a trim can reach the activity log. Deleting something a
-# person told you and mentioning it only on stdout is how a memory loses trust.
-_trim_notifier = None
-
-
-def set_trim_notifier(fn) -> None:
-    """Register a callable(str) that surfaces trims to the user."""
-    global _trim_notifier
-    _trim_notifier = fn
 
 
 def _trim_to_limit(memory: dict) -> dict:
@@ -115,16 +317,59 @@ def _trim_to_limit(memory: dict) -> dict:
             pass
     return memory
 
+
 def save_memory(memory: dict) -> None:
     if not isinstance(memory, dict):
         return
     memory = _trim_to_limit(memory)
-    MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _lock:
-        MEMORY_PATH.write_text(
-            json.dumps(memory, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        conn = _get_db()
+        try:
+            # Migrate first, so a write before any read can't skip the import.
+            _migrate_from_json_if_needed(conn)
+            cur = conn.cursor()
+            cur.execute("DELETE FROM entries")
+            for cat, items in memory.items():
+                if cat in ("sessions", "monitors"):
+                    continue
+                if isinstance(items, dict):
+                    for k, v in items.items():
+                        val = v.get("value", "") if isinstance(v, dict) else str(v)
+                        upd = (
+                            v.get("updated", datetime.now().strftime("%Y-%m-%d"))
+                            if isinstance(v, dict)
+                            else datetime.now().strftime("%Y-%m-%d")
+                        )
+                        if val:
+                            cur.execute(
+                                "INSERT OR REPLACE INTO entries (category, key, value, updated) VALUES (?, ?, ?, ?)",
+                                (cat, k, val, upd),
+                            )
+
+            if "sessions" in memory and isinstance(memory["sessions"], list):
+                cur.execute("DELETE FROM sessions")
+                for s in memory["sessions"][-3:]:
+                    if isinstance(s, dict):
+                        cur.execute(
+                            "INSERT INTO sessions (date, summary, language) VALUES (?, ?, ?)",
+                            (
+                                s.get("date", datetime.now().strftime("%Y-%m-%d")),
+                                s.get("summary", ""),
+                                s.get("language", ""),
+                            ),
+                        )
+
+            if "monitors" in memory and isinstance(memory["monitors"], dict):
+                cur.execute(
+                    "INSERT OR REPLACE INTO metadata (key, value) VALUES ('monitors', ?)",
+                    (json.dumps(memory["monitors"]),),
+                )
+
+            conn.commit()
+        finally:
+            conn.close()
+
+    _sync_to_legacy_json(memory)
 
 
 def _truncate_value(val: str) -> str:
@@ -147,8 +392,8 @@ def _recursive_update(target: dict, updates: dict) -> bool:
             if _recursive_update(target[key], value):
                 changed = True
         else:
-            new_val  = _truncate_value(str(value["value"] if isinstance(value, dict) else value))
-            entry    = {"value": new_val, "updated": datetime.now().strftime("%Y-%m-%d")}
+            new_val = _truncate_value(str(value["value"] if isinstance(value, dict) else value))
+            entry = {"value": new_val, "updated": datetime.now().strftime("%Y-%m-%d")}
             existing = target.get(key, {})
             if not isinstance(existing, dict) or existing.get("value") != new_val:
                 target[key] = entry
@@ -165,9 +410,8 @@ def update_memory(memory_update: dict) -> dict:
         print(f"[Memory] 💾 Saved: {list(memory_update.keys())}")
     return memory
 
+
 def _entry_value(entry) -> str:
-    """Accept both the {'value': ..., 'updated': ...} shape and a bare string,
-    because early versions of the store wrote plain strings."""
     if isinstance(entry, dict):
         return str(entry.get("value", "") or "").strip()
     return str(entry or "").strip()
@@ -177,42 +421,21 @@ def _pretty(key: str) -> str:
     return key.replace("_", " ").strip()
 
 
-# Identity is always in the prompt; these categories compete for the remaining
-# budget by recency.
 _CATEGORY_LABELS = {
-    "preferences":   "Preferences",
-    "projects":      "Active projects / goals",
+    "preferences": "Preferences",
+    "projects": "Active projects / goals",
     "relationships": "People in their life",
-    "wishes":        "Wishes / plans",
-    "notes":         "Notes",
+    "wishes": "Wishes / plans",
+    "notes": "Notes",
 }
 
-_IDENTITY_FIELDS = ["name", "age", "birthday", "city", "job",
-                    "language", "school", "nationality"]
+_IDENTITY_FIELDS = [
+    "name", "age", "birthday", "city", "job",
+    "language", "school", "nationality",
+]
 
 
 def format_memory_for_prompt(memory: dict | None) -> str:
-    """Build the memory block that goes into the system prompt.
-
-    This used to dump everything. It now sends three things:
-
-      1. IDENTITY  - always, in full. It is small, and it is wrong for the
-         assistant to have to look up your name.
-      2. RECENT    - the most recently updated entries from every other
-         category, up to PROMPT_CORE_CHARS. Recency is the cheapest useful
-         relevance signal available without embeddings.
-      3. AN INDEX  - the *keys* of everything else, values omitted.
-
-    Point 3 is what makes recall work at all. A model cannot decide to look
-    something up if it does not know the thing exists: with only points 1 and 2,
-    "who is Ayse?" would get "I don't know" while ayse_sister sat on disk
-    unread. The index costs a few hundred characters and turns recall from a
-    gamble into a lookup.
-
-    Net effect on latency: this block is SMALLER than the old full dump, so
-    every session connects with fewer tokens. Occasionally the model spends one
-    extra round trip on recall_memory - covered by the acknowledgment it
-    already speaks before any slow step."""
     if not memory:
         return ""
 
@@ -225,12 +448,10 @@ def format_memory_for_prompt(memory: dict | None) -> str:
         if not val:
             continue
         if field == "language":
-            # Labelled as an observation, not a setting. A bare "Language:
-            # English" line written months ago reads like a standing order and
-            # was one of the reasons a Turkish question came back in English.
             core_lines.append(
                 f"Has spoken to you in: {val} (an observation about the past — "
-                f"always answer in the language of their CURRENT message)")
+                f"always answer in the language of their CURRENT message)"
+            )
         else:
             core_lines.append(f"{field.title()}: {val}")
     for key, entry in identity.items():
@@ -241,7 +462,7 @@ def format_memory_for_prompt(memory: dict | None) -> str:
             core_lines.append(f"{_pretty(key).title()}: {val}")
 
     # 2. Everything else, most recently updated first
-    rest: list[tuple[str, str, str, str]] = []   # (updated, cat, key, value)
+    rest: list[tuple[str, str, str, str]] = []
     for cat in _CATEGORY_LABELS:
         for key, entry in (memory.get(cat, {}) or {}).items():
             val = _entry_value(entry)
@@ -251,88 +472,63 @@ def format_memory_for_prompt(memory: dict | None) -> str:
             rest.append((updated, cat, key, val))
     rest.sort(key=lambda t: t[0], reverse=True)
 
-    used    = sum(len(l) + 1 for l in core_lines)
+    used = sum(len(l) + 1 for l in core_lines)
     shown: dict[str, list[str]] = {}
     overflow: dict[str, list[str]] = {}
 
-    # Recency decides order, but no single category may take the whole budget.
-    # Without the cap, someone with forty stored preferences gets a prompt that
-    # is forty preferences and not one person's name — the categories that
-    # matter most in conversation are also the ones that change least often, so
-    # pure recency systematically buries them.
-    per_cat_used: dict[str, int] = {}
-    for _updated, cat, key, val in rest:
-        line = f"  - {_pretty(key).title()}: {val}"
-        if (per_cat_used.get(cat, 0) < PROMPT_MAX_PER_CATEGORY
-                and used + len(line) + 1 <= PROMPT_CORE_CHARS):
-            shown.setdefault(cat, []).append(line)
-            per_cat_used[cat] = per_cat_used.get(cat, 0) + 1
-            used += len(line) + 1
+    for updated, cat, key, val in rest:
+        shown_in_cat = shown.get(cat, [])
+        if len(shown_in_cat) >= PROMPT_MAX_PER_CATEGORY:
+            overflow.setdefault(cat, []).append(_pretty(key))
+            continue
+
+        rendered = f"- {_pretty(key)}: {val}"
+        cost = len(rendered) + 1
+        if used + cost <= PROMPT_CORE_CHARS:
+            shown.setdefault(cat, []).append(rendered)
+            used += cost
         else:
             overflow.setdefault(cat, []).append(_pretty(key))
 
-    # The index is a table of contents, so it is interleaved across categories
-    # rather than continuing in recency order. Sorted by recency it would list
-    # twenty-four preferences before the first relationship, and the one entry
-    # the index exists for — the old fact the model has no other way to know
-    # about — would fall off the end.
-    indexed: list[str] = []
-    if overflow:
-        cats  = [c for c in _CATEGORY_LABELS if overflow.get(c)]
-        cursor = {c: 0 for c in cats}
-        while cats:
-            for cat in list(cats):
-                i = cursor[cat]
-                if i >= len(overflow[cat]):
-                    cats.remove(cat)
-                    continue
-                indexed.append(overflow[cat][i])
-                cursor[cat] = i + 1
-
     for cat, label in _CATEGORY_LABELS.items():
-        if shown.get(cat):
-            core_lines.append("")
-            core_lines.append(f"{label}:")
-            core_lines.extend(shown[cat])
+        items = shown.get(cat)
+        if items:
+            core_lines.append(f"\n{label}:")
+            core_lines.extend(items)
 
-    if not core_lines and not indexed:
-        return ""
+    out = ["[USER PERSONAL CONTEXT & IDENTITY]"]
+    out.extend(core_lines)
 
-    out = [
-        "[WHAT YOU KNOW ABOUT THIS PERSON — use naturally, never recite like a list]",
-        *core_lines,
-    ]
+    index_lines: list[str] = []
+    index_used = 0
+    for cat, label in _CATEGORY_LABELS.items():
+        keys = overflow.get(cat)
+        if not keys:
+            continue
+        rendered_keys = ", ".join(keys)
+        line = f"- {label}: {rendered_keys}"
+        if index_used + len(line) + 1 <= PROMPT_INDEX_CHARS:
+            index_lines.append(line)
+            index_used += len(line) + 1
+        else:
+            break
 
-    # 3. The index of what is on disk but not in this prompt
-    if indexed:
-        budget, names = PROMPT_INDEX_CHARS, []
-        for n in indexed:
-            if budget - len(n) - 2 < 0:
-                break
-            names.append(n)
-            budget -= len(n) + 2
-        if names:
-            out.append("")
-            out.append(
-                "[ALSO REMEMBERED — values not shown here. Call recall_memory "
-                "with a keyword to read any of these before saying you do not know]"
-            )
-            out.append(", ".join(names)
-                       + (f" (+{len(indexed) - len(names)} more)"
-                          if len(indexed) > len(names) else ""))
+    if index_lines:
+        out.append(
+            "\n[ALSO REMEMBERED - NOT SHOWN TO SAVE SPACE]\n"
+            "You know about the following topics. If the user asks about ANY of them, "
+            "or about anything personal you cannot see above, CALL manage_memory(action='recall', query=...) "
+            "BEFORE saying you don't know:"
+        )
+        out.extend(index_lines)
 
-    return "\n".join(out) + "\n"
+    return "\n".join(out).strip()
 
-
-# ── Recall ────────────────────────────────────────────────────────────────────
 
 def _score(query_words: list[str], cat: str, key: str, value: str) -> int:
-    """Cheap lexical relevance. No embeddings, no network, no model call - this
-    runs in well under a millisecond, which is the entire point: recall must
-    cost one model round trip, never two."""
     hay_key = _pretty(key).lower()
     hay_val = value.lower()
-    score   = 0
+    score = 0
     for w in query_words:
         if not w:
             continue
@@ -348,58 +544,88 @@ def _score(query_words: list[str], cat: str, key: str, value: str) -> int:
 
 
 def search_memory(query: str, limit: int = 8) -> str:
-    """Find stored facts matching `query`. Backs the recall_memory tool.
+    """Find stored facts matching `query` using SQLite FTS5 index with lexical fallback."""
+    words = [w for w in re.split(r"[^\w]+", (query or "").lower()) if len(w) > 1]
 
-    An empty query is treated as "show me everything you know", capped - the
-    model asks that when the user says "what do you remember about me?"."""
-    memory = load_memory()
-    words  = [w for w in re.split(r"[^\w]+", (query or "").lower()) if len(w) > 1]
+    # Try FTS5 fast search if query words provided
+    with _lock:
+        conn = _get_db()
+        try:
+            _migrate_from_json_if_needed(conn)
+            cur = conn.cursor()
+            rows: list[tuple[int, str, str, str]] = []
+            if words:
+                fts_query = " OR ".join(f'"{w}"*' for w in words)
+                try:
+                    cur.execute(
+                        """
+                        SELECT category, key, value, rank
+                        FROM entries_fts
+                        WHERE entries_fts MATCH ?
+                        ORDER BY rank
+                        LIMIT ?;
+                        """,
+                        (fts_query, max(limit * 2, 16)),
+                    )
+                    for r in cur.fetchall():
+                        cat, k, v = r["category"], r["key"], r["value"]
+                        s = _score(words, cat, k, v)
+                        rows.append((s if s > 0 else 1, cat, k, v))
+                except Exception:
+                    pass
 
-    rows: list[tuple[int, str, str, str]] = []
-    for cat, items in memory.items():
-        if not isinstance(items, dict):
-            continue                     # skip 'sessions', which is a list
-        for key, entry in items.items():
-            val = _entry_value(entry)
-            if not val:
-                continue
-            s = _score(words, cat, key, val) if words else 1
-            if s > 0:
-                rows.append((s, cat, key, val))
+            if not rows:
+                # Fallback to in-memory score scan
+                cur.execute("SELECT category, key, value FROM entries")
+                for r in cur.fetchall():
+                    cat, k, v = r["category"], r["key"], r["value"]
+                    s = _score(words, cat, k, v) if words else 1
+                    if s > 0:
+                        rows.append((s, cat, k, v))
 
-    if not rows:
-        return (f"Nothing stored about '{query}'." if query
-                else "I have not stored anything about this person yet.")
+            if not rows:
+                return (
+                    f"Nothing stored about '{query}'."
+                    if query
+                    else "I have not stored anything about this person yet."
+                )
 
-    rows.sort(key=lambda r: (-r[0], r[2]))
-    lines = [f"{cat}/{_pretty(key)}: {val}" for _s, cat, key, val in rows[:max(1, limit)]]
-    head  = (f"Stored facts matching '{query}':" if query
-             else "Everything currently stored:")
-    more  = (f"\n(+{len(rows) - len(lines)} more — search with a narrower keyword)"
-             if len(rows) > len(lines) else "")
-    return head + "\n" + "\n".join(lines) + more
+            rows.sort(key=lambda r: (-r[0], r[2]))
+            lines = [f"{cat}/{_pretty(key)}: {val}" for _s, cat, key, val in rows[:max(1, limit)]]
+            head = (
+                f"Stored facts matching '{query}':"
+                if query
+                else "Everything currently stored:"
+            )
+            more = (
+                f"\n(+{len(rows) - len(lines)} more — search with a narrower keyword)"
+                if len(rows) > len(lines)
+                else ""
+            )
+            return head + "\n" + "\n".join(lines) + more
+        finally:
+            conn.close()
 
 
 def all_entries_for_ui() -> list[dict]:
-    """Flat list for the memory panel: what JARVIS knows, and when it learned it.
-    Sorted newest first so the panel opens on what changed most recently."""
-    memory = load_memory()
-    rows = []
-    for cat, items in memory.items():
-        if not isinstance(items, dict):
-            continue
-        for key, entry in items.items():
-            val = _entry_value(entry)
-            if not val:
-                continue
-            rows.append({
-                "category": cat,
-                "key":      key,
-                "value":    val,
-                "updated":  (entry.get("updated", "") if isinstance(entry, dict) else ""),
-            })
-    rows.sort(key=lambda r: (r["updated"] or "0000-00-00"), reverse=True)
-    return rows
+    with _lock:
+        conn = _get_db()
+        try:
+            _migrate_from_json_if_needed(conn)
+            cur = conn.cursor()
+            cur.execute("SELECT category, key, value, updated FROM entries ORDER BY updated DESC")
+            return [
+                {
+                    "category": r["category"],
+                    "key": r["key"],
+                    "value": r["value"],
+                    "updated": r["updated"],
+                }
+                for r in cur.fetchall()
+            ]
+        finally:
+            conn.close()
+
 
 def remember(key: str, value: str, category: str = "notes") -> str:
     valid = {"identity", "preferences", "projects", "relationships", "wishes", "notes"}
@@ -410,70 +636,77 @@ def remember(key: str, value: str, category: str = "notes") -> str:
 
 
 def forget(key: str, category: str = "notes") -> str:
-    memory = load_memory()
-    cat    = memory.get(category, {})
-    if key in cat:
-        del cat[key]
-        memory[category] = cat
-        save_memory(memory)
+    with _lock:
+        conn = _get_db()
+        try:
+            _migrate_from_json_if_needed(conn)
+            cur = conn.cursor()
+            cur.execute("DELETE FROM entries WHERE category=? AND key=?", (category, key))
+            deleted = cur.rowcount > 0
+            conn.commit()
+        finally:
+            conn.close()
+
+    if deleted:
+        _sync_to_legacy_json(load_memory())
         return f"Forgotten: {category}/{key}"
     return f"Not found: {category}/{key}"
 
 
 forget_memory = forget
 
-
-# ── Session memory ─────────────────────────────────────────────────────────────
-
-_SESSION_MAX = 3   # safety cap — in practice 0-1 entries after pop
+_SESSION_MAX = 3
 
 
 def save_session_summary(summary: str, language: str = "") -> None:
-    """Append a 1-2 sentence session summary to long_term.json['sessions']."""
     summary = (summary or "").strip()
     if not summary:
         return
-    memory   = load_memory()
-    sessions = memory.get("sessions", [])
-    if not isinstance(sessions, list):
-        sessions = []
-    entry: dict = {
-        "date":    datetime.now().strftime("%Y-%m-%d"),
-        "summary": summary[:280],
-    }
-    if language:
-        entry["language"] = language
-    sessions.append(entry)
-    memory["sessions"] = sessions[-_SESSION_MAX:]
     with _lock:
-        MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-        MEMORY_PATH.write_text(
-            json.dumps(memory, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-    print(f"[Memory] 📝 Session saved ({entry['date']}): {summary[:60]}…")
+        conn = _get_db()
+        try:
+            _migrate_from_json_if_needed(conn)
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO sessions (date, summary, language) VALUES (?, ?, ?)",
+                (datetime.now().strftime("%Y-%m-%d"), summary[:280], language),
+            )
+            cur.execute(
+                """
+                DELETE FROM sessions WHERE id NOT IN (
+                    SELECT id FROM sessions ORDER BY id DESC LIMIT ?
+                )
+                """,
+                (_SESSION_MAX,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    mem = load_memory()
+    _sync_to_legacy_json(mem)
+    print(f"[Memory] 📝 Session saved ({datetime.now().strftime('%Y-%m-%d')}): {summary[:60]}…")
 
 
 def pop_last_session() -> dict | None:
-    """
-    Return AND remove the most recent session entry.
-    Calling this consumes the entry so it is never repeated in future briefings.
-    """
     with _lock:
-        if not MEMORY_PATH.exists():
-            return None
+        conn = _get_db()
         try:
-            memory   = json.loads(MEMORY_PATH.read_text(encoding="utf-8"))
-            sessions = memory.get("sessions", [])
-            if not isinstance(sessions, list) or not sessions:
+            _migrate_from_json_if_needed(conn)
+            cur = conn.cursor()
+            cur.execute("SELECT id, date, summary, language FROM sessions ORDER BY id DESC LIMIT 1")
+            row = cur.fetchone()
+            if not row:
                 return None
-            entry = sessions.pop()          # remove the last entry
-            memory["sessions"] = sessions
-            MEMORY_PATH.write_text(
-                json.dumps(memory, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            return entry
-        except Exception as e:
-            print(f"[Memory] ⚠️ pop_last_session error: {e}")
-            return None
+            sess_id = row["id"]
+            entry = {"date": row["date"], "summary": row["summary"]}
+            if row["language"]:
+                entry["language"] = row["language"]
+            cur.execute("DELETE FROM sessions WHERE id=?", (sess_id,))
+            conn.commit()
+        finally:
+            conn.close()
+    # Keep the legacy long_term.json mirror in step, so nothing reading it can
+    # replay a session that was already consumed. (No-op until migrated.)
+    _sync_to_legacy_json(load_memory())
+    return entry

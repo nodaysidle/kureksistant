@@ -1,4 +1,5 @@
 import json
+import platform
 import subprocess
 import sys
 import time
@@ -24,13 +25,19 @@ def _base_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 def _get_os() -> str:
+    real = {"Windows": "windows", "Darwin": "mac", "Linux": "linux"}.get(
+        platform.system(), "linux"
+    )
     try:
         cfg = json.loads(
             (_base_dir() / "config" / "api_keys.json").read_text(encoding="utf-8")
         )
-        return cfg.get("os_system", "windows").lower()
+        val = cfg.get("os_system", "").lower()
+        if val in ("windows", "mac", "linux") and val == real:
+            return val
     except Exception:
-        return "windows"
+        pass
+    return real
 
 
 def _require_pyautogui():

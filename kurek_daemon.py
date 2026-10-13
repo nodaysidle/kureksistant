@@ -59,6 +59,7 @@ from core.action_loader import discover_actions
 from core.hyprland_watcher import get_hyprland_watcher
 from core.mpv_sink import get_mpv_sink
 from core.timing import begin_query, end_query
+from core import confirm
 from memory.memory_manager import load_memory, format_memory_for_prompt
 
 # Audio recording configuration
@@ -284,6 +285,34 @@ class KurekState:
     SPEAKING = "speaking"
 
 
+
+_CONFIRM_AFFIRMATIVE = frozenset({
+    "yes", "y", "yep", "yeah", "yup", "sure", "ok", "okay", "confirm", "confirmed",
+    "do it", "go ahead", "proceed", "ja", "yes please", "yes do it", "ok do it",
+    "okay do it", "sure do it", "yes go ahead", "yes confirm",
+})
+_CONFIRM_NEGATIVE = frozenset({
+    "no", "n", "nope", "nah", "cancel", "stop", "abort", "nein", "dont", "do not",
+    "dont do it", "do not do it", "no thanks", "no cancel", "cancel it",
+    "no dont", "no stop", "never mind", "nevermind",
+})
+
+
+def classify_confirmation_reply(text: str) -> bool | None:
+    """True/False when the WHOLE reply is a yes/no word or phrase, else None.
+
+    Matching is on the full normalized utterance, never on a prefix, so
+    "notes", "now open x", "ok, what's the time", "surely" or "stop the music"
+    are not treated as confirmations.
+    """
+    norm = re.sub(r"[^a-z0-9\s]", "", (text or "").lower().replace("\u2019", "'").replace("'", ""))
+    norm = " ".join(norm.split())
+    if norm in _CONFIRM_AFFIRMATIVE:
+        return True
+    if norm in _CONFIRM_NEGATIVE:
+        return False
+    return None
+
 class KurekEngine:
     def __init__(self):
         self.state = KurekState.IDLE
@@ -381,6 +410,26 @@ class KurekEngine:
         # Start background hourly Muse Memory consolidation thread
         threading.Thread(target=self._hourly_consolidation_loop, daemon=True).start()
         print("[Kurek Memory] Hourly Muse consolidation worker initialized.")
+
+        # Wire headless notification callback to confirm system
+        def _confirm_show(title: str, detail: str) -> None:
+            icon = os.path.expanduser("~/.local/share/icons/kurek.png")
+            if not os.path.exists(icon):
+                icon = os.path.join(os.path.dirname(os.path.abspath(__file__)), "desktop", "kurek.png")
+            try:
+                subprocess.Popen([
+                    "notify-send", "-u", "critical",
+                    "-h", "string:x-canonical-private-synchronous:kurek-confirm",
+                    "-i", icon, f"Kurek Confirmation: {title}", detail
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+
+        def _confirm_hide() -> None:
+            pass
+
+        confirm.bind(_confirm_show, _confirm_hide)
+        print("[Kurek Confirm] Headless confirmation notifications bound.")
 
     def _load_history(self) -> list[dict]:
         try:
@@ -608,7 +657,8 @@ class KurekEngine:
         finally:
             # Always return to a resting state — never leave the daemon stuck in THINKING.
             try:
-                while getattr(self.tts, "is_playing", False):
+                deadline = time.time() + 30.0
+                while getattr(self.tts, "is_playing", False) and time.time() < deadline:
                     if self._cancel_requested:
                         break
                     time.sleep(0.05)
@@ -638,6 +688,29 @@ class KurekEngine:
         mute_speaker: bool = False,
         remote: bool = False,
     ):
+        # Pending-confirmation shortcut. A short reply that is ONLY a yes/no
+        # word or phrase resolves the waiting confirmation; anything else
+        # ("notes...", "now...", "ok, what's...", "stop the music") is handled
+        # as a normal prompt. Deliberate design (owner decision 2026-10-14):
+        # this applies to remote /remote/prompt requests too, so the
+        # authenticated Kurek Remote phone app MAY confirm or cancel a
+        # confirmation that was raised on the PC.
+        if confirm.is_pending():
+            verdict = classify_confirmation_reply(user_prompt)
+            if verdict is not None:
+                confirm.resolve(verdict)
+                reply = "Confirmed and executed." if verdict else "Action cancelled."
+                if callback:
+                    try:
+                        callback({"type": "sentence", "sentence": reply})
+                        callback({"type": "done", "reply": reply})
+                    except Exception:
+                        pass
+                if not mute_speaker and not self._cancel_requested:
+                    self.set_state(KurekState.SPEAKING)
+                    self.tts.speak(reply)
+                return reply
+
         now_str = datetime.now().strftime("%Y-%m-%d %A, %I:%M %p")
 
         # Load long-term user memories & context
@@ -1296,7 +1369,11 @@ class KurekHTTPHandler(BaseHTTPRequestHandler):
             if data is None:
                 return
             prompt_text = data.get("prompt", "")
-            mute_speaker = bool(data.get("remote", True))
+            speak_local = (
+                data.get("speak_local") is True
+                or os.environ.get("KUREK_REMOTE_LOCAL_TTS") == "1"
+            )
+            mute_speaker = not speak_local
             if not prompt_text:
                 self._send_json(400, {"error": "prompt is required"})
                 return

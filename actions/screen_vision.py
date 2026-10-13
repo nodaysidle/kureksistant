@@ -156,6 +156,23 @@ def query_vision(jpeg_bytes: bytes, prompt: str) -> str:
         ws = hypr_ctx.get("workspace", {}).get("name", "")
         context_prefix = f"[Hyprland Active Window: App '{app_cls}', Title '{app_title}', Workspace '{ws}']\n"
 
+    # Multi-workspace window awareness across all workspaces
+    if shutil.which("hyprctl"):
+        try:
+            res_all = subprocess.run(["hyprctl", "clients", "-j"], capture_output=True, text=True, timeout=1.0)
+            if res_all.returncode == 0 and res_all.stdout.strip():
+                open_wins = []
+                for c in json.loads(res_all.stdout):
+                    w_title = c.get("title", "")
+                    w_class = c.get("class", "")
+                    w_ws = c.get("workspace", {}).get("name") or c.get("workspace", {}).get("id")
+                    if w_class or w_title:
+                        open_wins.append(f"• '{w_class}' (Title: '{w_title}') on Workspace {w_ws}")
+                if open_wins:
+                    context_prefix += "[Hyprland All Open Windows Across Workspaces:\n" + "\n".join(open_wins) + "]\n"
+        except Exception:
+            pass
+
     system_instruction = (
         "You are Kurek's high-speed visual cortex for an Arch Linux (Hyprland) workspace. "
         "You are looking directly at the user's active monitor. "

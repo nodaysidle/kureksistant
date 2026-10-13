@@ -573,19 +573,26 @@ class _BrowserSession:
 
         profile = _real_profile_dir(self.browser_name)
 
+        args = [
+            "--start-maximized",
+            "--disable-blink-features=AutomationControlled",
+            "--no-first-run",
+            "--disable-default-apps",
+            "--no-default-browser-check",
+        ]
+        if _OS == "Linux":
+            args.extend([
+                "--disable-dev-shm-usage",
+                "--js-flags=--max-old-space-size=256",
+            ])
+
         kwargs = {
             "headless":    False,
             "slow_mo":     0,
             "viewport":    None,
             "no_viewport": True,
             "timeout":     25_000,
-            "args": [
-                "--start-maximized",
-                "--disable-blink-features=AutomationControlled",
-                "--no-first-run",
-                "--disable-default-apps",
-                "--no-default-browser-check",
-            ],
+            "args":        args,
         }
 
         if exe:
