@@ -5,6 +5,12 @@ All notable changes to Kureksistant (Kurek) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project approximates [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Documentation
+- **Correction to the 0.2.0 entry below:** it lists "~0.8ms median trigger, 24 tools" as measured figures. The bundled tool count is **25**: 25 `actions/*.py` files define a `TOOL` dict, and `core/action_loader.discover_actions()` loads 25 at runtime. The trigger timing is an informational, machine-dependent benchmark of `bin/kurek-trigger` against a mock UDS daemon (`scripts/bench_trigger.py`), not end-to-end latency, so it is no longer quoted as a number. The 0.2.0 entry is left unchanged as a historical record.
+- AGENTS.md: removed the "~0.8ms median" figure and describes the benchmark as above.
+
 ## [0.2.1] — 2026-10-13
 
 Targeted architectural and stability refactor for Arch Linux / Omarchy Quattro (Hyprland, Ghostty, Herdr, Fish) and Android Remote client over Tailscale.
