@@ -29,6 +29,7 @@ TMP=$(mktemp -d -t kurek-verify-XXXXXX)
 DPID=""
 cleanup(){ [ -n "$DPID" ] && kill -TERM -- "-$DPID" 2>/dev/null; sleep 0.5; [ -n "$DPID" ] && kill -KILL -- "-$DPID" 2>/dev/null; [ "${VERIFY_KEEP:-0}" = 1 ] || rm -rf "$TMP"; }
 trap cleanup EXIT
+ORIG_HOME=$HOME
 mkdir -p "$TMP/src" "$TMP/home" "$TMP/run" "$TMP/cfg"; chmod 700 "$TMP/run"
 git -C "$REPO_ROOT" archive "$SHA" | tar -x -C "$TMP/src"
 cd "$TMP/src"
@@ -40,7 +41,14 @@ step(){ local name=$1; shift; if "$@" >"$TMP/$name.log" 2>&1; then RES+=("PASS $
 
 # 1. test suite (minus the :8790 smoke test)
 run_tests(){
-  local pre=(); if [ -z "${DISPLAY:-}" ] && command -v xvfb-run >/dev/null; then pre=(xvfb-run -a); fi
+  # pyautogui/mouseinfo open $DISPLAY at import. Prefer a private Xvfb; else
+  # reuse the session's Xauthority (temp HOME has none) so collection works.
+  local pre=()
+  if command -v xvfb-run >/dev/null; then pre=(env -u DISPLAY -u WAYLAND_DISPLAY xvfb-run -a)
+  elif [ -n "${DISPLAY:-}" ]; then
+    local xa=${XAUTHORITY:-$ORIG_HOME/.Xauthority}
+    if [ -f "$xa" ]; then export XAUTHORITY="$xa"; else : >"$HOME/.Xauthority"; fi
+  fi
   "${pre[@]}" "$PYTHON" -m pytest -q -p no:cacheprovider --deselect tests/test_daemon_smoke.py tests
 }
 step tests run_tests
