@@ -11,6 +11,8 @@
 #     refuses 8790); KUREK_REMOTE_BIND/KUREK_BIND are unset
 #   * tests/test_daemon_smoke.py is deselected because it hardcodes :8790;
 #     step 2 replaces it on the throwaway port
+#   * test_find_grok_desktop_file is deselected: it needs grok-bot.desktop
+#     installed in the real ~/.local/share/applications (host-dependent)
 # GUI/voice (mic, TTS, pyautogui, Hyprland) are NOT driven: not reliable
 # headless. Step 2 boots the real daemon engine instead.
 #
@@ -33,6 +35,8 @@ ORIG_HOME=$HOME
 mkdir -p "$TMP/src" "$TMP/home" "$TMP/run" "$TMP/cfg"; chmod 700 "$TMP/run"
 git -C "$REPO_ROOT" archive "$SHA" | tar -x -C "$TMP/src"
 cd "$TMP/src"
+# some tests call `git ls-files`: give the copy its own throwaway git index
+git init -q . && git add -A && git -c user.name=verify -c user.email=verify@localhost commit -qm "verify $SHA" >/dev/null
 export HOME="$TMP/home" XDG_RUNTIME_DIR="$TMP/run" XDG_CONFIG_HOME="$TMP/cfg" PYTHONDONTWRITEBYTECODE=1
 unset KUREK_REMOTE_BIND KUREK_BIND KUREK_REMOTE_ALLOW_EXEC KUREK_REMOTE_TOKEN \
   DEEPSEEK_API_KEY XAI_API_KEY GEMINI_API_KEY DEEPGRAM_API_KEY TYPESAFE_API_KEY OPENROUTER_API_KEY
@@ -49,7 +53,10 @@ run_tests(){
     local xa=${XAUTHORITY:-$ORIG_HOME/.Xauthority}
     if [ -f "$xa" ]; then export XAUTHORITY="$xa"; else : >"$HOME/.Xauthority"; fi
   fi
-  "${pre[@]}" "$PYTHON" -m pytest -q -p no:cacheprovider --deselect tests/test_daemon_smoke.py tests
+  "${pre[@]}" "$PYTHON" -m pytest -q -p no:cacheprovider \
+    --deselect tests/test_daemon_smoke.py \
+    --deselect tests/test_open_app_grokbot.py::test_find_grok_desktop_file \
+    tests
 }
 step tests run_tests
 
