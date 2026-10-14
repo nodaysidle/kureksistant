@@ -16,14 +16,25 @@
 # GUI/voice (mic, TTS, pyautogui, Hyprland) are NOT driven: not reliable
 # headless. Step 2 boots the real daemon engine instead.
 #
+# Runs under `env -i` with an allowlist (PATH, HOME, LANG, TERM, DISPLAY, ...).
 # Env: PYTHON (default: .venv/bin/python if present, else python3)
 #      VERIFY_PORT (default 18791)  VERIFY_KEEP=1 keeps the temp dir
 # Exit 0 = PASS. Writes verify-result.txt (SHA + PASS/FAIL) into $VERIFY_OUT if set.
 set -uo pipefail
+# Re-exec under an allowlisted environment so the commit under test cannot read
+# ambient secrets (cloud/GitHub tokens, API keys, ...).
+if [ -z "${VERIFY_SANITIZED:-}" ]; then
+  keep=(VERIFY_SANITIZED=1 "PATH=$PATH" "HOME=$HOME" "LANG=${LANG:-C.UTF-8}" "TERM=${TERM:-dumb}")
+  for v in PYTHON VERIFY_PORT VERIFY_OUT VERIFY_KEEP DISPLAY WAYLAND_DISPLAY XAUTHORITY; do
+    [ -n "${!v:-}" ] && keep+=("$v=${!v}")
+  done
+  exec env -i "${keep[@]}" bash "$0" "$@"
+fi
 REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "FAIL: not a git repo"; exit 2; }
 SHA=$(git -C "$REPO_ROOT" rev-parse "${1:-HEAD}^{commit}") || { echo "FAIL: bad rev"; exit 2; }
 PORT=${VERIFY_PORT:-18791}
-[ "$PORT" = 8790 ] && { echo "FAIL: refusing live port 8790"; exit 2; }
+[[ "$PORT" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$PORT" -le 65535 ] || { echo "FAIL: bad VERIFY_PORT"; exit 2; }
+[ "$PORT" -eq 8790 ] && { echo "FAIL: refusing live port 8790"; exit 2; }
 if [ -z "${PYTHON:-}" ]; then
   if [ -x "$REPO_ROOT/.venv/bin/python" ]; then PYTHON="$REPO_ROOT/.venv/bin/python"; else PYTHON=python3; fi
 fi
