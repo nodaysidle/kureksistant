@@ -28,7 +28,8 @@ if [ -z "${VERIFY_SANITIZED:-}" ]; then
   for v in PYTHON VERIFY_PORT VERIFY_OUT VERIFY_KEEP DISPLAY WAYLAND_DISPLAY XAUTHORITY; do
     [ -n "${!v:-}" ] && keep+=("$v=${!v}")
   done
-  exec env -i "${keep[@]}" bash "$0" "$@"
+  # resolve the real env(1): ~/.local/bin/env can be a non-executable shim (uv)
+  exec "$(PATH=/usr/bin:/bin command -v env)" -i "${keep[@]}" bash "$0" "$@"
 fi
 REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "FAIL: not a git repo"; exit 2; }
 SHA=$(git -C "$REPO_ROOT" rev-parse "${1:-HEAD}^{commit}") || { echo "FAIL: bad rev"; exit 2; }
@@ -59,7 +60,7 @@ run_tests(){
   # pyautogui/mouseinfo open $DISPLAY at import. Prefer a private Xvfb; else
   # reuse the session's Xauthority (temp HOME has none) so collection works.
   local pre=()
-  if command -v xvfb-run >/dev/null; then pre=(env -u DISPLAY -u WAYLAND_DISPLAY xvfb-run -a)
+  if command -v xvfb-run >/dev/null; then pre=(/usr/bin/env -u DISPLAY -u WAYLAND_DISPLAY xvfb-run -a)
   elif [ -n "${DISPLAY:-}" ]; then
     local xa=${XAUTHORITY:-$ORIG_HOME/.Xauthority}
     if [ -f "$xa" ]; then export XAUTHORITY="$xa"; else : >"$HOME/.Xauthority"; fi
