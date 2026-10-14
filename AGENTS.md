@@ -1,6 +1,6 @@
 # AGENTS.md — Developer & AI Agent Guide for Kurek (Kureksistant)
 
-> **Kurek** is a headless personal AI assistant for **Arch Linux / Omarchy Quattro (Hyprland)** and **macOS** (~450MB peak RAM with faster-whisper loaded, observed). Features Middle Click mouse summon (~0.8ms median trigger via `bench_trigger.py`), native desktop launcher, DeepSeek-Flash reasoning, xAI Grok speech (**Sol** voice), Hermes bidirectional memory continuity, and 25 tool modules in `actions/`. Release: v0.2.0.
+> **Kurek** is a headless personal AI assistant for **Arch Linux / Omarchy Quattro (Hyprland)** and **macOS** (~450MB peak RAM with faster-whisper loaded, observed). Features Middle Click mouse summon (C trigger; `scripts/bench_trigger.py` is an informational, machine-dependent mock-daemon benchmark, not end-to-end latency), native desktop launcher, DeepSeek-Flash reasoning, xAI Grok speech (**Sol** voice), Hermes bidirectional memory continuity, and 25 tool modules in `actions/`. Release: v0.2.0.
 
 ---
 
@@ -55,7 +55,7 @@
 | Component | File Path | Description |
 |-----------|-----------|-------------|
 | **Python Daemon** | [`kurek_daemon.py`](kurek_daemon.py) | Headless background daemon. Exposes Unix Domain Socket (`$XDG_RUNTIME_DIR/kurek.sock`) and HTTP port `8790`. Orchestrates audio capture, VAD auto-submitting, STT, DeepSeek LLM, tools, and TTS. |
-| **C Trigger Client** | [`bin/kurek-trigger`](bin/kurek-trigger) (`bin/kurek-trigger.c`) | Compiled C binary dispatching JSON over UDS (~0.8ms median, `scripts/bench_trigger.py` mock daemon). Auto-spawns daemon if offline. |
+| **C Trigger Client** | [`bin/kurek-trigger`](bin/kurek-trigger) (`bin/kurek-trigger.c`) | Compiled C binary dispatching JSON over UDS (timing: `scripts/bench_trigger.py`, an informational, machine-dependent benchmark against a mock daemon, not end-to-end latency). Auto-spawns daemon if offline. |
 | **Linux CLI & App Launcher** | [`bin/kurek`](bin/kurek) (`~/.local/bin/kurek`) | Single binary control: `kurek [toggle|prompt|status|start|stop]`. Delegates to `kurek-trigger` over UDS. |
 | **systemd User Service** | [`desktop/kurek.service`](desktop/kurek.service) (`~/.config/systemd/user/kurek.service`) | Template unit (`@KUREK_DIR@`) rendered by the installer; journald logging and memory envelope (`MemoryHigh=512M`, `MemoryMax=600M`). |
 | **Hyprland Event Watcher** | [`core/hyprland_watcher.py`](core/hyprland_watcher.py) | Event-driven `.socket2.sock` listener. Parses focus/open/move/workspace into RAM; one `hyprctl` seed at startup + one lazy geometry fetch per vision request. |
