@@ -456,6 +456,7 @@ def test_redaction_env_values_and_code_untouched(monkeypatch: pytest.MonkeyPatch
 class _FakeProc:
     def __init__(self, *args, **kwargs):
         _FakeProc.kwargs = kwargs
+        _FakeProc.args_seen = list(args[0]) if args else list(kwargs.get("args", []))
         self.pid = 999999
         self.returncode = 0
 
@@ -565,3 +566,180 @@ def test_round3_git_repo_config_cannot_spawn_programs(run_workspace: Path) -> No
         res = _exec(run_workspace, cmd)
         assert "Exit: 0" in res, (cmd, res)
     assert not marker.exists()
+
+
+# ---------------------------------------------------------------------------
+# Round 4 regression tests: items (a)-(g)
+# ---------------------------------------------------------------------------
+
+from core import confirm as core_confirm
+
+
+@pytest.mark.parametrize("cmd", [
+    "git show :0:.env", "git show :1:.env", "git show :2:.env", "git show :3:.env",
+    "git show :.env", "git show HEAD:config/api_keys.json",
+    "git show :(top).env", "git log -p -- :(top).env", "git log -p -- :/.env",
+    "git log -p -- :!main.py", "git log -p -- :^main.py", "git diff -- :(glob)**/.env",
+    "git diff -- :(icase).ENV",
+])
+def test_a_git_stage_refs_and_pathspec_magic_refused(run_workspace: Path, cmd: str) -> None:
+    res = _exec(run_workspace, cmd)
+    assert res.startswith("Refused:"), (cmd, res)
+
+
+def test_a_git_plain_object_paths_still_allowed(run_workspace: Path) -> None:
+    res = _exec(run_workspace, "git show HEAD:hello.txt")
+    assert "Exit: 0" in res and "Safe read file" in res
+
+
+@pytest.mark.parametrize("cmd", [
+    "rg --follow x .", "rg -L x .", "rg -nL x .", "grep -R x .", "grep -rR x .",
+    "grep --dereference-recursive x .", "find -L .", "find . -follow", "find -H .",
+    "ls -L .", "ls -lL .", "ls -H .", "stat -L hello.txt", "tree -l .", "tree -al .",
+    "file -L hello.txt",
+])
+def test_c_symlink_following_flags_refused(cmd: str) -> None:
+    ok, _, reason = _validate_command(cmd)
+    assert not ok and reason.startswith("Refused:"), cmd
+
+
+def test_c_grep_r_without_follow_allowed(run_workspace: Path) -> None:
+    res = _exec(run_workspace, "grep -rn Safe .")
+    assert "Exit: 0" in res and "hello.txt" in res
+
+
+@pytest.mark.parametrize("cmd", ["make", "make -n", "make -j4 -k", "just", "just -n", "just --list test"])
+def test_d_bare_make_and_just_refused(cmd: str) -> None:
+    ok, _, reason = _validate_command(cmd)
+    assert not ok and reason.startswith("Refused:"), cmd
+
+
+@pytest.mark.parametrize("cmd", ["make test", "make -n build", "just test", "just --list"])
+def test_d_explicit_targets_allowed(cmd: str) -> None:
+    ok, _, reason = _validate_command(cmd)
+    assert ok, reason
+
+
+def test_e_git_blame_gets_no_textconv(run_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(run_mod.subprocess, "Popen", _FakeProc)
+    _exec(run_workspace, "git blame hello.txt")
+    argv = _FakeProc.args_seen
+    assert argv[1] == "blame" and "--no-textconv" in argv
+    _exec(run_workspace, "git diff HEAD")
+    assert "--no-ext-diff" in _FakeProc.args_seen and "--no-textconv" in _FakeProc.args_seen
+    env = _FakeProc.kwargs["env"]
+    pairs = {env[f"GIT_CONFIG_KEY_{i}"]: env[f"GIT_CONFIG_VALUE_{i}"] for i in range(int(env["GIT_CONFIG_COUNT"]))}
+    assert pairs["core.fsmonitor"] == "false" and pairs["diff.external"] == "" and pairs["core.hooksPath"] == os.devnull
+
+
+@pytest.mark.parametrize("cmd", [
+    "git config --list", "git config -l", "git config --get-regexp .*", "git config --list --show-origin",
+    "git config --get credential.helper", "git config --get http.https://x.extraheader",
+    "git config --get url.https://tok@host/.insteadof", "git config --get-all github.token",
+    "git config --get user.password",
+])
+def test_f_git_config_listing_and_credential_keys_refused(cmd: str) -> None:
+    ok, _, reason = _validate_command(cmd)
+    assert not ok and reason.startswith("Refused:"), cmd
+
+
+@pytest.mark.parametrize("cmd", ["git config --get user.name", "git config --get remote.origin.url"])
+def test_f_git_config_single_safe_key_allowed(cmd: str) -> None:
+    ok, _, reason = _validate_command(cmd)
+    assert ok, reason
+
+
+@pytest.fixture
+def hud(monkeypatch: pytest.MonkeyPatch):
+    shown: list[tuple[str, str]] = []
+    core_confirm.bind(lambda t, d: shown.append((t, d)), lambda: None)
+    monkeypatch.setattr(core_confirm, "_pending", None)
+    yield shown
+    core_confirm.bind(None, None)
+    core_confirm._pending = None
+
+
+def _custom_make(ws: Path) -> Path:
+    marker = ws / "custom_ran"
+    (ws / "Makefile").write_text(f"deploy:\n\ttouch {marker}\n", encoding="utf-8")
+    return marker
+
+
+def test_g_model_confirm_param_is_ignored_and_schema_has_none(run_workspace: Path, hud) -> None:
+    from actions.run import TOOL
+    assert "confirm" not in TOOL["parameters"]["properties"]
+    marker = _custom_make(run_workspace)
+    res = run({"action": "exec", "cmd": "make deploy", "cwd": str(run_workspace), "confirm": True})
+    assert "[CONFIRMATION_PENDING]" in res
+    assert hud and hud[0][0] == "Run 'make deploy'"
+    time.sleep(0.3)
+    assert not marker.exists()  # model's confirm=True did not approve anything
+
+
+def test_g_runs_only_after_human_yes(run_workspace: Path, hud) -> None:
+    marker = _custom_make(run_workspace)
+    res = _exec(run_workspace, "make deploy")
+    assert "[CONFIRMATION_PENDING]" in res and core_confirm.is_pending()
+    # the daemon's shortcut classifies the user's reply and resolves the gate
+    assert daemon.classify_confirmation_reply("yes") is True
+    core_confirm.resolve(True)
+    deadline = time.time() + 10
+    while not marker.exists() and time.time() < deadline:
+        time.sleep(0.05)
+    assert marker.exists()
+    listed = run({"action": "list"})
+    assert "make deploy" in listed
+
+
+def test_g_human_no_cancels(run_workspace: Path, hud) -> None:
+    marker = _custom_make(run_workspace)
+    _exec(run_workspace, "make deploy")
+    core_confirm.resolve(False)
+    time.sleep(0.3)
+    assert not marker.exists() and not core_confirm.is_pending()
+
+
+def test_g_no_interface_means_not_run(run_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    core_confirm.bind(None, None)
+    monkeypatch.setattr(core_confirm, "_pending", None)
+    marker = _custom_make(run_workspace)
+    res = _exec(run_workspace, "make deploy")
+    assert "cannot confirm" in res
+    time.sleep(0.2)
+    assert not marker.exists()
+
+
+def test_g_second_request_does_not_stack(run_workspace: Path, hud) -> None:
+    _custom_make(run_workspace)
+    _exec(run_workspace, "make deploy")
+    res = _exec(run_workspace, "make deploy")
+    assert res.startswith("Refused:") and "already waiting" in res
+    assert len(hud) == 1
+
+
+def test_g_full_daemon_flow_yes_reply_runs_command(run_workspace: Path, hud) -> None:
+    marker = _custom_make(run_workspace)
+    _exec(run_workspace, "make deploy")
+    engine = daemon.KurekEngine.__new__(daemon.KurekEngine)
+    engine._cancel_requested = False
+    reply = engine._handle_text_query_inner("yes", callback=None, mute_speaker=True)
+    assert reply == "Confirmed and executed."
+    deadline = time.time() + 10
+    while not marker.exists() and time.time() < deadline:
+        time.sleep(0.05)
+    assert marker.exists()
+
+
+def test_a_git_glob_pathspec_is_literal(run_workspace: Path) -> None:
+    secret = "glob" + "LeakValue" + "42"
+    (run_workspace / ".envrc").write_text(f"TOKEN_VALUE_X={secret}\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(run_workspace), "add", ".envrc"], check=True)
+    subprocess.run(["git", "-C", str(run_workspace), "commit", "-qm", "envrc"], check=True)
+    for cmd in ("git log -p -- .env*", "git show HEAD -- .e*", "git diff HEAD~1 -- *rc"):
+        res = _exec(run_workspace, cmd)
+        assert secret not in res, (cmd, res)
+
+
+def test_c_tree_depth_flag_still_allowed() -> None:
+    ok, _, reason = _validate_command("tree -L 2 .")
+    assert ok, reason

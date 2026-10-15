@@ -35,7 +35,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from actions.codebase import get_allowed_roots, _is_path_allowed, is_secret_file
+from actions.codebase import get_allowed_roots, _is_path_allowed, is_secret_file, git_safe_env
+from core import confirm as _confirm
 
 # ---------------------------------------------------------------------------
 # Allowlist & Security Configuration
@@ -66,7 +67,7 @@ class RunRecord:
     run_id: str
     cmd: str
     cwd: str
-    status: str  # "running", "completed", "failed", "timed_out", "cancelled", "refused"
+    status: str  # "running", "completed", "failed", "timed_out", "cancelled", "refused", "awaiting_confirmation"
     exit_code: int | None = None
     duration: float = 0.0
     start_time: float = field(default_factory=time.time)
@@ -251,6 +252,9 @@ _GIT_REF_VALUE_FLAGS = frozenset({
     "--list", "-l", "--contains", "--no-contains", "--merged", "--no-merged",
     "--points-at", "--format", "--sort", "--color", "--column",
 })
+_GIT_SECRET_CONFIG_KEY = re.compile(
+    r"(?i)^(credential\.|http\..*extraheader|url\..*\.insteadof|.*(token|password|passwd|secret|apikey|api-key|api_key)$)"
+)
 _GIT_CONFIG_WRITE_FLAGS = frozenset({
     "--add", "--unset", "--unset-all", "--replace-all", "--edit", "-e", "--rename-section",
     "--remove-section", "set", "unset", "rename-section", "remove-section", "edit",
@@ -308,7 +312,13 @@ def _validate_path_args(binary: str, tokens: list[str], base_dir: Path, allowed_
     if binary == "git":
         # git can read secrets that are not on disk: 'HEAD:.env', 'log -p -- .env', '-- config/api_keys.json'.
         for tok, value in _path_candidates(tokens[1:]):
-            spec = value.split(":", 1)[1] if ":" in value else value
+            if value.startswith(":") and len(value) > 1 and value[1] in "(/!^":
+                return (
+                    f"Refused: git pathspec magic '{tok}' is not permitted; "
+                    "pass a plain relative path instead."
+                )
+            # 'rev:path', ':path', ':0:path' .. ':3:path' -> the path is after the last ':'
+            spec = value.rsplit(":", 1)[-1] if ":" in value else value
             if spec and is_secret_file(Path(spec)):
                 return (
                     f"Refused: git argument '{tok}' targets a credential/secret file "
@@ -339,11 +349,15 @@ def _validate_path_args(binary: str, tokens: list[str], base_dir: Path, allowed_
     return ""
 
 
-def _validate_command(cmd_str: str, confirm: bool = False) -> tuple[bool, list[str], str]:
+def _validate_command(cmd_str: str, human_confirmed: bool = False) -> tuple[bool, list[str], str]:
     """
     Parses and checks command against strict allowlist.
     Returns (is_allowed, parsed_tokens, refusal_reason).
+
+    human_confirmed is never taken from the model: _action_exec only passes True to
+    ask "would this be allowed once a human confirms it on the HUD?".
     """
+    confirm = human_confirmed
     cmd_str = (cmd_str or "").strip()
     if not cmd_str:
         return False, [], "Refused: Command string is empty."
@@ -388,6 +402,28 @@ def _validate_command(cmd_str: str, confirm: bool = False) -> tuple[bool, list[s
                     re.fullmatch(r"-[A-Za-z]+", a) and "z" in a[1:]
                 ):
                     return False, [], f"Refused: 'rg {a}' runs external programs and is not permitted."
+        if binary in ("rg", "ripgrep") and any(
+            _flag_base(a) in ("--follow", "-L") or (re.fullmatch(r"-[A-Za-z]+", a) and "L" in a[1:])
+            for a in tokens[1:]
+        ):
+            return False, [], f"Refused: '{binary} --follow/-L' follows symlinks out of the project and is not permitted."
+        if binary == "grep" and any(
+            _flag_base(a) in ("-R", "--dereference-recursive") or (re.fullmatch(r"-[A-Za-z]+", a) and "R" in a[1:])
+            for a in tokens[1:]
+        ):
+            return False, [], "Refused: 'grep -R' follows symlinks out of the project; use 'grep -r'."
+        if binary in ("ls", "stat", "file") and any(
+            _flag_base(a) in ("-L", "-H", "--dereference", "--dereference-command-line",
+                              "--dereference-command-line-symlink-to-dir")
+            or (re.fullmatch(r"-[A-Za-z]+", a) and ("L" in a[1:] or "H" in a[1:]))
+            for a in tokens[1:]
+        ):
+            return False, [], f"Refused: '{binary}' symlink-following options are not permitted."
+        if binary == "tree" and any(
+            _flag_base(a) in ("-l", "--follow") or (re.fullmatch(r"-[A-Za-z]+", a) and "l" in a[1:])
+            for a in tokens[1:]
+        ):
+            return False, [], "Refused: 'tree -l' follows symlinks out of the project and is not permitted."
         if binary in ("tail",) and any(_flag_base(a) in ("-f", "-F", "--follow", "--retry") for a in tokens[1:]):
             return False, [], "Refused: 'tail -f' never exits and is not permitted."
         if binary == "tree" and any(_flag_base(a) in ("-o", "-R") or a.startswith("-o") for a in tokens[1:]):
@@ -407,6 +443,8 @@ def _validate_command(cmd_str: str, confirm: bool = False) -> tuple[bool, list[s
 
     # 3. 'find' safety check
     if binary == "find":
+        if any(a in ("-L", "-H", "-follow") for a in tokens[1:]):
+            return False, [], "Refused: 'find -L/-H/-follow' follows symlinks out of the project and is not permitted."
         for a in tokens[1:]:
             if a in _FIND_BLOCKED:
                 return False, [], f"Refused: 'find' parameter '{a}' executes, deletes, or writes files and is strictly disallowed."
@@ -443,8 +481,17 @@ def _validate_command(cmd_str: str, confirm: bool = False) -> tuple[bool, list[s
             if len(tokens) > 2 and tokens[2].lower() not in ("-v", "--verbose", "get-url"):
                 return False, [], f"Refused: 'git remote {tokens[2]}' is not permitted. Only 'git remote -v' is allowed."
         elif subcmd == "config":
-            if not any(a in ("--get", "--get-all", "--get-regexp", "--list", "-l") for a in tokens[2:]):
-                return False, [], "Refused: 'git config' is only permitted for reading values (--get, --list)."
+            if any(_flag_base(a) in ("--list", "-l", "--get-regexp", "--get-urlmatch", "--show-origin", "--show-scope")
+                   or a in ("list", "get") for a in tokens[2:]):
+                return False, [], (
+                    "Refused: 'git config --list/--get-regexp' can expose credential settings; "
+                    "use 'git config --get <key>' for a specific key."
+                )
+            if not any(a in ("--get", "--get-all") for a in tokens[2:]):
+                return False, [], "Refused: 'git config' is only permitted for reading one key (--get <key>)."
+            keys = [a for a in tokens[2:] if not a.startswith("-")]
+            if any(_GIT_SECRET_CONFIG_KEY.search(k) for k in keys):
+                return False, [], "Refused: that git config key can hold credentials and is not readable."
             if any(_flag_base(a) in _GIT_CONFIG_WRITE_FLAGS for a in tokens[2:]):
                 return False, [], "Refused: 'git config' write options are not permitted."
 
@@ -513,7 +560,7 @@ def _validate_command(cmd_str: str, confirm: bool = False) -> tuple[bool, list[s
                 return True, tokens, ""
             return False, [], (
                 f"Refused: Script target '{target}' is not in the safe build/test allowlist "
-                f"({', '.join(sorted(ALLOWED_BUILD_TARGETS))}). Require explicit confirm=True for custom targets."
+                f"({', '.join(sorted(ALLOWED_BUILD_TARGETS))}). Custom targets need your confirmation on the HUD."
             )
         else:
             return False, [], (
@@ -542,6 +589,11 @@ def _validate_command(cmd_str: str, confirm: bool = False) -> tuple[bool, list[s
 
     # 11. 'make'
     if binary == "make":
+        if not any(not t.startswith("-") for t in tokens[1:]):
+            return False, [], (
+                "Refused: bare 'make' runs the default recipe. Name an explicit target "
+                f"({', '.join(sorted(ALLOWED_BUILD_TARGETS))})."
+            )
         for t in tokens[1:]:
             if t.startswith("-"):
                 if t in _MAKE_SAFE_FLAGS or _MAKE_J_RE.match(t):
@@ -557,12 +609,20 @@ def _validate_command(cmd_str: str, confirm: bool = False) -> tuple[bool, list[s
                     continue
                 return False, [], (
                     f"Refused: 'make {t}' is not in the safe targets allowlist "
-                    f"({', '.join(sorted(ALLOWED_BUILD_TARGETS))}). Require confirm=True for custom targets."
+                    f"({', '.join(sorted(ALLOWED_BUILD_TARGETS))}). Custom targets need your confirmation on the HUD."
                 )
         return True, tokens, ""
 
     # 12. 'just'
     if binary == "just":
+        listing = any(t in ("--list", "-l", "--summary") for t in tokens[1:])
+        if not listing and not any(not t.startswith("-") for t in tokens[1:]):
+            return False, [], (
+                "Refused: bare 'just' runs the default recipe. Name an explicit recipe "
+                f"({', '.join(sorted(ALLOWED_BUILD_TARGETS))}) or use 'just --list'."
+            )
+        if listing and any(not t.startswith("-") for t in tokens[1:]):
+            return False, [], "Refused: 'just --list' takes no recipe arguments."
         for t in tokens[1:]:
             if t.startswith("-"):
                 if t in _JUST_SAFE_FLAGS:
@@ -575,7 +635,7 @@ def _validate_command(cmd_str: str, confirm: bool = False) -> tuple[bool, list[s
                     continue
                 return False, [], (
                     f"Refused: 'just {t}' is not in the safe recipes allowlist "
-                    f"({', '.join(sorted(ALLOWED_BUILD_TARGETS))}). Require confirm=True for custom recipes."
+                    f"({', '.join(sorted(ALLOWED_BUILD_TARGETS))}). Custom recipes need your confirmation on the HUD."
                 )
         return True, tokens, ""
 
@@ -606,7 +666,7 @@ def _kill_process_group(proc: subprocess.Popen, sig: int) -> None:
 # Action 1: Exec
 # ---------------------------------------------------------------------------
 
-def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any, confirm_arg: bool) -> str:
+def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any) -> str:
     global _RUN_COUNTER
 
     allowed_roots = get_allowed_roots()
@@ -625,7 +685,13 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any, confirm_ar
         )
 
     # Validate command
-    is_allowed, tokens, reason = _validate_command(cmd_str, confirm=bool(confirm_arg))
+    is_allowed, tokens, reason = _validate_command(cmd_str)
+    needs_confirmation = False
+    if not is_allowed:
+        # Custom npm/make/just targets are allowed only after a human confirms on the HUD.
+        ok_if_confirmed, confirmed_tokens, _ = _validate_command(cmd_str, human_confirmed=True)
+        if ok_if_confirmed:
+            is_allowed, tokens, needs_confirmation = True, confirmed_tokens, True
 
     with _RUN_LOCK:
         _RUN_COUNTER += 1
@@ -653,6 +719,53 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any, confirm_ar
         _audit_log(rec, reason=path_reason)
         return path_reason
 
+    if needs_confirmation:
+        return _request_human_confirmation(run_id, cmd_str, tokens, cwd_path, timeout_arg)
+
+    return _spawn_run(run_id, cmd_str, tokens, cwd_path, timeout_arg)
+
+
+def _request_human_confirmation(run_id: str, cmd_str: str, tokens: list[str], cwd_path: Path, timeout_arg: Any) -> str:
+    """Park a custom build/test target behind core.confirm (the daemon's yes/no gate).
+
+    The command runs only when a person answers yes (HUD button, or a bare yes/no
+    reply that kurek_daemon resolves via confirm.resolve()). The model has no
+    parameter that can approve it."""
+    if _confirm.pending_title():
+        reason = (
+            f"Refused: another confirmation is already waiting ({_confirm.pending_title()}). "
+            "Ask the user to answer it first."
+        )
+        rec = RunRecord(run_id=run_id, cmd=cmd_str, cwd=str(cwd_path), status="refused", exit_code=-1, output=reason)
+        with _RUN_LOCK:
+            _RUN_HISTORY[run_id] = rec
+        _audit_log(rec, reason=reason)
+        return reason
+
+    rec = RunRecord(run_id=run_id, cmd=cmd_str, cwd=str(cwd_path), status="awaiting_confirmation")
+    with _RUN_LOCK:
+        _RUN_HISTORY[run_id] = rec
+    _audit_log(rec, reason="awaiting human confirmation")
+
+    frozen_tokens = list(tokens)
+
+    def _run_after_confirmation() -> str:
+        return _spawn_run(run_id, cmd_str, frozen_tokens, cwd_path, timeout_arg)
+
+    msg = _confirm.request(
+        key=f"run-{run_id}",
+        title=f"Run '{cmd_str}'",
+        detail=f"in {cwd_path}",
+        run=_run_after_confirmation,
+    )
+    if not msg.startswith("[CONFIRMATION_PENDING]"):
+        rec.status = "refused"
+        rec.output = msg
+        _audit_log(rec, reason="confirmation unavailable")
+    return f"{msg} (run id {run_id}; read its output with action='read' once confirmed)"
+
+
+def _spawn_run(run_id: str, cmd_str: str, tokens: list[str], cwd_path: Path, timeout_arg: Any) -> str:
     exe = shutil.which(tokens[0])
     if exe:
         tokens = [exe] + tokens[1:]
@@ -676,16 +789,13 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any, confirm_ar
     env["npm_config_yes"] = "false"
     env["DEBIAN_FRONTEND"] = "noninteractive"
     # Neutralise repo-config hooks that make read-only git commands spawn programs.
-    for key in ("GIT_EXTERNAL_DIFF", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS", "GIT_CONFIG_PARAMETERS"):
-        env.pop(key, None)
-    git_overrides = [("core.fsmonitor", "false"), ("core.pager", "cat"), ("core.hooksPath", os.devnull),
-                     ("diff.external", ""), ("credential.helper", "")]
-    env["GIT_CONFIG_COUNT"] = str(len(git_overrides))
-    for i, (k, v) in enumerate(git_overrides):
-        env[f"GIT_CONFIG_KEY_{i}"] = k
-        env[f"GIT_CONFIG_VALUE_{i}"] = v
-    if Path(tokens[0]).name == "git" and len(tokens) > 1 and tokens[1].lower() in ("diff", "log", "show"):
-        tokens = tokens[:2] + ["--no-ext-diff", "--no-textconv"] + tokens[2:]
+    env = git_safe_env(env)
+    if Path(tokens[0]).name == "git" and len(tokens) > 1:
+        sub = tokens[1].lower()
+        if sub in ("diff", "log", "show"):
+            tokens = tokens[:2] + ["--no-ext-diff", "--no-textconv"] + tokens[2:]
+        elif sub == "blame":
+            tokens = tokens[:2] + ["--no-textconv"] + tokens[2:]
 
     record = RunRecord(
         run_id=run_id,
@@ -870,8 +980,9 @@ def run(parameters: dict | None = None, **kwargs) -> str:
         cmd = str(params.get("cmd", "")).strip()
         cwd = params.get("cwd")
         timeout = params.get("timeout")
-        confirm = bool(params.get("confirm", False))
-        return _action_exec(cmd, cwd, timeout, confirm)
+        # Any model-supplied 'confirm' value is ignored on purpose: custom targets
+        # go through the human confirmation gate in _request_human_confirmation.
+        return _action_exec(cmd, cwd, timeout)
     elif action == "read":
         run_id = params.get("run_id")
         tail = params.get("tail")
@@ -924,10 +1035,6 @@ TOOL = {
             "timeout": {
                 "type": "INTEGER",
                 "description": "Timeout in seconds (default: 30, max: 300).",
-            },
-            "confirm": {
-                "type": "BOOLEAN",
-                "description": "Explicit confirmation for declared non-destructive project tasks outside default allowlist.",
             },
             "run_id": {
                 "type": "STRING",

@@ -331,3 +331,46 @@ def test_round3_tree_does_not_descend_symlinked_outside_dir(test_workspace: dict
     res = codebase({"action": "tree", "root": str(repo), "depth": 3})
     assert "linkdir/" in res
     assert "hidden_outside_name.txt" not in res
+
+
+# ---------------------------------------------------------------------------
+# Round 4 regression tests: (b) safe git env for status, (c) fallback symlinks
+# ---------------------------------------------------------------------------
+
+
+def test_b_codebase_status_does_not_run_repo_fsmonitor(test_workspace: dict[str, Path], tmp_path: Path) -> None:
+    repo = test_workspace["py"]
+    marker = tmp_path / "fsmonitor_ran"
+    hook = tmp_path / "fsmon.sh"
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    hook.chmod(0o755)
+    subprocess.run(["git", "-C", str(repo), "config", "core.fsmonitor", str(hook)], check=True)
+    # sanity: without the overrides git really would run it
+    subprocess.run(["git", "-C", str(repo), "status", "--porcelain"], capture_output=True)
+    assert marker.exists()
+    marker.unlink()
+    res = codebase({"action": "status", "root": str(repo)})
+    assert "main" in res
+    assert not marker.exists()
+
+
+def test_b_git_safe_env_overrides() -> None:
+    from actions.codebase import git_safe_env
+    env = git_safe_env({"GIT_EXTERNAL_DIFF": "x", "PATH": "/usr/bin"})
+    assert "GIT_EXTERNAL_DIFF" not in env
+    pairs = {env[f"GIT_CONFIG_KEY_{i}"]: env[f"GIT_CONFIG_VALUE_{i}"] for i in range(int(env["GIT_CONFIG_COUNT"]))}
+    assert pairs == {"core.fsmonitor": "false", "core.pager": "cat", "core.hooksPath": os.devnull,
+                     "diff.external": "", "credential.helper": ""}
+
+
+def test_c_fallback_search_skips_symlinks_out_of_roots(test_workspace: dict[str, Path], tmp_path: Path,
+                                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    import actions.codebase as cb
+    outside = tmp_path / "outside_fallback.txt"
+    outside.write_text("OUTSIDE_FALLBACK_MARKER\n", encoding="utf-8")
+    repo = test_workspace["py"]
+    (repo / "looks_local.txt").symlink_to(outside)
+    monkeypatch.setattr(cb.shutil, "which", lambda name: None)
+    res = codebase({"action": "search", "root": str(repo), "query": "OUTSIDE_FALLBACK_MARKER"})
+    assert res.startswith("No matches found"), res
+    assert "looks_local.txt" not in res

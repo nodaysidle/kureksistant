@@ -128,11 +128,11 @@ def get_allowed_roots() -> list[Path]:
 
 
 _SECRET_FILE_NAMES = frozenset({
-    "api_keys.json", ".git-credentials", ".netrc", ".pgpass", "credentials.json",
+    "api_keys.json", ".git-credentials", ".netrc", ".pgpass", "credentials.json", ".envrc",
 })
 # Globs excluded from rg searches; a superset of is_secret_file().
 _SECRET_SEARCH_GLOBS = (
-    ".env", ".env.*", "api_keys.json", ".git-credentials", ".netrc", ".pgpass", "credentials.json",
+    ".env", ".env.*", ".envrc", "api_keys.json", ".git-credentials", ".netrc", ".pgpass", "credentials.json",
     "*.pem", "*.key", "*.p12", "*.pfx", "id_*", ".git",
 )
 _ENV_TEMPLATE_NAMES = frozenset({".env.example", ".env.sample", ".env.template"})
@@ -154,6 +154,32 @@ def is_secret_file(path: Path) -> bool:
     if ".git" in path.parts:
         return True
     return False
+
+
+_GIT_SAFE_OVERRIDES = (
+    ("core.fsmonitor", "false"),
+    ("core.pager", "cat"),
+    ("core.hooksPath", os.devnull),
+    ("diff.external", ""),
+    ("credential.helper", ""),
+)
+_GIT_SCRUB_ENV = ("GIT_EXTERNAL_DIFF", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS", "GIT_CONFIG_PARAMETERS")
+
+
+def git_safe_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """Environment for git children: repo config cannot make read-only git spawn programs."""
+    env = dict(os.environ if base is None else base)
+    for key in _GIT_SCRUB_ENV:
+        env.pop(key, None)
+    env["GIT_PAGER"] = "cat"
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    # Pathspecs are literal: no globs ('.env*') and no magic (':(top)', ':(glob)').
+    env["GIT_LITERAL_PATHSPECS"] = "1"
+    env["GIT_CONFIG_COUNT"] = str(len(_GIT_SAFE_OVERRIDES))
+    for i, (k, v) in enumerate(_GIT_SAFE_OVERRIDES):
+        env[f"GIT_CONFIG_KEY_{i}"] = k
+        env[f"GIT_CONFIG_VALUE_{i}"] = v
+    return env
 
 
 def _redact(text: str) -> str:
@@ -343,7 +369,10 @@ def _action_search(target_dir: Path, query: str, depth: int | None = None) -> st
                 dirs[:] = [d for d in dirs if d not in STANDARD_IGNORES and not d.startswith(".")]
                 for fname in sorted(files):
                     fpath = Path(root) / fname
-                    if _is_binary(fpath) or is_secret_file(fpath) or is_secret_file(fpath.resolve()):
+                    real = fpath.resolve()
+                    if fpath.is_symlink() and not _is_path_allowed(real, get_allowed_roots()):
+                        continue  # symlink leaves the project roots
+                    if _is_binary(fpath) or is_secret_file(fpath) or is_secret_file(real):
                         continue
                     try:
                         content_lines = fpath.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -693,25 +722,25 @@ def _get_repo_git_info(repo_dir: Path) -> dict[str, Any]:
     try:
         b_res = subprocess.run(
             ["git", "-C", str(repo_dir), "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, timeout=2
+            capture_output=True, text=True, timeout=2, env=git_safe_env(),
         )
         info["branch"] = b_res.stdout.strip() or "HEAD"
 
         c_res = subprocess.run(
             ["git", "-C", str(repo_dir), "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=2
+            capture_output=True, text=True, timeout=2, env=git_safe_env(),
         )
         info["commit"] = c_res.stdout.strip() or "unknown"
 
         log_res = subprocess.run(
-            ["git", "-C", str(repo_dir), "log", "-1", "--format=%s (%cr by %an)"],
-            capture_output=True, text=True, timeout=2
+            ["git", "-C", str(repo_dir), "log", "-1", "--no-ext-diff", "--no-textconv", "--format=%s (%cr by %an)"],
+            capture_output=True, text=True, timeout=2, env=git_safe_env(),
         )
         info["last_commit"] = log_res.stdout.strip()
 
         st_res = subprocess.run(
             ["git", "-C", str(repo_dir), "status", "--porcelain"],
-            capture_output=True, text=True, timeout=2
+            capture_output=True, text=True, timeout=2, env=git_safe_env(),
         )
         lines = [l for l in st_res.stdout.splitlines() if l.strip()]
         info["dirty"] = len(lines) > 0
