@@ -85,9 +85,10 @@ It is built and tested first on **Arch Linux with Omarchy / Hyprland**. A macOS 
 Download [`kureksistant-v0.2.1-linux-x86_64.tar.gz`](https://github.com/nodaysidle/kureksistant/releases/download/v0.2.1/kureksistant-v0.2.1-linux-x86_64.tar.gz) and [`SHA256SUMS.txt`](https://github.com/nodaysidle/kureksistant/releases/download/v0.2.1/SHA256SUMS.txt), then:
 
 ```bash
-sha256sum -c --ignore-missing SHA256SUMS.txt   # tarball: 8b3a7a6ec36795d6651a3b38d36b62f5dc1590a5a17abe1a3604ecf8c7a96b33
-tar -xzf kureksistant-v0.2.1-linux-x86_64.tar.gz
-cd kureksistant-0.2.1
+grep ' kureksistant-v0.2.1-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c - && \
+echo '8b3a7a6ec36795d6651a3b38d36b62f5dc1590a5a17abe1a3604ecf8c7a96b33  kureksistant-v0.2.1-linux-x86_64.tar.gz' | sha256sum -c - && \
+tar -xzf kureksistant-v0.2.1-linux-x86_64.tar.gz && \
+cd kureksistant-0.2.1 && \
 ./install_linux.sh
 ```
 
