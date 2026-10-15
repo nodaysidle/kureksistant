@@ -29,7 +29,6 @@ import os
 import re
 import select
 import shlex
-import shutil
 import signal
 import subprocess
 import threading
@@ -41,7 +40,7 @@ from typing import Any
 
 from actions.codebase import (
     get_allowed_roots, _is_path_allowed, is_secret_file, git_safe_env, _rg_env,
-    _SECRET_SEARCH_GLOBS, _dynamic_secret_targets,
+    _SECRET_SEARCH_GLOBS, _dynamic_secret_targets, resolve_trusted_binary, trusted_binary,
 )
 from core import confirm as _confirm
 
@@ -120,6 +119,58 @@ def _audit_log(record: RunRecord, reason: str = "") -> None:
 # Credential & Secret Redaction
 # ---------------------------------------------------------------------------
 
+# Key names whose values are credentials: anything ENDING in one of these words, any
+# case, with any prefix (DB_PASSWORD, client_secret, GITHUB_TOKEN, x-api-key, ...).
+# PASSWORD_MIN_LEN or TOKEN_URL do not end in one, so they are not secret keys.
+_SECRET_KEY_NAME = (
+    r"[A-Za-z0-9_\-]*(?:api[_\-]?key|apikey|secret|token|passw(?:or)?d|passphrase|auth|"
+    r"auth[_\-]?key|private[_\-]?key|access[_\-]?key|credentials?)"
+)
+# key, optional quotes, ':' or '=' (not '==', ':='), then an unquoted value.
+_UNQUOTED_SECRET_ASSIGN = re.compile(
+    rf"""(?i)(?P<key>["']?(?P<name>{_SECRET_KEY_NAME})["']?)(?P<sep>[ \t]*[:=](?!=)[ \t]*)"""
+    r"""(?!\[REDACTED)(?P<val>[^\s"'`,;&)}\]]+)"""
+)
+# Values that are not secrets: null/bool literals, type names and keywords, so code such as
+# 'password=None', 'token: str', 'if password: return' stays readable.
+_NOT_SECRET_VALUES = frozenset({
+    "none", "null", "nil", "true", "false", "undefined", "~", "-",
+    "str", "string", "bytes", "int", "bool", "float", "dict", "list", "any", "optional", "secretstr",
+    "return", "pass", "raise", "not", "and", "or", "in", "is", "lambda", "await", "yield",
+    "if", "else", "continue", "break", "impl", "mut", "const", "let", "var",
+})
+_CODE_RECEIVERS = frozenset({
+    "self", "this", "cls", "os", "config", "cfg", "settings", "args", "opts", "options",
+    "ctx", "env", "process", "request", "req", "props", "state",
+})
+_DOTTED_IDENT = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+")
+
+
+def _redact_unquoted_assignment(m: re.Match) -> str:
+    """Redact the unquoted value of a secret-named key, whatever it looks like
+    (PASSWORD=hunter-two has no digit and is still redacted), unless it is clearly code:
+      - a null/bool literal, type name or keyword (password=None, token: str, if password: return);
+      - a call, subscript or generic (load_key(), os.environ[...], Option<String>);
+      - the key's own name (connect(password=password), {"token": token});
+      - a dotted reference (token = self.token): with spaces around the separator, or
+        starting with a well-known receiver (token=self.token, key=config.api_key).
+    Anything else non-empty is replaced with [REDACTED_SECRET]."""
+    name, sep, val = m.group("name"), m.group("sep"), m.group("val")
+    low = val.lower()
+    keep = (
+        low in _NOT_SECRET_VALUES
+        or any(c in val for c in "([<")
+        or low == name.lower()
+        or low == re.split(r"[_\-]", name.lower())[-1]
+        or (_DOTTED_IDENT.fullmatch(val) is not None
+            and ((sep.startswith((" ", "\t")) and sep.endswith((" ", "\t")))
+                 or val.split(".", 1)[0].lower() in _CODE_RECEIVERS))
+    )
+    if keep:
+        return m.group(0)
+    return f"{m.group('key')}{sep}[REDACTED_SECRET]"
+
+
 _SECRET_PATTERNS = [
     # Provider-specific prefixes first so each key gets the right label.
     (re.compile(r"\bsk-ant-[a-zA-Z0-9_\-]{20,}"), "[REDACTED_ANTHROPIC_KEY]"),
@@ -166,16 +217,13 @@ _SECRET_PATTERNS = [
         r"""(?i)(\b(?:auth|identitytoken|registrytoken|password)\s*[:=]\s*["'])(?!\[REDACTED)([^"'\n]+)(?=["'])"""
     ), r"\1[REDACTED_REGISTRY_AUTH]"),
     (re.compile(r"""(?i)((?:^|[\s:])_auth(?:token)?\s*=\s*)(?!\[REDACTED)(\S+)"""), r"\1[REDACTED_REGISTRY_AUTH]"),
-    # Generic key/value assignments: KEY=value, "api_key": "value", token: value
+    # Quoted credential values (JSON/YAML/TOML/code literals): redact any non-empty value.
     (re.compile(
-        r"""(?i)(["']?[A-Za-z0-9_\-]*(?:api[_\-]?key|apikey|secret|token|passw(?:or)?d|auth[_\-]?key|private[_\-]?key)["']?\s*[:=]\s*["']?)"""
-        r"""(?!\[REDACTED)(?=[A-Za-z0-9_\-+/=.~]*\d)([A-Za-z0-9_\-+/=.~]{8,})(?![\w(])"""
+        rf"""(?i)(["']?{_SECRET_KEY_NAME}["']?\s*[:=]\s*["'])"""
+        r"""(?!\[REDACTED)([^"'\s]+)(?=["'])"""
     ), r"\1[REDACTED_SECRET]"),
-    # Quoted credential values (JSON/YAML/TOML/code literals): redact regardless of digits.
-    (re.compile(
-        r"""(?i)(["']?[A-Za-z0-9_\-]*(?:api[_\-]?key|apikey|secret|token|passw(?:or)?d|auth[_\-]?key|private[_\-]?key)["']?\s*[:=]\s*["'])"""
-        r"""(?!\[REDACTED)([^"'\s]{8,})(?=["'])"""
-    ), r"\1[REDACTED_SECRET]"),
+    # Unquoted values of secret-named keys (KEY=value, key: value): see _redact_unquoted_assignment.
+    (_UNQUOTED_SECRET_ASSIGN, lambda m: _redact_unquoted_assignment(m)),
 ]
 
 # Environment variables whose values are always scrubbed from output.
@@ -826,6 +874,15 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any) -> str:
             _audit_log(rec, reason=reason)
             return reason
 
+    # Refuse an untrusted binary up front instead of asking the human first.
+    _exe, why = resolve_trusted_binary(tokens[0], allow_user_toolchains=needs_confirmation)
+    if not _exe:
+        rec = RunRecord(run_id=run_id, cmd=cmd_str, cwd=str(cwd_path), status="refused", exit_code=-1, output=why)
+        with _RUN_LOCK:
+            _RUN_HISTORY[run_id] = rec
+        _audit_log(rec, reason=why)
+        return why
+
     if needs_confirmation:
         return _request_human_confirmation(run_id, cmd_str, tokens, cwd_path, timeout_arg)
 
@@ -856,14 +913,14 @@ def _tracked_secret_files(cwd_path: Path) -> list[str]:
     """Secret files tracked anywhere in the repo containing cwd (they would appear in patch output)."""
     try:
         top = subprocess.run(
-            ["git", "-C", str(cwd_path), "rev-parse", "--show-toplevel"],
+            [trusted_binary("git") or "/nonexistent/git", "-C", str(cwd_path), "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, timeout=5, env=git_safe_env(),
         )
         if top.returncode != 0:
             return []
         repo_root = top.stdout.strip() or str(cwd_path)
         res = subprocess.run(
-            ["git", "-C", repo_root, "ls-files", "-z"],
+            [trusted_binary("git") or "/nonexistent/git", "-C", repo_root, "ls-files", "-z"],
             capture_output=True, text=True, timeout=5, env=git_safe_env(),
         )
     except Exception:
@@ -895,7 +952,7 @@ def _secret_repo_paths(pieces: list[str], repo_root: Path) -> list[str]:
 def _git_repo_root(cwd_path: Path) -> str | None:
     try:
         top = subprocess.run(
-            ["git", "-C", str(cwd_path), "rev-parse", "--show-toplevel"],
+            [trusted_binary("git") or "/nonexistent/git", "-C", str(cwd_path), "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, timeout=5, env=git_safe_env(),
         )
     except Exception:
@@ -954,7 +1011,7 @@ def _touched_secret_files(tokens: list[str], cwd_path: Path) -> list[str]:
         return []
     try:
         res = subprocess.run(
-            ["git", "-C", str(cwd_path), *cmd, *kept, *forced, *paths],
+            [trusted_binary("git") or "/nonexistent/git", "-C", str(cwd_path), *cmd, *kept, *forced, *paths],
             capture_output=True, timeout=15, env=git_safe_env(),
         )
     except Exception:
@@ -979,7 +1036,7 @@ def _touched_secret_files(tokens: list[str], cwd_path: Path) -> list[str]:
         if spec:
             try:
                 lres = subprocess.run(
-                    ["git", "-C", str(cwd_path), "log", "--no-ext-diff", "--no-textconv", "--no-renames",
+                    [trusted_binary("git") or "/nonexistent/git", "-C", str(cwd_path), "log", "--no-ext-diff", "--no-textconv", "--no-renames",
                      "--no-relative", "--name-only", "-z", "--format=", "--diff-merges=separate", *spec, *paths],
                     capture_output=True, timeout=15, env=git_safe_env(),
                 )
@@ -1016,7 +1073,7 @@ def _request_human_confirmation(run_id: str, cmd_str: str, tokens: list[str], cw
     frozen_tokens = list(tokens)
 
     def _run_after_confirmation() -> str:
-        return _spawn_run(run_id, cmd_str, frozen_tokens, cwd_path, timeout_arg)
+        return _spawn_run(run_id, cmd_str, frozen_tokens, cwd_path, timeout_arg, human_confirmed=True)
 
     msg = _confirm.request(
         key=f"run-{run_id}",
@@ -1179,10 +1236,18 @@ def _with_secret_excludes(tokens: list[str]) -> list[str]:
     return tokens + extra
 
 
-def _spawn_run(run_id: str, cmd_str: str, tokens: list[str], cwd_path: Path, timeout_arg: Any) -> str:
-    exe = shutil.which(tokens[0])
-    if exe:
-        tokens = [exe] + tokens[1:]
+def _spawn_run(run_id: str, cmd_str: str, tokens: list[str], cwd_path: Path, timeout_arg: Any,
+               human_confirmed: bool = False) -> str:
+    # Only trusted dirs (see actions.codebase.SYSTEM_BIN_DIRS): never the first match on
+    # PATH. User toolchain dirs only for commands a human has just said yes to.
+    exe, why = resolve_trusted_binary(tokens[0], allow_user_toolchains=human_confirmed)
+    if not exe:
+        rec = RunRecord(run_id=run_id, cmd=cmd_str, cwd=str(cwd_path), status="refused", exit_code=-1, output=why)
+        with _RUN_LOCK:
+            _RUN_HISTORY[run_id] = rec
+        _audit_log(rec, reason=why)
+        return why
+    tokens = [exe] + tokens[1:]
 
     # Configure timeout
     try:

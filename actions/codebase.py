@@ -235,6 +235,86 @@ _GIT_SCRUB_ENV = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Trusted binary resolution
+# ---------------------------------------------------------------------------
+# Kurek never runs a binary just because it is first on the daemon's PATH: a project
+# (or anything writable on PATH) could plant its own 'rg' or 'cat'. Binaries are looked
+# up only in these fixed directories; PATH only decides their order.
+#
+#   SYSTEM_BIN_DIRS: every binary, including the no-confirmation read tools
+#     (rg, cat, grep, find, ls, head, tail, wc, stat, file, tree, diff, git) and the
+#     git/rg calls Kurek makes itself.
+#   user toolchain dirs (~/.cargo/bin, ~/.local/bin, the venv Kurek itself runs from):
+#     only for commands that already wait for a human yes/no (cargo, pytest, npm, make,
+#     just, go, ...), and only when the dir is NOT inside an allowed project root.
+#
+# A candidate is refused (fail closed, no fallback to a later dir) when its realpath
+# is inside an allowed project root, when the realpath target lies outside the trusted
+# dirs (system symlinks may point into the root-owned /usr tree, e.g. /usr/bin/cargo ->
+# rustup, /usr/bin/pnpm -> /usr/lib/node_modules/...), or when the file or its dir is
+# world-writable. The un-resolved path is what runs, so multi-call binaries that
+# dispatch on argv[0] (rustup's cargo, mise shims) keep working.
+SYSTEM_BIN_DIRS: tuple[str, ...] = ("/usr/bin", "/bin", "/usr/local/bin", "/usr/sbin")
+_SYSTEM_TARGET_PREFIXES: tuple[str, ...] = ("/usr/",)
+
+
+def _user_toolchain_dirs() -> list[str]:
+    import sys
+    dirs = [str(Path.home() / ".cargo" / "bin"), str(Path.home() / ".local" / "bin")]
+    if sys.prefix != getattr(sys, "base_prefix", sys.prefix):  # Kurek's own venv
+        dirs.append(str(Path(sys.prefix) / "bin"))
+    return dirs
+
+
+def _inside_any(path: str, roots: list[Path]) -> bool:
+    p = Path(path)
+    return any(p == r or r in p.parents for r in roots)
+
+
+def resolve_trusted_binary(name: str, allow_user_toolchains: bool = False) -> tuple[str | None, str]:
+    """Return (path, "") for a trusted executable called `name`, or (None, reason)."""
+    if not name or "/" in name or name in (".", ".."):
+        return None, f"Refused: '{name}' must be a bare command name (no paths)."
+    roots = [Path(os.path.realpath(r)) for r in get_allowed_roots()]
+    trusted = [d for d in SYSTEM_BIN_DIRS]
+    if allow_user_toolchains:
+        trusted += [d for d in _user_toolchain_dirs() if not _inside_any(os.path.realpath(d), roots)]
+    trusted_real = {os.path.realpath(d) for d in trusted}
+    # PATH order among trusted dirs (relative or untrusted PATH entries are ignored),
+    # then any trusted dir that is not on PATH.
+    order: list[str] = []
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if entry and os.path.isabs(entry) and os.path.realpath(entry) in trusted_real:
+            if os.path.realpath(entry) not in order:
+                order.append(os.path.realpath(entry))
+    for d in trusted:
+        if os.path.realpath(d) not in order:
+            order.append(os.path.realpath(d))
+    for d in order:
+        cand = os.path.join(d, name)
+        if not (os.path.isfile(cand) and os.access(cand, os.X_OK)):
+            continue
+        real = os.path.realpath(cand)
+        if _inside_any(real, roots) or _inside_any(cand, roots):
+            return None, f"Refused: '{name}' at {cand} resolves into a project root ({real}); not running it."
+        if os.path.dirname(real) not in trusted_real and not real.startswith(_SYSTEM_TARGET_PREFIXES):
+            return None, f"Refused: '{name}' at {cand} points outside the trusted binary dirs ({real})."
+        try:
+            if (os.stat(real).st_mode | os.stat(d).st_mode) & stat.S_IWOTH:
+                return None, f"Refused: '{name}' at {cand} is world-writable."
+        except OSError:
+            return None, f"Refused: could not inspect '{name}' at {cand}."
+        return cand, ""
+    where = ", ".join(trusted)
+    return None, f"Refused: '{name}' was not found in the trusted binary dirs ({where})."
+
+
+def trusted_binary(name: str) -> str | None:
+    """System-dir binary for Kurek's own calls (rg/git), or None."""
+    return resolve_trusted_binary(name)[0]
+
+
 def git_safe_env(base: dict[str, str] | None = None) -> dict[str, str]:
     """Environment for git children: repo config cannot make read-only git spawn programs."""
     env = dict(os.environ if base is None else base)
@@ -438,7 +518,7 @@ def _action_search(target_dir: Path, query: str, depth: int | None = None) -> st
         return "Error: Search query cannot be empty."
 
     query_str = query.strip()
-    rg_path = shutil.which("rg")
+    rg_path = shutil.which("rg") and trusted_binary("rg")
     search_capped = False
 
     if rg_path:
@@ -759,7 +839,7 @@ def _action_read(target_file: Path, lines_arg: str | None = None) -> str:
 
 def _action_find(target_dir: Path, query: str | None = None) -> str:
     pattern = (query or "*").strip()
-    rg_path = shutil.which("rg")
+    rg_path = shutil.which("rg") and trusted_binary("rg")
     matches: list[Path] = []
 
     if rg_path:
@@ -981,25 +1061,25 @@ def _get_repo_git_info(repo_dir: Path) -> dict[str, Any]:
     info: dict[str, Any] = {"is_git": True}
     try:
         b_res = subprocess.run(
-            ["git", "-C", str(repo_dir), "rev-parse", "--abbrev-ref", "HEAD"],
+            [trusted_binary("git") or "/nonexistent/git", "-C", str(repo_dir), "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True, text=True, timeout=2, env=git_safe_env(),
         )
         info["branch"] = b_res.stdout.strip() or "HEAD"
 
         c_res = subprocess.run(
-            ["git", "-C", str(repo_dir), "rev-parse", "HEAD"],
+            [trusted_binary("git") or "/nonexistent/git", "-C", str(repo_dir), "rev-parse", "HEAD"],
             capture_output=True, text=True, timeout=2, env=git_safe_env(),
         )
         info["commit"] = c_res.stdout.strip() or "unknown"
 
         log_res = subprocess.run(
-            ["git", "-C", str(repo_dir), "log", "-1", "--no-ext-diff", "--no-textconv", "--format=%s (%cr by %an)"],
+            [trusted_binary("git") or "/nonexistent/git", "-C", str(repo_dir), "log", "-1", "--no-ext-diff", "--no-textconv", "--format=%s (%cr by %an)"],
             capture_output=True, text=True, timeout=2, env=git_safe_env(),
         )
         info["last_commit"] = log_res.stdout.strip()
 
         st_res = subprocess.run(
-            ["git", "-C", str(repo_dir), "status", "--porcelain"],
+            [trusted_binary("git") or "/nonexistent/git", "-C", str(repo_dir), "status", "--porcelain"],
             capture_output=True, text=True, timeout=2, env=git_safe_env(),
         )
         lines = [l for l in st_res.stdout.splitlines() if l.strip()]

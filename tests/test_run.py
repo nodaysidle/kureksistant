@@ -1258,3 +1258,162 @@ def test_r9_2_diff_across_rename_of_static_secret_blocks(run_workspace: Path) ->
     for cmd in ("git diff HEAD~2 HEAD", "git diff HEAD~2..HEAD", "git diff HEAD~2...HEAD", "git diff HEAD~2"):
         res = _exec(run_workspace, cmd)
         assert res.startswith("Refused:") and secret not in res, (cmd, res)
+
+
+# ---------------------------------------------------------------------------
+# Round 11: binaries resolve only from trusted dirs; secret-named keys redact any value
+# ---------------------------------------------------------------------------
+
+import actions.codebase as _cb  # noqa: E402
+from actions.codebase import resolve_trusted_binary  # noqa: E402
+
+
+def _fake_bin(d: Path, name: str, marker: Path) -> Path:
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / name
+    f.write_text(f"#!/bin/sh\ntouch {marker}\necho HIJACKED\n", encoding="utf-8")
+    f.chmod(0o755)
+    return f
+
+
+def test_r11_project_bin_on_path_is_never_executed(run_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    marker = run_workspace.parent / "hijacked"
+    _fake_bin(run_workspace / "bin", "cat", marker)
+    monkeypatch.setenv("PATH", f"{run_workspace / 'bin'}:/usr/bin:/bin")
+    res = _exec(run_workspace, "cat hello.txt")
+    assert "Safe read file" in res and "HIJACKED" not in res
+    assert not marker.exists()
+    path, _ = resolve_trusted_binary("cat")
+    assert path and Path(path).parent.as_posix() in _cb.SYSTEM_BIN_DIRS
+
+
+@needs_rg
+def test_r11_project_rg_on_path_is_never_executed(run_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    marker = run_workspace.parent / "hijacked_rg"
+    _fake_bin(run_workspace / "tools", "rg", marker)
+    monkeypatch.setenv("PATH", f"{run_workspace / 'tools'}:/usr/bin:/bin")
+    res = _exec(run_workspace, "rg -n Safe hello.txt")
+    assert "Exit: 0" in res and "Safe read file" in res and "HIJACKED" not in res
+    assert not marker.exists()
+
+
+def test_r11_relative_path_entry_and_paths_refused(run_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    marker = run_workspace.parent / "hijacked_rel"
+    _fake_bin(run_workspace / "bin", "cat", marker)
+    monkeypatch.chdir(run_workspace)
+    monkeypatch.setenv("PATH", "bin:.:/usr/bin:/bin")
+    res = _exec(run_workspace, "cat hello.txt")
+    assert "Safe read file" in res and not marker.exists()
+    for name in ("bin/cat", "./cat", "/usr/bin/cat", ".."):
+        path, why = resolve_trusted_binary(name)
+        assert path is None and why.startswith("Refused"), name
+
+
+def test_r11_trusted_dir_symlink_into_project_refused(
+        run_workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    marker = run_workspace.parent / "hijacked_link"
+    fake = _fake_bin(run_workspace / ".hidden", "cat", marker)
+    sysbin = tmp_path / "sysbin"
+    sysbin.mkdir()
+    (sysbin / "cat").symlink_to(fake)
+    monkeypatch.setattr(_cb, "SYSTEM_BIN_DIRS", (str(sysbin),))
+    res = _exec(run_workspace, "cat hello.txt")
+    assert res.startswith("Refused") and "project root" in res
+    assert not marker.exists()
+    # a symlink whose target lies outside every trusted dir is refused too
+    other = _fake_bin(tmp_path / "elsewhere", "cat", marker)
+    (sysbin / "cat").unlink()
+    (sysbin / "cat").symlink_to(other)
+    path, why = resolve_trusted_binary("cat")
+    assert path is None and "outside the trusted" in why
+    res = _exec(run_workspace, "cat hello.txt")
+    assert res.startswith("Refused") and not marker.exists()
+
+
+def test_r11_user_toolchain_dirs_only_for_confirmed_tools(
+        run_workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # HOME is tmp_path (fixture), outside the project root run_workspace.
+    marker = tmp_path / "user_cat_ran"
+    local_bin = tmp_path / ".local" / "bin"
+    _fake_bin(local_bin, "cat", marker)
+    _fake_bin(local_bin, "kurek-only-user-tool", marker)
+    monkeypatch.setenv("PATH", f"{local_bin}:/usr/bin:/bin")
+    # no-confirm read tools: system dirs only
+    path, _ = resolve_trusted_binary("cat")
+    assert path and Path(path).parent.as_posix() in _cb.SYSTEM_BIN_DIRS
+    assert resolve_trusted_binary("kurek-only-user-tool")[0] is None
+    # confirm-gated commands may use ~/.local/bin (PATH order kept)
+    assert resolve_trusted_binary("cat", allow_user_toolchains=True)[0] == str(local_bin / "cat")
+    assert resolve_trusted_binary("kurek-only-user-tool", allow_user_toolchains=True)[0]
+    # ...but not when that dir is inside an allowed project root
+    monkeypatch.setenv("KUREK_CODEBASE_ROOTS", str(tmp_path))
+    assert resolve_trusted_binary("kurek-only-user-tool", allow_user_toolchains=True)[0] is None
+    path, _ = resolve_trusted_binary("cat", allow_user_toolchains=True)
+    assert path and Path(path).parent.as_posix() in _cb.SYSTEM_BIN_DIRS
+    assert not marker.exists()
+
+
+def test_r11_confirmed_make_still_runs_from_system_dir(run_workspace: Path, hud) -> None:
+    marker = _custom_make(run_workspace)
+    if resolve_trusted_binary("make", allow_user_toolchains=True)[0] is None:
+        pytest.skip("make not installed in a trusted dir")
+    res = _exec(run_workspace, "make deploy")
+    assert "[CONFIRMATION_PENDING]" in res
+    core_confirm.resolve(True)
+    deadline = time.time() + 10
+    while not marker.exists() and time.time() < deadline:
+        time.sleep(0.05)
+    assert marker.exists()
+
+
+@pytest.mark.parametrize("line", [
+    "PASSWORD=hunter-two",
+    "DB_PASSWORD=hunter-two",
+    "export db_passwd=letmein",
+    "Client_Secret=abcdef",
+    "password: hunter-two",
+    "api_key=xyz",
+    "APIKEY: shortkey",
+    "--token=abc",
+    "https://x.example/cb?token=abc&next=1",
+    "PASSWORD=hunter.two",
+    "Auth: letmein",
+    "aws_credentials=foo-bar",
+    "PRIVATE_KEY=abc",
+    'password = "pw"',
+    '{"secret": "s3"}',
+])
+def test_r11_secret_named_keys_redact_any_value(line: str) -> None:
+    out = _redact_secrets(line)
+    assert "[REDACTED" in out, (line, out)
+    for leaked in ("hunter-two", "letmein", "abcdef", "xyz", "shortkey", "=abc", "hunter.two", "foo-bar",
+                   '"pw"', '"s3"'):
+        if leaked in line:
+            assert leaked not in out, (line, out)
+
+
+@pytest.mark.parametrize("code", [
+    "token = self.token",
+    "token=self.token",
+    "key = config.api_key",
+    "password=None",
+    "password=null",
+    'password=""',
+    "PASSWORD_MIN_LEN=8",
+    "TOKEN_URL=https://example.invalid/oauth",
+    "max_tokens=4096",
+    "author=Alan",
+    "if password:",
+    "if not password: raise ValueError('x')",
+    "api_key = load_key()",
+    "token: string;",
+    "password: Optional[str] = None",
+    "connect(host, password=password)",
+    '{"token": token}',
+    "if password == other:",
+    "(password := getpass())",
+    'let token = env::var("T")',
+    "secret: Option<String>,",
+])
+def test_r11_code_and_non_values_stay_readable(code: str) -> None:
+    assert _redact_secrets(code) == code
