@@ -132,11 +132,11 @@ _SECRET_FILE_NAMES = frozenset({
 })
 # Globs excluded from rg searches; a superset of is_secret_file().
 _SECRET_SEARCH_GLOBS = (
-    ".env", ".env.*", ".envrc", "api_keys.json", ".git-credentials", ".netrc", ".pgpass", "credentials.json",
+    ".env", ".env*", "api_keys.json", ".git-credentials", ".netrc", ".pgpass", "credentials.json",
     "*.pem", "*.key", "*.p12", "*.pfx", "id_*", ".git",
 )
 _ENV_TEMPLATE_NAMES = frozenset({".env.example", ".env.sample", ".env.template"})
-_SSH_KEY_RE = re.compile(r"^id_[a-z0-9]+$")
+_SSH_KEY_RE = re.compile(r"^id_[a-z0-9_\-]+$")
 
 
 def is_secret_file(path: Path) -> bool:
@@ -145,7 +145,7 @@ def is_secret_file(path: Path) -> bool:
     lower = name.lower()
     if lower in _SECRET_FILE_NAMES:
         return True
-    if lower == ".env" or (lower.startswith(".env.") and lower not in _ENV_TEMPLATE_NAMES):
+    if lower.startswith(".env") and lower not in _ENV_TEMPLATE_NAMES:
         return True
     if lower.endswith((".pem", ".key", ".p12", ".pfx")):
         return True
@@ -163,7 +163,13 @@ _GIT_SAFE_OVERRIDES = (
     ("diff.external", ""),
     ("credential.helper", ""),
 )
-_GIT_SCRUB_ENV = ("GIT_EXTERNAL_DIFF", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS", "GIT_CONFIG_PARAMETERS")
+_GIT_SCRUB_ENV = (
+    "GIT_EXTERNAL_DIFF", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS", "GIT_CONFIG_PARAMETERS",
+    # repository redirection: git must operate on the repo at cwd, nothing else
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE",
+    "GIT_CONFIG", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM",
+)
 
 
 def git_safe_env(base: dict[str, str] | None = None) -> dict[str, str]:
@@ -680,6 +686,10 @@ def _action_outline(target: Path) -> str:
             dirs[:] = [d for d in dirs if d not in STANDARD_IGNORES and not d.startswith(".")]
             for fname in sorted(files):
                 fpath = Path(root) / fname
+                if is_secret_file(fpath) or is_secret_file(fpath.resolve()):
+                    continue
+                if fpath.is_symlink() and not _is_path_allowed(fpath.resolve(), get_allowed_roots()):
+                    continue
                 if fpath.suffix.lower() in source_exts:
                     syms = _outline_file(fpath)
                     if syms:

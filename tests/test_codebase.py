@@ -374,3 +374,31 @@ def test_c_fallback_search_skips_symlinks_out_of_roots(test_workspace: dict[str,
     res = codebase({"action": "search", "root": str(repo), "query": "OUTSIDE_FALLBACK_MARKER"})
     assert res.startswith("No matches found"), res
     assert "looks_local.txt" not in res
+
+
+def test_followup_git_safe_env_scrubs_repo_redirection() -> None:
+    from actions.codebase import git_safe_env
+    env = git_safe_env({"GIT_DIR": "/elsewhere/.git", "GIT_WORK_TREE": "/elsewhere",
+                        "GIT_INDEX_FILE": "x", "GIT_OBJECT_DIRECTORY": "x",
+                        "GIT_ALTERNATE_OBJECT_DIRECTORIES": "x", "GIT_COMMON_DIR": "x"})
+    for k in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+              "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR"):
+        assert k not in env
+
+
+@pytest.mark.parametrize("name", [".env_local", ".env-secret", ".envlocal", "id_ed25519_sk", "id_rsa_backup"])
+def test_followup_more_secret_name_variants(secret_repo: Path, name: str) -> None:
+    (secret_repo / name).write_text(f"K={FAKE_DS}\n", encoding="utf-8")
+    assert codebase({"action": "read", "root": str(secret_repo), "path": name}).startswith("Refused")
+    res = codebase({"action": "search", "root": str(secret_repo), "query": "K="})
+    assert FAKE_DS not in res and name not in res
+
+
+def test_followup_outline_dir_skips_secret_and_outside_symlinks(test_workspace: dict[str, Path], tmp_path: Path) -> None:
+    repo = test_workspace["py"]
+    outside = tmp_path / "outside_outline.py"
+    outside.write_text("def outside_only_symbol():\n    pass\n", encoding="utf-8")
+    (repo / "linked.py").symlink_to(outside)
+    res = codebase({"action": "outline", "root": str(repo), "path": "."})
+    assert "outside_only_symbol" not in res
+    assert "ServiceEngine" in res

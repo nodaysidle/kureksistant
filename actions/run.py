@@ -719,10 +719,59 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any) -> str:
         _audit_log(rec, reason=path_reason)
         return path_reason
 
+    if Path(tokens[0]).name == "git" and _git_emits_patches(tokens):
+        tracked = _tracked_secret_files(cwd_path)
+        if tracked:
+            reason = (
+                "Refused: this repository tracks credential files "
+                f"({', '.join(tracked[:5])}{', ...' if len(tracked) > 5 else ''}), so patch output "
+                "(git diff/show/log -p) could print them. Use --stat/--name-only on git log, "
+                "or untrack those files."
+            )
+            rec = RunRecord(run_id=run_id, cmd=cmd_str, cwd=str(cwd_path), status="refused", exit_code=-1, output=reason)
+            with _RUN_LOCK:
+                _RUN_HISTORY[run_id] = rec
+            _audit_log(rec, reason=reason)
+            return reason
+
     if needs_confirmation:
         return _request_human_confirmation(run_id, cmd_str, tokens, cwd_path, timeout_arg)
 
     return _spawn_run(run_id, cmd_str, tokens, cwd_path, timeout_arg)
+
+
+_GIT_LOG_PATCH_FLAGS = frozenset({
+    "-p", "-u", "--patch", "--patch-with-stat", "--patch-with-raw", "--cc", "-c", "-m",
+    "--full-diff", "--diff-merges", "-L", "--remerge-diff", "--word-diff", "--color-words",
+})
+
+
+def _git_emits_patches(tokens: list[str]) -> bool:
+    if len(tokens) < 2:
+        return False
+    sub = tokens[1].lower()
+    args = tokens[2:]
+    if sub in ("diff", "show"):
+        return True
+    if sub == "stash":
+        return any(_flag_base(a) in ("-p", "--patch") for a in args)
+    if sub == "log":
+        return any(_flag_base(a) in _GIT_LOG_PATCH_FLAGS or a.startswith("-L") for a in args)
+    return False
+
+
+def _tracked_secret_files(cwd_path: Path) -> list[str]:
+    """Secret files git tracks in the repo at cwd (they would appear in patch output)."""
+    try:
+        res = subprocess.run(
+            ["git", "-C", str(cwd_path), "ls-files", "-z"],
+            capture_output=True, text=True, timeout=5, env=git_safe_env(),
+        )
+    except Exception:
+        return ["(could not list tracked files)"]
+    if res.returncode != 0:
+        return []
+    return [f for f in res.stdout.split("\0") if f and is_secret_file(Path(f))]
 
 
 def _request_human_confirmation(run_id: str, cmd_str: str, tokens: list[str], cwd_path: Path, timeout_arg: Any) -> str:

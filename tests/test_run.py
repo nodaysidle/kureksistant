@@ -621,6 +621,7 @@ def test_d_explicit_targets_allowed(cmd: str) -> None:
 
 
 def test_e_git_blame_gets_no_textconv(run_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(run_mod, "_tracked_secret_files", lambda cwd: [])
     monkeypatch.setattr(run_mod.subprocess, "Popen", _FakeProc)
     _exec(run_workspace, "git blame hello.txt")
     argv = _FakeProc.args_seen
@@ -743,3 +744,22 @@ def test_a_git_glob_pathspec_is_literal(run_workspace: Path) -> None:
 def test_c_tree_depth_flag_still_allowed() -> None:
     ok, _, reason = _validate_command("tree -L 2 .")
     assert ok, reason
+
+
+def test_followup_tracked_secret_files_block_patch_output(run_workspace: Path) -> None:
+    secret = "tracked" + "SecretValue" + "77"
+    (run_workspace / ".env").write_text(f"X={secret}\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(run_workspace), "add", "-f", ".env"], check=True)
+    subprocess.run(["git", "-C", str(run_workspace), "commit", "-qm", "oops"], check=True)
+    for cmd in ("git show HEAD", "git diff HEAD~1", "git log -p", "git log --patch -n 1",
+                "git show --stat HEAD", "git log -L1,1:hello.txt"):
+        res = _exec(run_workspace, cmd)
+        assert res.startswith("Refused:"), (cmd, res)
+        assert secret not in res
+    res = _exec(run_workspace, "git log --oneline -n 2")
+    assert "Exit: 0" in res and "oops" in res
+
+
+def test_followup_patch_output_allowed_without_tracked_secrets(run_workspace: Path) -> None:
+    res = _exec(run_workspace, "git show HEAD")
+    assert "Exit: 0" in res and "Safe read file" in res
