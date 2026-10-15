@@ -6,6 +6,7 @@ stop functionality via $XDG_RUNTIME_DIR/kurek_mpv.sock.
 """
 from __future__ import annotations
 
+import atexit
 import glob
 import json
 import os
@@ -59,6 +60,11 @@ class MpvPipeWireSink:
             if self._is_socket_alive():
                 return True
 
+            # Reap a previous mpv that has already exited so dead Popen objects
+            # (and their zombies) don't accumulate across restarts.
+            if self._proc is not None and self._proc.poll() is not None:
+                self._proc = None
+
             if not shutil.which("mpv"):
                 return False
 
@@ -78,12 +84,19 @@ class MpvPipeWireSink:
                 f"--input-ipc-server={self.sock_path}",
             ]
             try:
+                # Deliberately NO start_new_session=True. That detaches mpv into
+                # its own session/process group, so any group-kill of the daemon
+                # (scripts/verify.sh cleanup, Ctrl-C in a foreground run) missed
+                # it; combined with --idle it then lived forever. Observed: 20
+                # orphaned mpv processes (~250 MB) accumulated over 21 h, one per
+                # verify.sh run. Staying in the daemon's group means the group
+                # kill reaps it, and systemd's cgroup kill already covered the
+                # service case.
                 self._proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     stdin=subprocess.DEVNULL,
-                    start_new_session=True,
                 )
                 # Wait briefly for socket to become ready
                 for _ in range(25):
@@ -96,8 +109,16 @@ class MpvPipeWireSink:
 
             return self._is_socket_alive()
 
-    def _send_command(self, cmd: list) -> bool:
-        if not self.ensure_running():
+    def _send_command(self, cmd: list, ensure: bool = True) -> bool:
+        """Send an IPC command to the mpv process.
+
+        ensure=True (the default) starts mpv on demand. Pass ensure=False for
+        teardown, where respawning mpv would defeat the purpose.
+        """
+        if ensure:
+            if not self.ensure_running():
+                return False
+        elif not self.sock_path.exists():
             return False
         try:
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -176,13 +197,30 @@ class MpvPipeWireSink:
             return False
 
     def shutdown(self):
-        """Shut down the background mpv process."""
-        self._send_command(["quit"])
-        if self._proc:
+        """Shut down the background mpv process and remove its socket.
+
+        Idempotent, and safe to call from an atexit hook. Uses ensure=False so
+        teardown can never respawn mpv.
+        """
+        if self._proc is not None:
+            self._send_command(["quit"], ensure=False)
             try:
                 self._proc.terminate()
+                self._proc.wait(timeout=2)
             except Exception:
-                pass
+                try:
+                    self._proc.kill()
+                    self._proc.wait(timeout=2)
+                except Exception:
+                    pass
+            self._proc = None
+
+        # Remove the socket we own so the next start is clean.
+        try:
+            if self.sock_path.exists():
+                self.sock_path.unlink()
+        except Exception:
+            pass
 
 
 _GLOBAL_SINK: MpvPipeWireSink | None = None
@@ -192,4 +230,8 @@ def get_mpv_sink() -> MpvPipeWireSink:
     global _GLOBAL_SINK
     if _GLOBAL_SINK is None:
         _GLOBAL_SINK = MpvPipeWireSink()
+        # Best-effort teardown on a clean interpreter exit (dev runs, tests).
+        # atexit does not run on SIGTERM/SIGKILL, so this complements rather
+        # than replaces the process-group / cgroup kill that reaps mpv.
+        atexit.register(_GLOBAL_SINK.shutdown)
     return _GLOBAL_SINK
