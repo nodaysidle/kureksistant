@@ -41,6 +41,7 @@ from typing import Any
 from actions.codebase import (
     get_allowed_roots, _is_path_allowed, is_secret_file, git_safe_env, _rg_env,
     _SECRET_SEARCH_GLOBS, _dynamic_secret_targets, resolve_trusted_binary, trusted_binary,
+    BINARY_NOT_FOUND,
 )
 from core import confirm as _confirm
 
@@ -874,9 +875,11 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any) -> str:
             _audit_log(rec, reason=reason)
             return reason
 
-    # Refuse an untrusted binary up front instead of asking the human first.
+    # Refuse an untrusted binary (planted in a project, symlinked out of the trusted dirs)
+    # up front instead of asking the human first. A binary that is simply not installed
+    # is reported by _spawn_run, which resolves again (fail closed) after the yes.
     _exe, why = resolve_trusted_binary(tokens[0], allow_user_toolchains=needs_confirmation)
-    if not _exe:
+    if not _exe and BINARY_NOT_FOUND not in why:
         rec = RunRecord(run_id=run_id, cmd=cmd_str, cwd=str(cwd_path), status="refused", exit_code=-1, output=why)
         with _RUN_LOCK:
             _RUN_HISTORY[run_id] = rec

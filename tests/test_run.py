@@ -1337,6 +1337,7 @@ def test_r11_user_toolchain_dirs_only_for_confirmed_tools(
     local_bin = tmp_path / ".local" / "bin"
     _fake_bin(local_bin, "cat", marker)
     _fake_bin(local_bin, "kurek-only-user-tool", marker)
+    local_bin.chmod(0o755)  # independent of the runner's umask (world-writable dirs are refused)
     monkeypatch.setenv("PATH", f"{local_bin}:/usr/bin:/bin")
     # no-confirm read tools: system dirs only
     path, _ = resolve_trusted_binary("cat")
@@ -1417,3 +1418,19 @@ def test_r11_secret_named_keys_redact_any_value(line: str) -> None:
 ])
 def test_r11_code_and_non_values_stay_readable(code: str) -> None:
     assert _redact_secrets(code) == code
+
+
+def test_r11_missing_binary_still_asks_then_refuses_after_yes(
+        run_workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hud) -> None:
+    # e.g. CI: pytest lives in the runner's toolcache, outside every trusted dir
+    marker = _custom_make(run_workspace)
+    empty = tmp_path / "emptybin"
+    empty.mkdir()
+    monkeypatch.setattr(_cb, "SYSTEM_BIN_DIRS", (str(empty),))
+    monkeypatch.setattr(_cb, "_user_toolchain_dirs", lambda: [])
+    res = _exec(run_workspace, "make deploy")
+    assert "[CONFIRMATION_PENDING]" in res, res
+    core_confirm.resolve(True)
+    time.sleep(0.5)
+    assert not marker.exists()
+    assert "not found in the trusted binary dirs" in run({"action": "read", "run_id": res.split("run id ")[1].split(";")[0]})

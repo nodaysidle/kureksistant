@@ -257,6 +257,7 @@ _GIT_SCRUB_ENV = (
 # dispatch on argv[0] (rustup's cargo, mise shims) keep working.
 SYSTEM_BIN_DIRS: tuple[str, ...] = ("/usr/bin", "/bin", "/usr/local/bin", "/usr/sbin")
 _SYSTEM_TARGET_PREFIXES: tuple[str, ...] = ("/usr/",)
+BINARY_NOT_FOUND = "was not found in the trusted binary dirs"
 
 
 def _user_toolchain_dirs() -> list[str]:
@@ -307,7 +308,7 @@ def resolve_trusted_binary(name: str, allow_user_toolchains: bool = False) -> tu
             return None, f"Refused: could not inspect '{name}' at {cand}."
         return cand, ""
     where = ", ".join(trusted)
-    return None, f"Refused: '{name}' was not found in the trusted binary dirs ({where})."
+    return None, f"Refused: '{name}' {BINARY_NOT_FOUND} ({where})."
 
 
 def trusted_binary(name: str) -> str | None:
