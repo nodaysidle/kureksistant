@@ -183,3 +183,324 @@ def test_no_hardcoded_home_arch() -> None:
     source_file = root / "actions" / "run.py"
     text = source_file.read_text(encoding="utf-8")
     assert "/home/arch" not in text
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the ab1420a security review (one per PoC)
+# Fake secrets are assembled at runtime so secret scanners don't flag the source.
+# ---------------------------------------------------------------------------
+
+import signal
+
+from actions import run as run_mod
+
+FAKE_GOOGLE = "AI" + "za" + "Q" * 35
+FAKE_TS = "ts" + "key-auth-" + "k" * 12 + "-" + "Z9" * 10
+FAKE_PROJ = "sk-" + "proj-" + "P1" * 16
+FAKE_ANT = "sk-" + "ant-" + "A1" * 16
+FAKE_PLAIN = "plain" + "FAKEsecretvalue9999"
+
+
+def _exec(ws: Path, cmd: str, **kw) -> str:
+    return run({"action": "exec", "cmd": cmd, "cwd": str(ws), **kw})
+
+
+@pytest.mark.parametrize("cmd", [
+    "rg --pre=rm x victim.txt",
+    "rg --pre rm x victim.txt",
+    "rg --pre-glob '*' --pre=rm x victim.txt",
+    "rg -z x victim.txt",
+    "rg -nz x victim.txt",
+    "rg --search-zip x victim.txt",
+    "rg --hostname-bin=rm x victim.txt",
+])
+def test_rg_pre_refused(run_workspace: Path, cmd: str) -> None:
+    victim = run_workspace / "victim.txt"
+    victim.write_text("x\n", encoding="utf-8")
+    res = _exec(run_workspace, cmd)
+    assert res.startswith("Refused:"), res
+    assert victim.exists()
+
+
+def test_rg_normal_search_still_works(run_workspace: Path) -> None:
+    res = _exec(run_workspace, "rg -n Safe hello.txt")
+    assert "Exit: 0" in res and "Safe read file" in res
+
+
+@pytest.mark.parametrize("cmd", [
+    "make -fMk test",
+    "make -f Mk test",
+    "make --file=Mk test",
+    "make --makefile=Mk test",
+    "make --eval=test: test",
+    "make -C sub test",
+    "make --directory=sub test",
+    "make -I sub test",
+    "make -E x test",
+    "make CC=touch test",
+    "just --justfile Mk test",
+    "just --shell sh test",
+])
+def test_make_and_just_dangerous_flags_refused(run_workspace: Path, cmd: str) -> None:
+    marker = run_workspace / "make_pwned"
+    (run_workspace / "Mk").write_text(f"test:\n\ttouch {marker}\n", encoding="utf-8")
+    (run_workspace / "sub").mkdir(exist_ok=True)
+    res = _exec(run_workspace, cmd)
+    assert res.startswith("Refused:"), res
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("cmd", ["make test", "make -n test", "make -j4 -k test", "make -s build"])
+def test_make_safe_forms_validate(cmd: str) -> None:
+    ok, _, reason = _validate_command(cmd)
+    assert ok, reason
+
+
+@pytest.mark.parametrize("cmd", [
+    "cargo build --config 'build.rustc-wrapper=\"/tmp/wrap.sh\"'",
+    "cargo build --config=build.rustc-wrapper=x",
+    "cargo test --target-dir /tmp/elsewhere",
+    "cargo check --target-dir=/tmp/elsewhere",
+    "cargo build -Zunstable-options",
+    "cargo build -Z unstable-options",
+    "cargo test --manifest-path /tmp/x/Cargo.toml",
+    "cargo +nightly build",
+])
+def test_cargo_config_and_target_dir_refused(cmd: str) -> None:
+    ok, _, reason = _validate_command(cmd)
+    assert not ok and reason.startswith("Refused:"), cmd
+
+
+@pytest.mark.parametrize("cmd", ["cargo test", "cargo build --release", "cargo test -- --nocapture --config x"])
+def test_cargo_safe_forms_validate(cmd: str) -> None:
+    ok, _, reason = _validate_command(cmd)
+    assert ok, reason
+
+
+@pytest.mark.parametrize("argv0", ["x/cat", "./x/cat", "/usr/bin/cat", "~/cat", "../cat"])
+def test_path_qualified_argv0_refused(run_workspace: Path, argv0: str) -> None:
+    marker = run_workspace / "arbitrary_ran"
+    (run_workspace / "x").mkdir(exist_ok=True)
+    script = run_workspace / "x" / "cat"
+    script.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    script.chmod(0o755)
+    res = _exec(run_workspace, f"{argv0} hello.txt")
+    assert res.startswith("Refused:"), res
+    assert "Path-qualified" in res
+    assert not marker.exists()
+
+
+def test_bare_binary_runs_from_path(run_workspace: Path) -> None:
+    res = _exec(run_workspace, "cat hello.txt")
+    assert "Exit: 0" in res and "Safe read file line 1" in res
+
+
+@pytest.mark.parametrize("cmd", [
+    "git diff --output out.txt HEAD",
+    "git diff --output=out.txt HEAD",
+    "git log -o out.txt",
+    "git show --output out.txt HEAD",
+    "git diff --no-index hello.txt hello.txt",
+    "git blame --contents hello.txt hello.txt",
+    "git diff --ext-diff",
+])
+def test_git_output_and_out_of_repo_reads_refused(run_workspace: Path, cmd: str) -> None:
+    res = _exec(run_workspace, cmd)
+    assert res.startswith("Refused:"), res
+    assert not (run_workspace / "out.txt").exists()
+
+
+def _git_refs(ws: Path) -> tuple[str, str, str]:
+    def g(*a: str) -> str:
+        return subprocess.run(["git", "-C", str(ws), *a], capture_output=True, text=True).stdout
+    return g("branch", "--list"), g("tag", "--list"), g("stash", "list")
+
+
+@pytest.mark.parametrize("cmd", [
+    "git branch newbranch",
+    "git branch -D main",
+    "git branch -d main",
+    "git branch --delete main",
+    "git branch -m renamed",
+    "git branch -M main renamed",
+    "git branch -c main copied",
+    "git branch -f main HEAD",
+    "git branch -a newbranch",
+    "git branch -u origin/main",
+    "git branch -vD main",
+    "git tag v9.9.9",
+    "git tag -d v1",
+    "git tag --delete v1",
+    "git tag -a v2 -m msg",
+    "git tag -f v1",
+    "git tag -s v3",
+    "git stash",
+    "git stash push",
+    "git stash pop",
+    "git stash drop",
+    "git stash clear",
+    "git config --add user.name x --get",
+    "git config --unset user.name --get",
+])
+def test_git_ref_and_stash_mutations_refused(run_workspace: Path, cmd: str) -> None:
+    subprocess.run(["git", "-C", str(run_workspace), "tag", "v1"], check=True)
+    (run_workspace / "hello.txt").write_text("dirty\n", encoding="utf-8")
+    before = _git_refs(run_workspace)
+    res = _exec(run_workspace, cmd)
+    assert res.startswith("Refused:"), res
+    assert _git_refs(run_workspace) == before
+    assert (run_workspace / "hello.txt").read_text(encoding="utf-8") == "dirty\n"
+
+
+@pytest.mark.parametrize("cmd", [
+    "git branch", "git branch -a", "git branch -vv", "git branch --list ma*",
+    "git branch --contains HEAD", "git branch --show-current",
+    "git tag", "git tag -l", "git tag --list v*", "git tag --points-at HEAD",
+    "git stash list", "git stash show", "git config --get user.name",
+])
+def test_git_read_only_forms_still_allowed(cmd: str) -> None:
+    ok, _, reason = _validate_command(cmd)
+    assert ok, reason
+
+
+@pytest.mark.parametrize("flag", ["-fprint", "-fprint0", "-fls", "-delete", "-exec", "-execdir", "-ok", "-okdir"])
+def test_find_write_and_exec_predicates_refused(run_workspace: Path, flag: str) -> None:
+    out = run_workspace / "find_out.txt"
+    res = _exec(run_workspace, f"find . -maxdepth 0 {flag} {out}")
+    assert res.startswith("Refused:"), res
+    assert not out.exists()
+
+
+def test_find_fprintf_refused(run_workspace: Path) -> None:
+    out = run_workspace / "find_out.txt"
+    res = _exec(run_workspace, f"find . -maxdepth 0 -fprintf {out} %p")
+    assert res.startswith("Refused:"), res
+    assert not out.exists()
+
+
+@pytest.fixture
+def outside_secret(tmp_path: Path) -> Path:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    f = outside / "secret.txt"
+    f.write_text("OUTSIDE_ROOT_CONTENT\n", encoding="utf-8")
+    return f
+
+
+def test_out_of_root_path_args_refused(run_workspace: Path, outside_secret: Path) -> None:
+    (run_workspace / "link_out").symlink_to(outside_secret)
+    (run_workspace / "dirlink").symlink_to(outside_secret.parent, target_is_directory=True)
+    cmds = [
+        f"cat {outside_secret}",
+        "cat ../../outside/secret.txt",
+        "cat link_out",
+        "head -n 1 link_out",
+        "tail link_out",
+        "grep OUTSIDE link_out",
+        f"rg OUTSIDE {outside_secret.parent}",
+        "rg OUTSIDE dirlink",
+        "ls dirlink",
+        f"find {outside_secret.parent}",
+        "stat link_out",
+        "wc -l link_out",
+        "diff hello.txt link_out",
+        "cat ~/outside/secret.txt",
+    ]
+    for cmd in cmds:
+        res = _exec(run_workspace, cmd)
+        assert res.startswith("Refused:"), (cmd, res)
+        assert "OUTSIDE_ROOT_CONTENT" not in res, cmd
+
+
+def test_run_cat_secret_files_refused(run_workspace: Path) -> None:
+    (run_workspace / ".env").write_text(f"GEMINI_API_KEY={FAKE_GOOGLE}\n", encoding="utf-8")
+    (run_workspace / "config").mkdir()
+    (run_workspace / "config" / "api_keys.json").write_text('{"k": "v"}', encoding="utf-8")
+    (run_workspace / "notes.txt").symlink_to(run_workspace / ".env")
+    for cmd in ["cat .env", "head .env", "grep KEY .env", "cat config/api_keys.json", "cat notes.txt"]:
+        res = _exec(run_workspace, cmd)
+        assert res.startswith("Refused:"), (cmd, res)
+        assert FAKE_GOOGLE not in res
+
+
+def test_redaction_covers_reviewed_formats(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k in list(os.environ):
+        if k.endswith(("_API_KEY", "_TOKEN", "_AUTHKEY")):
+            monkeypatch.delenv(k, raising=False)
+    raw = (
+        f"GEMINI_API_KEY={FAKE_GOOGLE}\n"
+        f"TS_AUTHKEY={FAKE_TS}\n"
+        f'{{"api_key": "{FAKE_PLAIN}"}}\n'
+        f"OPENAI={FAKE_PROJ}\n"
+        f"ANTHROPIC={FAKE_ANT}\n"
+    )
+    out = _redact_secrets(raw)
+    for secret in (FAKE_GOOGLE, FAKE_TS, FAKE_PLAIN, FAKE_PROJ, FAKE_ANT):
+        assert secret not in out
+    assert "[REDACTED_GOOGLE_KEY]" in out
+    assert "[REDACTED_TAILSCALE_KEY]" in out
+    assert "[REDACTED_OPENAI_KEY]" in out
+    assert "[REDACTED_ANTHROPIC_KEY]" in out
+    assert "DEEPSEEK" not in out  # sk-proj / sk-ant are no longer labelled DeepSeek
+
+
+def test_redaction_env_values_and_code_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "gem-value-1234567890")
+    monkeypatch.setenv("SOME_SERVICE_TOKEN", "tok-value-1234567890")
+    out = _redact_secrets("a gem-value-1234567890 b tok-value-1234567890")
+    assert "gem-value" not in out and "tok-value" not in out
+    code = "token = self.token\napi_key = load_key()\ntoken: string;"
+    assert _redact_secrets(code) == code
+
+
+class _FakeProc:
+    def __init__(self, *args, **kwargs):
+        _FakeProc.kwargs = kwargs
+        self.pid = 999999
+        self.returncode = 0
+
+    def communicate(self, timeout=None):
+        return "ok", ""
+
+
+def test_child_env_strips_secrets_and_uses_process_group(run_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-" + "d" * 30)
+    monkeypatch.setenv("KUREK_REMOTE_TOKEN", "r" * 40)
+    monkeypatch.setenv("TS_AUTHKEY", FAKE_TS)
+    monkeypatch.setattr(run_mod.subprocess, "Popen", _FakeProc)
+    res = _exec(run_workspace, "git status")
+    assert "Exit: 0" in res
+    env = _FakeProc.kwargs["env"]
+    for k in ("DEEPSEEK_API_KEY", "KUREK_REMOTE_TOKEN", "TS_AUTHKEY"):
+        assert k not in env
+    assert env["GIT_PAGER"] == "cat"
+    assert _FakeProc.kwargs["start_new_session"] is True
+
+
+def test_kill_process_group_reaps_children() -> None:
+    proc = subprocess.Popen(["sh", "-c", "sleep 30 & sleep 30; wait"], start_new_session=True)
+    time.sleep(0.2)
+    run_mod._kill_process_group(proc, signal.SIGKILL)
+    assert proc.wait(timeout=5) != 0
+    # the background child shared the group and must be gone as well
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        try:
+            os.killpg(proc.pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("process group still alive after _kill_process_group")
+
+
+def test_remote_blocks_codebase_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("KUREK_REMOTE_ALLOW_EXEC", raising=False)
+    engine = daemon.KurekEngine.__new__(daemon.KurekEngine)
+    engine.actions = SimpleNamespace(run=MagicMock(return_value="executed"))
+    blocked = engine._run_tool("codebase", {"action": "read", "path": ".env"}, remote=True)
+    assert "disabled for remote" in blocked
+    engine.actions.run.assert_not_called()
+    assert "codebase" in daemon.REMOTE_BLOCKED_EXEC_TOOLS
+    # local (non-remote) use is unaffected
+    assert engine._run_tool("codebase", {"action": "status"}, remote=False) == "executed"

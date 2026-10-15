@@ -221,3 +221,68 @@ def test_no_hardcoded_home_arch() -> None:
     source_file = root / "actions" / "codebase.py"
     text = source_file.read_text(encoding="utf-8")
     assert "/home/arch" not in text
+
+
+# ---------------------------------------------------------------------------
+# Regression tests: secret files are never readable/searchable via codebase
+# ---------------------------------------------------------------------------
+
+FAKE_GOOGLE = "AI" + "za" + "Q" * 35
+FAKE_DS = "sk-" + "D7" * 15
+
+
+@pytest.fixture
+def secret_repo(test_workspace: dict[str, Path]) -> Path:
+    repo = test_workspace["py"]
+    (repo / ".env").write_text(f"DEEPSEEK_API_KEY={FAKE_DS}\nGEMINI_API_KEY={FAKE_GOOGLE}\n", encoding="utf-8")
+    (repo / ".env.local").write_text(f"X={FAKE_DS}\n", encoding="utf-8")
+    (repo / ".env.example").write_text("DEEPSEEK_API_KEY=\n", encoding="utf-8")
+    (repo / "api_keys.json").write_text(f'{{"deepseek": "{FAKE_DS}"}}\n', encoding="utf-8")
+    (repo / "config").mkdir()
+    (repo / "config" / "api_keys.json").write_text(f'{{"gemini": "{FAKE_GOOGLE}"}}\n', encoding="utf-8")
+    (repo / "server.pem").write_text(f"{FAKE_DS}\n", encoding="utf-8")
+    (repo / "id_ed25519").write_text(f"{FAKE_DS}\n", encoding="utf-8")
+    (repo / "innocent.txt").symlink_to(repo / ".env")
+    return repo
+
+
+@pytest.mark.parametrize("rel", [
+    ".env", ".env.local", "api_keys.json", "config/api_keys.json", "server.pem",
+    "id_ed25519", ".git/config", "innocent.txt",
+])
+def test_codebase_read_secret_files_refused(secret_repo: Path, rel: str) -> None:
+    res = codebase({"action": "read", "root": str(secret_repo), "path": rel})
+    assert res.startswith("Refused"), (rel, res)
+    assert FAKE_DS not in res and FAKE_GOOGLE not in res
+
+
+def test_codebase_env_example_still_readable(secret_repo: Path) -> None:
+    res = codebase({"action": "read", "root": str(secret_repo), "path": ".env.example"})
+    assert "DEEPSEEK_API_KEY=" in res and not res.startswith("Refused")
+
+
+def test_codebase_search_skips_secret_files(secret_repo: Path) -> None:
+    for q in (FAKE_DS, FAKE_GOOGLE):
+        res = codebase({"action": "search", "root": str(secret_repo), "query": q})
+        assert res.startswith("No matches found"), res
+    res = codebase({"action": "search", "root": str(secret_repo), "query": "DEEPSEEK_API_KEY"})
+    assert FAKE_DS not in res and FAKE_GOOGLE not in res
+    for name in (".env:", ".env.local", "api_keys.json", "server.pem", "id_ed25519", "innocent.txt"):
+        assert name not in res, (name, res)
+
+
+def test_codebase_read_redacts_incidental_secrets(test_workspace: dict[str, Path]) -> None:
+    repo = test_workspace["py"]
+    (repo / "settings.py").write_text(f'GOOGLE_KEY = "{FAKE_GOOGLE}"\nname = "kurek"\n', encoding="utf-8")
+    res = codebase({"action": "read", "root": str(repo), "path": "settings.py"})
+    assert FAKE_GOOGLE not in res
+    assert "[REDACTED_GOOGLE_KEY]" in res
+    assert 'name = "kurek"' in res
+
+
+def test_codebase_search_python_fallback_skips_secrets(secret_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import actions.codebase as cb
+    monkeypatch.setattr(cb.shutil, "which", lambda name: None)
+    res = codebase({"action": "search", "root": str(secret_repo), "query": "API_KEY"})
+    assert FAKE_DS not in res and FAKE_GOOGLE not in res
+    assert "innocent.txt" not in res

@@ -25,6 +25,8 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -33,7 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from actions.codebase import get_allowed_roots, _is_path_allowed
+from actions.codebase import get_allowed_roots, _is_path_allowed, is_secret_file
 
 # ---------------------------------------------------------------------------
 # Allowlist & Security Configuration
@@ -111,25 +113,52 @@ def _audit_log(record: RunRecord, reason: str = "") -> None:
 # ---------------------------------------------------------------------------
 
 _SECRET_PATTERNS = [
-    (re.compile(r"\b(?:sk-[a-zA-Z0-9_\-]{20,})\b"), "[REDACTED_DEEPSEEK_KEY]"),
-    (re.compile(r"\b(?:xai-[a-zA-Z0-9_\-]{20,})\b"), "[REDACTED_XAI_KEY]"),
-    (re.compile(r"\b(?:gh[pousr]_[a-zA-Z0-9]{20,})\b"), "[REDACTED_GH_TOKEN]"),
-    (re.compile(r"\bBearer\s+[a-zA-Z0-9_\-\.]{20,}\b"), "Bearer [REDACTED_TOKEN]"),
+    # Provider-specific prefixes first so each key gets the right label.
+    (re.compile(r"\bsk-ant-[a-zA-Z0-9_\-]{20,}"), "[REDACTED_ANTHROPIC_KEY]"),
+    (re.compile(r"\bsk-proj-[a-zA-Z0-9_\-]{20,}"), "[REDACTED_OPENAI_KEY]"),
+    (re.compile(r"\bsk-or-[a-zA-Z0-9_\-]{20,}"), "[REDACTED_OPENROUTER_KEY]"),
+    (re.compile(r"\bsk-[a-zA-Z0-9_\-]{20,}"), "[REDACTED_SK_KEY]"),
+    (re.compile(r"\bxai-[a-zA-Z0-9_\-]{20,}"), "[REDACTED_XAI_KEY]"),
+    (re.compile(r"\bAIza[0-9A-Za-z_\-]{30,}"), "[REDACTED_GOOGLE_KEY]"),
+    (re.compile(r"\btskey-[a-zA-Z0-9_\-]{8,}"), "[REDACTED_TAILSCALE_KEY]"),
+    (re.compile(r"\b(?:gh[pousr]_[a-zA-Z0-9]{20,}|github_pat_[a-zA-Z0-9_]{20,})"), "[REDACTED_GH_TOKEN]"),
+    (re.compile(r"\bBearer\s+[a-zA-Z0-9_\-\.=]{20,}"), "Bearer [REDACTED_TOKEN]"),
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"), "[REDACTED_PRIVATE_KEY]"),
-    (re.compile(r"(https?://)([^:\s@]+):([^@\s]+)@"), r"\1[REDACTED_USER]:[REDACTED_PASS]@"),
+    (re.compile(r"(https?://)([^:\s@/]+):([^@\s]+)@"), r"\1[REDACTED_USER]:[REDACTED_PASS]@"),
+    # Generic key/value assignments: KEY=value, "api_key": "value", token: value
+    (re.compile(
+        r"""(?i)(["']?[A-Za-z0-9_\-]*(?:api[_\-]?key|apikey|secret|token|passw(?:or)?d|auth[_\-]?key|private[_\-]?key)["']?\s*[:=]\s*["']?)"""
+        r"""(?!\[REDACTED)(?=[A-Za-z0-9_\-+/=.~]*\d)([A-Za-z0-9_\-+/=.~]{8,})(?![\w(])"""
+    ), r"\1[REDACTED_SECRET]"),
 ]
+
+# Environment variables whose values are always scrubbed from output.
+_SENSITIVE_ENV_EXACT = frozenset({
+    "DEEPSEEK_API_KEY", "XAI_API_KEY", "DEEPGRAM_API_KEY", "OPENROUTER_API_KEY",
+    "TYPESAFE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY", "KUREK_REMOTE_TOKEN", "TS_AUTHKEY", "TAILSCALE_AUTHKEY",
+    "GITHUB_TOKEN", "GH_TOKEN",
+})
+_SENSITIVE_ENV_SUFFIXES = ("_API_KEY", "_TOKEN", "_SECRET", "_AUTHKEY", "_PASSWORD")
+
+
+def _is_sensitive_env(name: str) -> bool:
+    return (
+        name in _SENSITIVE_ENV_EXACT
+        or name.startswith("KUREK_REMOTE_")
+        or name.endswith(_SENSITIVE_ENV_SUFFIXES)
+    )
 
 
 def _redact_secrets(text: str) -> str:
-    # 1. Environment secrets known to Kurek
-    env_keys = [
-        "DEEPSEEK_API_KEY", "XAI_API_KEY", "DEEPGRAM_API_KEY",
-        "OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "KUREK_REMOTE_TOKEN",
-    ]
-    for k in env_keys:
-        val = os.environ.get(k)
-        if val and len(val) >= 8:
-            text = text.replace(val, f"[REDACTED_{k}]")
+    # 1. Environment secrets known to Kurek (longest first so substrings don't leak)
+    env_items = sorted(
+        ((k, v) for k, v in os.environ.items() if _is_sensitive_env(k) and v and len(v) >= 8),
+        key=lambda kv: len(kv[1]),
+        reverse=True,
+    )
+    for k, val in env_items:
+        text = text.replace(val, f"[REDACTED_{k}]")
 
     # 2. General credential patterns
     for pat, rep in _SECRET_PATTERNS:
@@ -166,6 +195,122 @@ def _cap_output(text: str, duration: float, exit_code: int) -> tuple[str, int]:
 # Command Validation Engine
 # ---------------------------------------------------------------------------
 
+# Flags that make 'rg' execute external programs (finding: rg --pre=rm).
+_RG_EXEC_FLAGS = frozenset({"--pre", "--pre-glob", "--hostname-bin", "--search-zip", "-z"})
+
+# find predicates that execute, delete, or write files.
+_FIND_BLOCKED = frozenset({
+    "-delete", "-exec", "-execdir", "-ok", "-okdir",
+    "-fprint", "-fprint0", "-fprintf", "-fls",
+})
+
+# make: allowlist of options (anything else, e.g. -f/--eval/-C/-I/-E, is refused).
+_MAKE_SAFE_FLAGS = frozenset({
+    "-n", "--dry-run", "--just-print", "--recon", "-k", "--keep-going", "-s", "--silent",
+    "--quiet", "-B", "--always-make", "--no-print-directory", "-w", "--print-directory",
+    "-q", "--question", "-S", "--no-keep-going", "--stop", "-r", "--no-builtin-rules",
+    "-R", "--no-builtin-variables", "--warn-undefined-variables",
+})
+_MAKE_J_RE = re.compile(r"^(?:-j\d*|--jobs(?:=\d+)?|-l\d*(?:\.\d+)?|--load-average(?:=\d+(?:\.\d+)?)?)$")
+
+# just: allowlist of options (blocks --justfile/-f, --working-directory/-d, --shell, --set, ...).
+_JUST_SAFE_FLAGS = frozenset({"--list", "-l", "--dry-run", "-n", "--summary", "--quiet", "-q"})
+
+# cargo: options that can rewrite config, toolchain wrappers, or write outside the repo.
+_CARGO_BLOCKED_FLAGS = frozenset({"--config", "--target-dir", "--manifest-path", "--artifact-dir", "--out-dir"})
+
+# npm/pnpm/yarn/bun: options that swap the script shell, config, or working directory.
+_NODE_PM_BLOCKED_FLAGS = frozenset({
+    "--script-shell", "--prefix", "-C", "--dir", "--cwd", "--userconfig", "--globalconfig",
+    "--node-options", "--shell", "--config", "-c", "--workspace-root", "--filter",
+})
+
+# go: options that execute a custom program.
+_GO_BLOCKED_FLAGS = frozenset({"exec", "toolexec", "overlay", "modfile", "o", "pgo", "C"})
+
+# git branch/tag: read-only listing only.
+_GIT_REF_MUTATING = {
+    "branch": frozenset({
+        "-d", "-D", "--delete", "-m", "-M", "--move", "-c", "-C", "--copy", "-f", "--force",
+        "--edit-description", "-u", "--set-upstream-to", "--unset-upstream", "--create-reflog",
+        "-t", "--track", "--no-track", "--recurse-submodules",
+    }),
+    "tag": frozenset({
+        "-d", "--delete", "-a", "--annotate", "-s", "--sign", "-m", "--message", "-F", "--file",
+        "-f", "--force", "-u", "--local-user", "--create-reflog", "--cleanup", "-e", "--edit",
+        "--trailer",
+    }),
+}
+# Flags after which ONE positional value (pattern/commit/format) is a read argument.
+_GIT_REF_VALUE_FLAGS = frozenset({
+    "--list", "-l", "--contains", "--no-contains", "--merged", "--no-merged",
+    "--points-at", "--format", "--sort", "--color", "--column",
+})
+_GIT_CONFIG_WRITE_FLAGS = frozenset({
+    "--add", "--unset", "--unset-all", "--replace-all", "--edit", "-e", "--rename-section",
+    "--remove-section", "set", "unset", "rename-section", "remove-section", "edit",
+})
+
+# Binaries whose non-flag arguments are file paths and must stay inside the allowed roots.
+_PATH_CHECKED_BINARIES = frozenset(SAFE_READ_BINARIES | {"find"})
+
+
+def _flag_base(tok: str) -> str:
+    return tok.split("=", 1)[0]
+
+
+def _validate_git_ref_args(subcmd: str, args: list[str]) -> str:
+    """Allow only read-only listing forms of 'git branch' / 'git tag'."""
+    mutating = _GIT_REF_MUTATING[subcmd]
+    prev: str | None = None
+    for a in args:
+        if a.startswith("-"):
+            base = _flag_base(a)
+            if base in mutating or (
+                len(a) > 2 and not a.startswith("--") and any(f"-{c}" in mutating for c in a[1:])
+            ):
+                return f"Refused: 'git {subcmd} {a}' modifies refs. Only read-only listing is permitted."
+            prev = base if "=" not in a else None
+            continue
+        if prev in _GIT_REF_VALUE_FLAGS:
+            prev = None
+            continue
+        return (
+            f"Refused: 'git {subcmd} {a}' would create or change a ref. "
+            f"Only read-only listing is permitted (e.g. 'git {subcmd} --list')."
+        )
+    return ""
+
+
+def _validate_path_args(binary: str, tokens: list[str], base_dir: Path, allowed_roots: list[Path]) -> str:
+    """Refuse read-tool arguments that point at existing paths outside the roots or at secret files."""
+    if binary not in _PATH_CHECKED_BINARIES:
+        return ""
+    for tok in tokens[1:]:
+        if tok.startswith("-") and tok != "-":
+            continue
+        try:
+            cand = Path(os.path.expanduser(tok))
+            if not cand.is_absolute():
+                cand = base_dir / cand
+            resolved = cand.resolve()
+        except Exception:
+            continue
+        if not (resolved.exists() or cand.is_symlink()):
+            continue  # not a path (e.g. a search pattern)
+        if not _is_path_allowed(resolved, allowed_roots):
+            return (
+                f"Refused: Argument '{tok}' resolves outside allowed project roots "
+                f"({', '.join(str(r) for r in allowed_roots)})."
+            )
+        if is_secret_file(resolved) or is_secret_file(cand):
+            return (
+                f"Refused: Argument '{tok}' is a credential/secret file "
+                "(.env*, api_keys.json, *.pem, id_* keys, .git/*) and cannot be read."
+            )
+    return ""
+
+
 def _validate_command(cmd_str: str, confirm: bool = False) -> tuple[bool, list[str], str]:
     """
     Parses and checks command against strict allowlist.
@@ -192,7 +337,13 @@ def _validate_command(cmd_str: str, confirm: bool = False) -> tuple[bool, list[s
                 "Execute single direct commands without raw shell chaining."
             )
 
-    binary = Path(tokens[0]).name.lower()
+    if "/" in tokens[0] or tokens[0].startswith("~") or tokens[0] in (".", ".."):
+        return False, [], (
+            f"Refused: Path-qualified executable '{tokens[0]}' is not permitted. "
+            "Use a bare command name; it is resolved from PATH."
+        )
+
+    binary = tokens[0].lower()
 
     # 1. Permanently blocked binaries
     if binary in BLOCKED_BINARIES:
@@ -203,13 +354,29 @@ def _validate_command(cmd_str: str, confirm: bool = False) -> tuple[bool, list[s
 
     # 2. Safe read binaries
     if binary in SAFE_READ_BINARIES:
+        if binary in ("rg", "ripgrep"):
+            for a in tokens[1:]:
+                if _flag_base(a) in _RG_EXEC_FLAGS or (
+                    re.fullmatch(r"-[A-Za-z]+", a) and "z" in a[1:]
+                ):
+                    return False, [], f"Refused: 'rg {a}' runs external programs and is not permitted."
+        if binary in ("tail",) and any(_flag_base(a) in ("-f", "-F", "--follow", "--retry") for a in tokens[1:]):
+            return False, [], "Refused: 'tail -f' never exits and is not permitted."
+        if binary == "tree" and any(_flag_base(a) in ("-o", "-R") or a.startswith("-o") for a in tokens[1:]):
+            return False, [], "Refused: 'tree -o' writes files and is not permitted."
+        if binary == "file" and any(_flag_base(a) in ("-C", "--compile", "-m", "--magic-file", "-f", "--files-from") for a in tokens[1:]):
+            return False, [], "Refused: this 'file' option reads or writes arbitrary magic/list files."
+        if binary == "wc" and any(_flag_base(a) == "--files0-from" for a in tokens[1:]):
+            return False, [], "Refused: 'wc --files0-from' is not permitted."
+        if binary in ("grep",) and any(_flag_base(a) in ("-f", "--file") for a in tokens[1:]):
+            return False, [], "Refused: 'grep -f' reads patterns from arbitrary files and is not permitted."
         return True, tokens, ""
 
     # 3. 'find' safety check
     if binary == "find":
         for a in tokens[1:]:
-            if a in ("-delete", "-exec", "-execdir", "-ok", "-okdir"):
-                return False, [], f"Refused: 'find' parameter '{a}' modifies files and is strictly disallowed."
+            if a in _FIND_BLOCKED:
+                return False, [], f"Refused: 'find' parameter '{a}' executes, deletes, or writes files and is strictly disallowed."
         return True, tokens, ""
 
     # 4. 'git' command family
@@ -230,19 +397,26 @@ def _validate_command(cmd_str: str, confirm: bool = False) -> tuple[bool, list[s
             )
 
         if subcmd == "stash":
-            if len(tokens) > 2 and tokens[2].lower() not in ("list", "show"):
+            if len(tokens) < 3 or tokens[2].lower() not in ("list", "show"):
+                shown = tokens[2] if len(tokens) > 2 else "(push)"
                 return False, [], (
-                    f"Refused: 'git stash {tokens[2]}' is not permitted. Only 'git stash list' or 'git stash show' is allowed."
+                    f"Refused: 'git stash {shown}' is not permitted. Only 'git stash list' or 'git stash show' is allowed."
                 )
+        elif subcmd in ("branch", "tag"):
+            ref_reason = _validate_git_ref_args(subcmd, tokens[2:])
+            if ref_reason:
+                return False, [], ref_reason
         elif subcmd == "remote":
             if len(tokens) > 2 and tokens[2].lower() not in ("-v", "--verbose", "get-url"):
                 return False, [], f"Refused: 'git remote {tokens[2]}' is not permitted. Only 'git remote -v' is allowed."
         elif subcmd == "config":
-            if not any(a in ("--get", "--list", "-l") for a in tokens[2:]):
+            if not any(a in ("--get", "--get-all", "--get-regexp", "--list", "-l") for a in tokens[2:]):
                 return False, [], "Refused: 'git config' is only permitted for reading values (--get, --list)."
+            if any(_flag_base(a) in _GIT_CONFIG_WRITE_FLAGS for a in tokens[2:]):
+                return False, [], "Refused: 'git config' write options are not permitted."
 
         for a in tokens[2:]:
-            if a.startswith("--output=") or a == "-o":
+            if _flag_base(a) in ("--output", "--output-directory", "-o", "--ext-diff", "--no-index", "--contents") or a.startswith("--output"):
                 return False, [], "Refused: File writing flag '--output' is not permitted in git commands."
 
         return True, tokens, ""
@@ -261,6 +435,14 @@ def _validate_command(cmd_str: str, confirm: bool = False) -> tuple[bool, list[s
                 f"Refused: 'cargo {subcmd}' is not in the safe build/test allowlist "
                 "(check, test, build, clippy, bench, tree, metadata)."
             )
+        for a in tokens[2:]:
+            if a == "--":
+                break
+            if _flag_base(a) in _CARGO_BLOCKED_FLAGS or a.startswith("-Z") or (a.startswith("+")):
+                return False, [], (
+                    f"Refused: 'cargo {a}' can override build configuration, toolchains, or output paths "
+                    "and is not permitted."
+                )
         return True, tokens, ""
 
     # 6. 'pytest'
@@ -283,6 +465,9 @@ def _validate_command(cmd_str: str, confirm: bool = False) -> tuple[bool, list[s
         if len(tokens) < 2:
             return False, [], f"Refused: '{binary}' requires a subcommand (e.g. '{binary} test')."
         subcmd = tokens[1].lower()
+        for a in tokens[1:]:
+            if _flag_base(a) in _NODE_PM_BLOCKED_FLAGS:
+                return False, [], f"Refused: '{binary} {a}' can change the shell, config, or directory and is not permitted."
         if subcmd in ("test", "--version", "-v", "--help", "-h"):
             return True, tokens, ""
         elif subcmd == "run":
@@ -307,6 +492,10 @@ def _validate_command(cmd_str: str, confirm: bool = False) -> tuple[bool, list[s
         subcmd = tokens[1].lower() if len(tokens) > 1 else ""
         allowed_go = {"test", "build", "vet", "version", "--version", "--help"}
         if subcmd in allowed_go:
+            for a in tokens[2:]:
+                name = _flag_base(a).lstrip("-")
+                if a.startswith("-") and name in _GO_BLOCKED_FLAGS:
+                    return False, [], f"Refused: 'go {a}' can execute custom programs or write outside the repo."
             return True, tokens, ""
         return False, [], f"Refused: 'go {subcmd}' is not in the allowlist (allowed: test, build, vet, version)."
 
@@ -322,7 +511,14 @@ def _validate_command(cmd_str: str, confirm: bool = False) -> tuple[bool, list[s
     if binary == "make":
         for t in tokens[1:]:
             if t.startswith("-"):
-                continue
+                if t in _MAKE_SAFE_FLAGS or _MAKE_J_RE.match(t):
+                    continue
+                return False, [], (
+                    f"Refused: 'make {t}' is not in the safe option allowlist "
+                    "(options like -f, --eval, -C, -I, -E can run arbitrary recipes)."
+                )
+            if "=" in t:
+                return False, [], f"Refused: 'make {t}' variable overrides are not permitted."
             if t.lower() not in ALLOWED_BUILD_TARGETS:
                 if confirm:
                     continue
@@ -336,7 +532,11 @@ def _validate_command(cmd_str: str, confirm: bool = False) -> tuple[bool, list[s
     if binary == "just":
         for t in tokens[1:]:
             if t.startswith("-"):
-                continue
+                if t in _JUST_SAFE_FLAGS:
+                    continue
+                return False, [], f"Refused: 'just {t}' is not in the safe option allowlist."
+            if "=" in t:
+                return False, [], f"Refused: 'just {t}' variable overrides are not permitted."
             if t.lower() not in ALLOWED_BUILD_TARGETS and t.lower() not in ("--list", "-l"):
                 if confirm:
                     continue
@@ -356,6 +556,17 @@ def _validate_command(cmd_str: str, confirm: bool = False) -> tuple[bool, list[s
         f"Refused: Command '{binary}' is not recognized in the safe command allowlist. "
         "Surface this command to Alan if manual execution is required."
     )
+
+
+def _kill_process_group(proc: subprocess.Popen, sig: int) -> None:
+    """Signal the whole process group started for a run (start_new_session=True)."""
+    try:
+        os.killpg(proc.pid, sig)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.send_signal(sig)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -401,6 +612,18 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any, confirm_ar
         _audit_log(rec, reason=reason)
         return reason
 
+    path_reason = _validate_path_args(tokens[0].lower(), tokens, cwd_path, allowed_roots)
+    if path_reason:
+        rec = RunRecord(run_id=run_id, cmd=cmd_str, cwd=str(cwd_path), status="refused", exit_code=-1, output=path_reason)
+        with _RUN_LOCK:
+            _RUN_HISTORY[run_id] = rec
+        _audit_log(rec, reason=path_reason)
+        return path_reason
+
+    exe = shutil.which(tokens[0])
+    if exe:
+        tokens = [exe] + tokens[1:]
+
     # Configure timeout
     try:
         timeout = float(timeout_arg) if timeout_arg is not None else 30.0
@@ -409,7 +632,8 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any, confirm_ar
     timeout = max(1.0, min(timeout, 300.0))
 
     # Clean non-interactive environment
-    env = os.environ.copy()
+    # Child processes never receive API keys, tokens, or remote-access settings.
+    env = {k: v for k, v in os.environ.items() if not _is_sensitive_env(k)}
     env["GIT_PAGER"] = "cat"
     env["PAGER"] = "cat"
     env["CI"] = "1"
@@ -438,7 +662,9 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any, confirm_ar
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
             text=True,
+            start_new_session=True,
         )
         record.process = proc
 
@@ -469,15 +695,18 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any, confirm_ar
             return header + (capped_output or "(No output)")
 
         except subprocess.TimeoutExpired:
-            proc.kill()
-            stdout, stderr = proc.communicate()
+            _kill_process_group(proc, signal.SIGKILL)
+            try:
+                stdout, stderr = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                stdout, stderr = "", ""
             duration = time.time() - start_time
             record.exit_code = -1
             record.duration = duration
             record.status = "timed_out"
 
             combined = stdout or stderr or ""
-            redacted = _redact_secrets(combined.strip())
+            redacted, _ = _cap_output(_redact_secrets(combined.strip()), duration, -1)
             record.output = f"TIMED OUT after {timeout}s.\n" + redacted
             _audit_log(record, reason="timeout")
 
@@ -577,7 +806,7 @@ def _action_cancel(run_id: str | None) -> str:
             return f"Run '{target_record.run_id}' is not currently running (status: {target_record.status})."
 
         try:
-            target_record.process.terminate()
+            _kill_process_group(target_record.process, signal.SIGTERM)
             target_record.status = "cancelled"
             _audit_log(target_record, reason="cancelled by user")
             return f"Cancelled run '{target_record.run_id}' (PID {target_record.process.pid}). Process terminated."

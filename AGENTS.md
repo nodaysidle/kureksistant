@@ -192,4 +192,4 @@ HTTP defaults to `127.0.0.1:8790`. For the Android app over Tailscale:
 2. Build/install the APK from [`android/`](android/) (`./gradlew :app:assembleDebug`, then `adb install -r app/build/outputs/apk/debug/app-debug.apk`).
 3. In the app Settings, enter the PC Tailscale IP/MagicDNS name, port `8790`, and the same token.
 
-The app uses GET `/status` and POST `/remote/prompt` (JSON + `Authorization: Bearer …`, SSE). Transport security is Tailscale/WireGuard (no daemon TLS). Remote prompts block `desktop_control` / `code_helper` / `dev_agent` / `run` unless `KUREK_REMOTE_ALLOW_EXEC=1`. Rotate the token if it was ever shared.
+The app uses GET `/status` and POST `/remote/prompt` (JSON + `Authorization: Bearer …`, SSE). Transport security is Tailscale/WireGuard (no daemon TLS). Remote prompts block `desktop_control` / `code_helper` / `dev_agent` / `run` / `codebase` unless `KUREK_REMOTE_ALLOW_EXEC=1`. Rotate the token if it was ever shared.

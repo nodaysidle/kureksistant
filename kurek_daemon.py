@@ -79,6 +79,8 @@ REMOTE_BLOCKED_EXEC_TOOLS = frozenset({
     "code_helper",
     "dev_agent",
     "run",
+    # codebase reads arbitrary files under the project roots; keep it local-only.
+    "codebase",
 })
 
 

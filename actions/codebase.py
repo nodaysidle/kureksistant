@@ -127,6 +127,35 @@ def get_allowed_roots() -> list[Path]:
     return roots
 
 
+_SECRET_FILE_NAMES = frozenset({
+    "api_keys.json", ".git-credentials", ".netrc", ".pgpass", "credentials.json",
+})
+_ENV_TEMPLATE_NAMES = frozenset({".env.example", ".env.sample", ".env.template"})
+_SSH_KEY_RE = re.compile(r"^id_[a-z0-9]+$")
+
+
+def is_secret_file(path: Path) -> bool:
+    """True for files that hold credentials: .env*, api_keys.json, *.pem, id_* keys, .git/config."""
+    name = path.name
+    lower = name.lower()
+    if lower in _SECRET_FILE_NAMES:
+        return True
+    if lower == ".env" or (lower.startswith(".env.") and lower not in _ENV_TEMPLATE_NAMES):
+        return True
+    if lower.endswith((".pem", ".key", ".p12", ".pfx")):
+        return True
+    if _SSH_KEY_RE.match(lower):
+        return True
+    if ".git" in path.parts:
+        return True
+    return False
+
+
+def _redact(text: str) -> str:
+    from actions.run import _redact_secrets  # lazy: actions.run imports this module
+    return _redact_secrets(text)
+
+
 def _is_path_allowed(target: Path, allowed_roots: list[Path]) -> bool:
     """True if target path resolves within one of the allowed roots."""
     try:
@@ -281,6 +310,14 @@ def _action_search(target_dir: Path, query: str, depth: int | None = None) -> st
             "-g", "!.venv",
             "-g", "!__pycache__",
             "-g", "!*.lock",
+            "-g", "!.env",
+            "-g", "!.env.*",
+            "-g", "!api_keys.json",
+            "-g", "!*.pem",
+            "-g", "!*.key",
+            "-g", "!id_*",
+            "-g", "!.git-credentials",
+            "-g", "!.netrc",
         ]
         if depth is not None and depth > 0:
             cmd.extend(["--max-depth", str(depth)])
@@ -307,7 +344,7 @@ def _action_search(target_dir: Path, query: str, depth: int | None = None) -> st
                 dirs[:] = [d for d in dirs if d not in STANDARD_IGNORES and not d.startswith(".")]
                 for fname in sorted(files):
                     fpath = Path(root) / fname
-                    if _is_binary(fpath):
+                    if _is_binary(fpath) or is_secret_file(fpath) or is_secret_file(fpath.resolve()):
                         continue
                     try:
                         content_lines = fpath.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -338,7 +375,7 @@ def _action_search(target_dir: Path, query: str, depth: int | None = None) -> st
     else:
         footer = ""
 
-    return header + body + footer
+    return _redact(header + body + footer)
 
 
 # ---------------------------------------------------------------------------
@@ -394,6 +431,11 @@ def _action_read(target_file: Path, lines_arg: str | None = None) -> str:
         return f"Error: File '{target_file}' does not exist."
     if target_file.is_dir():
         return f"Error: Path '{target_file.name}' is a directory. Use action='tree' to list directory contents."
+    if is_secret_file(target_file):
+        return (
+            f"Refused: '{target_file.name}' is a credential/secret file (.env*, api_keys.json, *.pem, "
+            "id_* keys, .git/*) and cannot be read through codebase."
+        )
     if _is_binary(target_file):
         return f"Refused: File '{target_file.name}' is a binary file. Reading binary files is not supported."
 
@@ -444,7 +486,7 @@ def _action_read(target_file: Path, lines_arg: str | None = None) -> str:
     for i, line in enumerate(selected, start=start_line):
         formatted.append(f"{i:4d} | {line}")
 
-    return "\n".join(formatted) + truncated_msg
+    return _redact("\n".join(formatted) + truncated_msg)
 
 
 # ---------------------------------------------------------------------------
