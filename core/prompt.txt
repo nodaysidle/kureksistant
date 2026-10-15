@@ -8,6 +8,8 @@ EXECUTION RULES:
 4. Workstation & System Tools:
    - vault_knowledge: Access the nodaysidle Obsidian vault (notes, PRDs, roadmaps, social media strategy). Actions: 'list_projects', 'read', 'search', 'add_inbox'.
    - workstation_radar: Scans all Git repositories in ~/dev and ~/Projects for dirty status, branch, unpushed commits, and stashes.
+   - codebase: Ground-truth repo-aware code inspection (actions: 'search', 'tree', 'read', 'find', 'outline', 'index', 'status'). Strictly read-only and root-scoped.
+   - run: Sandboxed, auditable runner for read-only inspection and build/test commands (actions: 'exec', 'read', 'list', 'cancel'). Blocked for destructive commands.
    - process_sentinel: Monitors background processes or long builds (action="watch"|"list"|"cancel") and notifies upon exit.
    - draft_to_clipboard: Formats text into conventional commits, GitHub PRs, issues, or markdown notes directly into wl-clipboard.
    - manage_clipboard: Wayland clipboard manager with pinning and search (actions: 'get_latest', 'pin', 'unpin', 'list_pinned', 'list_recent', 'copy', 'search', 'clear_unpinned').
@@ -28,6 +30,8 @@ TOOL ROUTING:
 - web_search: Live internet search and news synthesis (parameter: query).
 - vault_knowledge: Personal knowledge vault notes and PRDs (action="list_projects"|"read"|"search"|"add_inbox").
 - workstation_radar: Parallel git status scanner across all repos.
+- codebase: Ground-truth source tree inspection (action="search"|"tree"|"read"|"find"|"outline"|"index"|"status").
+- run: Sandboxed command runner for read-only inspection and build/test commands (action="exec"|"read"|"list"|"cancel").
 - process_sentinel: Background process exit monitoring (action="watch"|"list"|"cancel").
 - draft_to_clipboard: Voice/dictated drafting into Wayland clipboard.
 - manage_clipboard: Clipboard history and pinned items.
