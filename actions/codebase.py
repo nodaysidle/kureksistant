@@ -399,7 +399,7 @@ def _read_capped(file_path: Path, cap: int | None = None) -> tuple[str, bool]:
     return data[:cap].decode("utf-8", "replace"), truncated
 
 
-def _run_rg_capped(cmd: list[str], timeout: float) -> tuple[str, str, str, int | None]:
+def _run_rg_capped(cmd: list[str], timeout: float, cap: int | None = None) -> tuple[str, str, str, int | None]:
     """Run rg in its own process group and stream output under _SEARCH_MAX_BYTES.
 
     Returns (stdout, stderr, outcome, returncode); outcome is exited/timeout/capped.
@@ -409,7 +409,7 @@ def _run_rg_capped(cmd: list[str], timeout: float) -> tuple[str, str, str, int |
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
         env=_rg_env(), start_new_session=True,
     )
-    out, err, outcome = _stream_output(proc, timeout, cap=_SEARCH_MAX_BYTES)
+    out, err, outcome = _stream_output(proc, timeout, cap=_SEARCH_MAX_BYTES if cap is None else cap)
     return out, err, outcome, proc.returncode
 
 
@@ -474,10 +474,27 @@ def _action_search(target_dir: Path, query: str, depth: int | None = None) -> st
             if outcome == "capped":
                 search_capped = True
                 raw_out = raw_out.rsplit("\n", 1)[0] if "\n" in raw_out else raw_out
-            if not raw_out and rc == 1:
-                return f"No matches found for '{query_str}' in {target_dir.name}."
-            if not raw_out and err:
+            if not raw_out and err and rc not in (0, 1):
                 return f"Search notice: {_redact(err.strip()[:2000])}"
+            if not search_capped:
+                # .env templates are excluded by the '.env*' secret glob above; search exactly
+                # those names in a second, whitelisted pass under the remaining byte budget.
+                tcmd = [rg_path, "--no-config", "-n", "-C", "2", "--max-columns", "500", "--color", "never",
+                        "--hidden", "--null"]
+                for name in sorted(_ENV_TEMPLATE_NAMES):
+                    tcmd.extend(["-g", name])
+                if depth is not None and depth > 0:
+                    tcmd.extend(["--max-depth", str(depth)])
+                tcmd.extend(["-e", query_str, str(target_dir)])
+                budget = max(0, _SEARCH_MAX_BYTES - len(out.encode("utf-8", "replace")))
+                if budget:
+                    t_out, _t_err, t_outcome, _t_rc = _run_rg_capped(tcmd, timeout=12, cap=budget)
+                    t_raw = t_out.strip()
+                    if t_outcome == "capped":
+                        search_capped = True
+                        t_raw = t_raw.rsplit("\n", 1)[0] if "\n" in t_raw else ""
+                    if t_outcome != "timeout" and t_raw:
+                        raw_out = (raw_out + "\n--\n" + t_raw) if raw_out else t_raw
             dyn = _dynamic_secret_targets()
             lines = []
             for raw in raw_out.splitlines():
@@ -486,8 +503,12 @@ def _action_search(target_dir: Path, query: str, depth: int | None = None) -> st
                     continue
                 fpath, rest = raw.split("\0", 1)
                 fp = Path(fpath)
-                if is_secret_file(fp) or _is_dynamic_secret(fp, dyn):
-                    continue  # resolved-path check: custom REGISTRY_AUTH_FILE / DOCKER_CONFIG
+                try:
+                    real_fp = fp.resolve()
+                except OSError:
+                    continue
+                if is_secret_file(fp) or is_secret_file(real_fp) or _is_dynamic_secret(fp, dyn):
+                    continue  # name, symlink target and resolved REGISTRY_AUTH_FILE / DOCKER_CONFIG
                 lines.append(f"{fpath}:{rest}")
             # drop context separators left dangling by filtered files
             cleaned: list[str] = []
@@ -568,46 +589,90 @@ def _action_search(target_dir: Path, query: str, depth: int | None = None) -> st
 # Action 2: Tree
 # ---------------------------------------------------------------------------
 
+# Limits for tree: entries read per directory and overall, plus wall time.
+_TREE_MAX_DIR_ENTRIES = 2_000
+_TREE_MAX_TOTAL_ENTRIES = 20_000
+_TREE_MAX_SECONDS = 5.0
+
+
+def _scan_dir_capped(current: Path, cap: int) -> tuple[list[os.DirEntry], bool]:
+    """os.scandir with early stop: never holds more than `cap` entries of one directory."""
+    entries: list[os.DirEntry] = []
+    more = False
+    with os.scandir(current) as it:
+        for e in it:
+            if e.name in STANDARD_IGNORES or (e.name.startswith(".") and e.name != ".env.example"):
+                continue
+            if len(entries) >= cap:
+                more = True
+                break
+            entries.append(e)
+    return entries, more
+
+
 def _action_tree(target_dir: Path, depth: int = 2) -> str:
     if not target_dir.is_dir():
         return f"Error: Path '{target_dir}' is not a directory."
 
     depth = max(1, min(depth, 6))
     lines: list[str] = [f"{target_dir.name}/"]
+    deadline = time.monotonic() + _TREE_MAX_SECONDS
+    seen = [0]
+    stopped: list[str] = []
+
+    def _is_dir(e: os.DirEntry) -> bool:
+        try:
+            return e.is_dir()
+        except OSError:
+            return False
 
     def _walk(current: Path, prefix: str, current_depth: int):
-        if current_depth > depth:
+        if current_depth > depth or stopped:
+            return
+        if time.monotonic() > deadline:
+            stopped.append(f"[Truncated: tree stopped after {_TREE_MAX_SECONDS:g}s.]")
             return
         try:
-            entries = sorted(
-                [e for e in current.iterdir() if e.name not in STANDARD_IGNORES and not (e.name.startswith(".") and e.name != ".env.example")],
-                key=lambda x: (not x.is_dir(), x.name.lower())
-            )
+            raw, more = _scan_dir_capped(current, _TREE_MAX_DIR_ENTRIES)
         except Exception:
             return
+        seen[0] += len(raw)
+        entries = sorted(raw, key=lambda x: (not _is_dir(x), x.name.lower()))
 
         total_entries = len(entries)
         max_entries = 35
         shown = entries[:max_entries]
 
         for i, entry in enumerate(shown):
-            is_last = (i == len(shown) - 1) and (total_entries <= max_entries)
+            if stopped:
+                return
+            is_last = (i == len(shown) - 1) and (total_entries <= max_entries) and not more
             connector = "└── " if is_last else "├── "
             child_prefix = prefix + ("    " if is_last else "│   ")
+            entry_path = Path(entry.path)
 
-            if entry.is_dir():
+            if _is_dir(entry):
                 lines.append(f"{prefix}{connector}{entry.name}/")
                 # Don't descend into symlinked directories that leave the project tree.
-                if entry.is_symlink() and not _is_path_allowed(entry, get_allowed_roots()):
+                if entry.is_symlink() and not _is_path_allowed(entry_path, get_allowed_roots()):
                     continue
-                _walk(entry, child_prefix, current_depth + 1)
+                if seen[0] >= _TREE_MAX_TOTAL_ENTRIES:
+                    stopped.append(f"[Truncated: tree stopped after {_TREE_MAX_TOTAL_ENTRIES} entries.]")
+                    return
+                _walk(entry_path, child_prefix, current_depth + 1)
             else:
                 lines.append(f"{prefix}{connector}{entry.name}")
 
-        if total_entries > max_entries:
+        if more:
+            lines.append(
+                f"{prefix}└── ... more items (listing stopped at {_TREE_MAX_DIR_ENTRIES} entries in this directory)"
+            )
+        elif total_entries > max_entries:
             lines.append(f"{prefix}└── ... and {total_entries - max_entries} more items")
 
     _walk(target_dir, "", 1)
+    if stopped:
+        lines.append(stopped[0])
     return "\n".join(lines)
 
 
@@ -937,30 +1002,55 @@ _WALK_MAX_FILES = 50_000
 _WALK_MAX_SECONDS = 5.0
 
 
-def _count_repo_files(repo_dir: Path) -> tuple[int, dict[str, int], str]:
-    """Counts files by extension; stops at _WALK_MAX_FILES or _WALK_MAX_SECONDS.
+_WALK_MAX_DIR_ENTRIES = 10_000
 
-    Returns (total, ext_counts, truncated_notice) where the notice is "" when complete."""
+
+def _count_repo_files(repo_dir: Path) -> tuple[int, dict[str, int], str]:
+    """Counts files by extension with streaming os.scandir and early stop.
+
+    Limits (checked per entry, before any directory is fully listed): total files
+    _WALK_MAX_FILES, wall time _WALK_MAX_SECONDS, and _WALK_MAX_DIR_ENTRIES per
+    directory. Returns (total, ext_counts, truncated_notice)."""
     total = 0
     ext_counts: dict[str, int] = {}
     deadline = time.monotonic() + _WALK_MAX_SECONDS
     notice = ""
-    for root, dirs, files in os.walk(repo_dir):
-        dirs[:] = [d for d in dirs if d not in STANDARD_IGNORES and not d.startswith(".")]
-        if time.monotonic() > deadline:
-            notice = f"[Truncated: file walk stopped after {_WALK_MAX_SECONDS:g}s; counts are partial.]"
-            break
-        for fname in files:
-            if fname.startswith("."):
-                continue
-            if total >= _WALK_MAX_FILES:
-                notice = f"[Truncated: file walk stopped at {_WALK_MAX_FILES} files; counts are partial.]"
-                break
-            total += 1
-            ext = Path(fname).suffix.lower() or "no_ext"
-            ext_counts[ext] = ext_counts.get(ext, 0) + 1
-        if notice:
-            break
+    stack = [repo_dir]
+    while stack and not notice:
+        current = stack.pop()
+        try:
+            it = os.scandir(current)
+        except OSError:
+            continue
+        with it:
+            per_dir = 0
+            for e in it:
+                if time.monotonic() > deadline:
+                    notice = f"[Truncated: file walk stopped after {_WALK_MAX_SECONDS:g}s; counts are partial.]"
+                    break
+                per_dir += 1
+                if per_dir > _WALK_MAX_DIR_ENTRIES:
+                    notice = (
+                        f"[Truncated: a directory has more than {_WALK_MAX_DIR_ENTRIES} entries; "
+                        "counts are partial.]"
+                    )
+                    break
+                name = e.name
+                try:
+                    if e.is_dir(follow_symlinks=False):
+                        if name not in STANDARD_IGNORES and not name.startswith("."):
+                            stack.append(Path(e.path))
+                        continue
+                except OSError:
+                    continue
+                if name.startswith("."):
+                    continue
+                if total >= _WALK_MAX_FILES:
+                    notice = f"[Truncated: file walk stopped at {_WALK_MAX_FILES} files; counts are partial.]"
+                    break
+                total += 1
+                ext = Path(name).suffix.lower() or "no_ext"
+                ext_counts[ext] = ext_counts.get(ext, 0) + 1
     return total, ext_counts, notice
 
 

@@ -1150,3 +1150,95 @@ def test_r8_4_run_output_redacts_aws_key(run_workspace: Path) -> None:
     (run_workspace / "notes.txt").write_text(f"key {key}\n", encoding="utf-8")
     res = _exec(run_workspace, "cat notes.txt")
     assert "Exit: 0" in res and key not in res
+
+
+# ---------------------------------------------------------------------------
+# Round 9 regression tests: (1) cargo always confirmed, (2) dynamic patch guard
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("cmd", [
+    "cargo check", "cargo metadata", "cargo tree", "cargo version", "cargo test", "cargo build",
+    "cargo clippy", "cargo bench", "cargo tree --depth 1", "cargo metadata --format-version 1",
+])
+def test_r9_1_every_cargo_subcommand_needs_yes(cmd: str) -> None:
+    ok, _, reason = _validate_command(cmd)
+    assert not ok and "confirmation" in reason, (cmd, reason)
+    ok, _, reason = _validate_command(cmd, human_confirmed=True)
+    assert ok, (cmd, reason)
+
+
+@pytest.mark.parametrize("cmd", [
+    "cargo status", "cargo payload", "cargo b", "cargo t", "cargo r", "cargo run", "cargo x --version",
+    "cargo -q check", "cargo --list", "cargo install foo",
+])
+def test_r9_1_unknown_or_alias_cargo_subcommands_refused_even_if_confirmed(cmd: str) -> None:
+    for confirmed in (False, True):
+        ok, _, reason = _validate_command(cmd, human_confirmed=confirmed)
+        assert not ok and reason.startswith("Refused:"), (cmd, confirmed, reason)
+
+
+@pytest.mark.parametrize("cmd", ["cargo --version", "cargo -V", "cargo --help", "cargo -h"])
+def test_r9_1_cargo_version_help_need_no_yes(cmd: str) -> None:
+    ok, _, reason = _validate_command(cmd)
+    assert ok, reason
+
+
+def test_r9_1_repo_alias_cargo_status_does_not_run(run_workspace: Path, hud) -> None:
+    marker = run_workspace / "alias_ran"
+    (run_workspace / ".cargo").mkdir()
+    (run_workspace / ".cargo" / "config.toml").write_text(
+        f'[alias]\nstatus = "run --bin touch -- {marker}"\n', encoding="utf-8")
+    res = _exec(run_workspace, "cargo status")
+    assert res.startswith("Refused:"), res
+    res = _exec(run_workspace, "cargo metadata")
+    assert "[CONFIRMATION_PENDING]" in res or "cannot confirm" in res, res
+    core_confirm.resolve(False)
+    time.sleep(0.2)
+    assert not marker.exists()
+
+
+def test_r9_2_custom_registry_auth_file_blocks_patch(run_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    secret = "custom" + "RegAuth" + "Value31"
+    sub = run_workspace / "deploy"
+    sub.mkdir()
+    custom = sub / "login-state.json"
+    custom.write_text(f'{{"x": "{secret}"}}\n', encoding="utf-8")
+    _commit(run_workspace, "custom auth", "deploy/login-state.json")
+    monkeypatch.setenv("REGISTRY_AUTH_FILE", str(custom))
+    for cwd in (run_workspace, sub):
+        for cmd in ("git show HEAD", "git log -p -n 1", "git diff HEAD~1 HEAD", "git log -p --relative -n 1"):
+            res = _exec(cwd, cmd)
+            assert res.startswith("Refused:") and secret not in res, (cwd, cmd, res)
+
+
+def test_r9_2_deleted_and_renamed_custom_auth_file_blocks_patch(run_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    secret = "moved" + "RegAuth" + "Value32"
+    dcfg = run_workspace / "dockercfg"
+    dcfg.mkdir()
+    (dcfg / "config.json").write_text(f'{{"x": "{secret}"}}\n', encoding="utf-8")
+    _commit(run_workspace, "docker cfg", "dockercfg/config.json")
+    monkeypatch.setenv("DOCKER_CONFIG", str(dcfg))
+    subprocess.run(["git", "-C", str(run_workspace), "mv", "dockercfg/config.json", "notes.json"], check=True)
+    _commit(run_workspace, "rename", "dockercfg/config.json", "notes.json")
+    (run_workspace / "notes.json").unlink()
+    _commit(run_workspace, "delete", "notes.json")
+    for cmd in ("git show HEAD~1", "git log -p -n 3", "git diff HEAD~3 HEAD~1"):
+        res = _exec(run_workspace, cmd)
+        assert res.startswith("Refused:") and secret not in res, (cmd, res)
+
+
+def test_r9_2_dynamic_guard_does_not_block_unrelated_history(run_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("REGISTRY_AUTH_FILE", str(run_workspace / "never-committed.json"))
+    res = _exec(run_workspace, "git show HEAD")
+    assert "Exit: 0" in res and "Safe read file" in res
+
+
+def test_r9_2_diff_across_rename_of_static_secret_blocks(run_workspace: Path) -> None:
+    secret = "static" + "Renamed" + "Value33"
+    (run_workspace / ".env").write_text(f"X={secret}\n", encoding="utf-8")
+    _commit(run_workspace, "env", ".env")
+    subprocess.run(["git", "-C", str(run_workspace), "mv", ".env", "notes.txt"], check=True)
+    _commit(run_workspace, "rename", ".env", "notes.txt")
+    for cmd in ("git diff HEAD~2 HEAD", "git diff HEAD~2..HEAD", "git diff HEAD~2...HEAD", "git diff HEAD~2"):
+        res = _exec(run_workspace, cmd)
+        assert res.startswith("Refused:") and secret not in res, (cmd, res)

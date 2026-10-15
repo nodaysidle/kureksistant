@@ -698,3 +698,111 @@ def test_r8_3_index_status_time_limit(test_workspace: dict[str, Path], monkeypat
 def test_r8_3_small_repo_not_truncated(test_workspace: dict[str, Path]) -> None:
     res = codebase({"action": "status", "root": str(test_workspace["py"])})
     assert "Truncated" not in res
+
+
+# ---------------------------------------------------------------------------
+# Round 9 regression tests: (3) streaming walks with early stop, template search
+# ---------------------------------------------------------------------------
+
+def _scandir_spy(monkeypatch: pytest.MonkeyPatch, cb):
+    counts = {"yielded": 0}
+    real = os.scandir
+
+    class _It:
+        def __init__(self, inner):
+            self._inner = inner
+        def __iter__(self):
+            for e in self._inner:
+                counts["yielded"] += 1
+                yield e
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            self._inner.close()
+
+    monkeypatch.setattr(cb.os, "scandir", lambda p: _It(real(p)))
+    return counts
+
+
+def test_r9_3_tree_stops_reading_huge_directory(test_workspace: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    import actions.codebase as cb
+    repo = test_workspace["py"]
+    big = repo / "big"
+    big.mkdir()
+    for i in range(500):
+        (big / f"f{i:04d}.txt").write_text("", encoding="utf-8")
+    monkeypatch.setattr(cb, "_TREE_MAX_DIR_ENTRIES", 50)
+    counts = _scandir_spy(monkeypatch, cb)
+    res = codebase({"action": "tree", "root": str(repo), "path": "big", "depth": 1})
+    assert "listing stopped at 50 entries" in res, res[-300:]
+    assert counts["yielded"] <= 60, counts
+
+
+def test_r9_3_tree_total_entry_and_time_limits(test_workspace: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    import actions.codebase as cb
+    repo = test_workspace["py"]
+    for i in range(10):
+        d = repo / f"d{i}"
+        d.mkdir()
+        for j in range(10):
+            (d / f"x{j}.txt").write_text("", encoding="utf-8")
+    monkeypatch.setattr(cb, "_TREE_MAX_TOTAL_ENTRIES", 20)
+    res = codebase({"action": "tree", "root": str(repo), "depth": 3})
+    assert "Truncated: tree stopped after 20 entries" in res, res[-300:]
+    monkeypatch.setattr(cb, "_TREE_MAX_TOTAL_ENTRIES", 20_000)
+    monkeypatch.setattr(cb, "_TREE_MAX_SECONDS", 0.0)
+    res = codebase({"action": "tree", "root": str(repo), "depth": 3})
+    assert "Truncated: tree stopped after" in res
+
+
+def test_r9_3_status_index_stop_inside_huge_directory(test_workspace: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    import actions.codebase as cb
+    repo = test_workspace["py"]
+    big = repo / "big"
+    big.mkdir()
+    for i in range(500):
+        (big / f"f{i:04d}.txt").write_text("", encoding="utf-8")
+    monkeypatch.setattr(cb, "_WALK_MAX_DIR_ENTRIES", 40)
+    counts = _scandir_spy(monkeypatch, cb)
+    total, _, notice = cb._count_repo_files(big)
+    assert "more than 40 entries" in notice and total <= 40
+    assert counts["yielded"] <= 41, counts
+    monkeypatch.setattr(cb, "_WALK_MAX_DIR_ENTRIES", 10_000)
+    monkeypatch.setattr(cb, "_WALK_MAX_FILES", 25)
+    counts["yielded"] = 0
+    total, _, notice = cb._count_repo_files(big)
+    assert total == 25 and "25 files" in notice and counts["yielded"] <= 26
+    for action in ("status", "index"):
+        res = codebase({"action": action, "root": str(repo)})
+        assert "Truncated" in res, (action, res)
+
+
+def test_r9_3_walk_no_os_walk_or_listdir(monkeypatch: pytest.MonkeyPatch, test_workspace: dict[str, Path]) -> None:
+    import actions.codebase as cb
+    def boom(*a, **k):
+        raise AssertionError("full listing used")
+    monkeypatch.setattr(cb.os, "walk", boom)
+    monkeypatch.setattr(cb.os, "listdir", boom)
+    repo = test_workspace["py"]
+    assert "Files:" in codebase({"action": "status", "root": str(repo)})
+    assert "main.py" in codebase({"action": "tree", "root": str(repo)})
+
+
+def test_r9_opt_env_templates_searchable_secrets_not(secret_repo: Path) -> None:
+    (secret_repo / ".env.example").write_text("TEMPLATE_ONLY_MARKER=\n", encoding="utf-8")
+    (secret_repo / ".env.sample").write_text("TEMPLATE_ONLY_MARKER=\n", encoding="utf-8")
+    (secret_repo / ".env").write_text(f"TEMPLATE_ONLY_MARKER={FAKE_DS}\n", encoding="utf-8")
+    res = codebase({"action": "search", "root": str(secret_repo), "query": "TEMPLATE_ONLY_MARKER"})
+    assert ".env.example" in res and ".env.sample" in res, res
+    assert FAKE_DS not in res
+    assert "/.env:" not in res and "\n.env:" not in res
+
+
+def test_r9_opt_template_symlink_to_env_not_searched(test_workspace: dict[str, Path]) -> None:
+    repo = test_workspace["py"]
+    val = "symlinked" + "Template" + "Secret9"
+    (repo / ".env").write_text(f"X={val}\n", encoding="utf-8")
+    (repo / ".env.template").symlink_to(repo / ".env")
+    res = codebase({"action": "search", "root": str(repo), "query": val})
+    body = res.split("\n", 1)[1] if "\n" in res else ""
+    assert val not in body, res

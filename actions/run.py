@@ -272,8 +272,10 @@ _NODE_PM_BLOCKED_FLAGS = frozenset({
 })
 
 # go: options that execute a custom program.
-# cargo subcommands that compile/run build.rs, proc macros or tests from the repo.
-_CARGO_RUNS_REPO_CODE = frozenset({"check", "test", "build", "clippy", "bench"})
+# Real cargo subcommands the tool accepts (built-ins, plus clippy). Anything else,
+# e.g. a repo-defined alias like 'cargo status', is refused. All of them still
+# need a human yes; only 'cargo --version/-V/--help' runs without one.
+_CARGO_REAL_SUBCOMMANDS = frozenset({"check", "test", "build", "clippy", "bench", "tree", "metadata", "version"})
 
 _GO_BLOCKED_FLAGS = frozenset({"exec", "toolexec", "overlay", "modfile", "o", "pgo", "C"})
 
@@ -580,15 +582,13 @@ def _validate_command(cmd_str: str, human_confirmed: bool = False) -> tuple[bool
     if binary == "cargo":
         if len(tokens) < 2:
             return False, [], "Refused: 'cargo' requires a subcommand (e.g. 'cargo check', 'cargo test', 'cargo clippy')."
-        subcmd = tokens[1].lower()
-        allowed_cargo = {
-            "check", "test", "build", "clippy", "bench", "tree", "metadata",
-            "status", "version", "--version", "-V", "--help", "-h",
-        }
-        if subcmd not in allowed_cargo:
+        subcmd = tokens[1]
+        if len(tokens) == 2 and subcmd in ("--version", "-V", "--help", "-h"):
+            return True, tokens, ""  # handled by cargo itself, no subcommand/alias lookup
+        if subcmd not in _CARGO_REAL_SUBCOMMANDS:
             return False, [], (
-                f"Refused: 'cargo {subcmd}' is not in the safe build/test allowlist "
-                "(check, test, build, clippy, bench, tree, metadata)."
+                f"Refused: 'cargo {subcmd}' is not in the allowlist of real cargo subcommands "
+                f"({', '.join(sorted(_CARGO_REAL_SUBCOMMANDS))}); repository aliases are not run."
             )
         for a in tokens[2:]:
             if a == "--":
@@ -598,9 +598,9 @@ def _validate_command(cmd_str: str, human_confirmed: bool = False) -> tuple[bool
                     f"Refused: 'cargo {a}' can override build configuration, toolchains, or output paths "
                     "and is not permitted."
                 )
-        if subcmd in _CARGO_RUNS_REPO_CODE:
-            return _needs_human(f"cargo {subcmd}")
-        return True, tokens, ""
+        # Every cargo subcommand loads repository config (.cargo/config.toml can alias,
+        # wrap or run build scripts), so all of them need a human yes.
+        return _needs_human(f"cargo {subcmd}")
 
     # 6. 'pytest'
     if binary == "pytest":
@@ -870,7 +870,26 @@ def _tracked_secret_files(cwd_path: Path) -> list[str]:
         return ["(could not list tracked files)"]
     if res.returncode != 0:
         return []
-    return [f for f in res.stdout.split("\0") if f and is_secret_file(Path(f))]
+    return _secret_repo_paths(res.stdout.split("\0"), Path(repo_root))
+
+
+def _secret_repo_paths(pieces: list[str], repo_root: Path) -> list[str]:
+    """Repo-root-relative paths that are secrets: by name/dir (is_secret_file on the
+    absolute path) or because they resolve to $REGISTRY_AUTH_FILE / $DOCKER_CONFIG targets."""
+    dyn = _dynamic_secret_targets()
+    hits: list[str] = []
+    for piece in pieces:
+        piece = piece.strip()
+        if not piece or piece in hits:
+            continue
+        absolute = repo_root / piece
+        try:
+            resolved = absolute.resolve()
+        except OSError:
+            resolved = absolute
+        if is_secret_file(Path(piece)) or is_secret_file(absolute) or resolved in dyn or absolute in dyn:
+            hits.append(piece)
+    return hits
 
 
 def _git_repo_root(cwd_path: Path) -> str | None:
@@ -920,33 +939,56 @@ def _touched_secret_files(tokens: list[str], cwd_path: Path) -> list[str]:
         if sub == "stash" and a in ("-u", "--include-untracked", "--only-untracked"):
             continue
         kept.append(a)
-    names = ["--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z"]
+    # Forced flags go AFTER the user's flags so they win (e.g. over --relative / --pretty).
+    names = ["--no-ext-diff", "--no-textconv", "--no-renames", "--no-relative", "--name-only", "-z"]
     if sub == "diff":
-        cmd = ["diff", *names]
+        cmd, forced = ["diff"], names
     elif sub == "stash" and tokens[2:3] == ["list"]:
-        cmd = ["log", "-g", "refs/stash", *names, "--format=", "--diff-merges=separate"]
+        cmd, forced = ["log", "-g", "refs/stash"], [*names, "--format=", "--diff-merges=separate"]
     elif sub == "stash":
-        cmd = ["stash", "show", *names, "--include-untracked"]
+        cmd, forced = ["stash", "show"], [*names, "--include-untracked"]
     else:  # log, show
-        cmd = [sub, *names, "--format=", "--diff-merges=separate"]
+        cmd, forced = [sub], [*names, "--format=", "--diff-merges=separate"]
     repo_root = _git_repo_root(cwd_path)
     if repo_root is None:
         return []
     try:
         res = subprocess.run(
-            ["git", "-C", str(cwd_path), *cmd, *kept, *paths],
+            ["git", "-C", str(cwd_path), *cmd, *kept, *forced, *paths],
             capture_output=True, timeout=15, env=git_safe_env(),
         )
     except Exception:
         return ["(could not list the paths this command would show)"]
     if res.returncode != 0:
         return ["(could not list the paths this command would show)"]
-    hits: list[str] = []
-    for piece in re.split(r"[\0\n\t]", res.stdout.decode("utf-8", "replace")):
-        piece = piece.strip()
-        if piece and is_secret_file(Path(piece)) and piece not in hits:
-            hits.append(piece)
-    return hits
+    pieces = re.split(r"[\0\n\t]", res.stdout.decode("utf-8", "replace"))
+    if sub == "diff":
+        # A diff between commits can show a secret's content under a new name (it was
+        # renamed or copied in between), so also list every path touched by the
+        # commits between the endpoints.
+        revs = [a for a in kept if not a.startswith("-")]
+        if len(revs) == 1 and ".." in revs[0]:
+            a_, _, b_ = revs[0].replace("...", "..").partition("..")
+            spec = [f"{a_ or 'HEAD'}...{b_ or 'HEAD'}"]
+        elif len(revs) == 1:
+            spec = [f"{revs[0]}...HEAD"]
+        elif len(revs) >= 2:
+            spec = [f"{revs[0]}...{revs[1]}"]
+        else:
+            spec = []
+        if spec:
+            try:
+                lres = subprocess.run(
+                    ["git", "-C", str(cwd_path), "log", "--no-ext-diff", "--no-textconv", "--no-renames",
+                     "--no-relative", "--name-only", "-z", "--format=", "--diff-merges=separate", *spec, *paths],
+                    capture_output=True, timeout=15, env=git_safe_env(),
+                )
+            except Exception:
+                return ["(could not list the paths this command would show)"]
+            if lres.returncode != 0:
+                return ["(could not list the paths this command would show)"]
+            pieces += re.split(r"[\0\n\t]", lres.stdout.decode("utf-8", "replace"))
+    return _secret_repo_paths(pieces, Path(repo_root))
 
 
 def _request_human_confirmation(run_id: str, cmd_str: str, tokens: list[str], cwd_path: Path, timeout_arg: Any) -> str:
