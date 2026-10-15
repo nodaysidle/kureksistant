@@ -504,3 +504,38 @@ def test_remote_blocks_codebase_tool(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "codebase" in daemon.REMOTE_BLOCKED_EXEC_TOOLS
     # local (non-remote) use is unaffected
     assert engine._run_tool("codebase", {"action": "status"}, remote=False) == "executed"
+
+
+@pytest.mark.parametrize("cmd", [
+    "grep -fOUTSIDE hello.txt",
+    "grep --file=hello.txt hello.txt",
+    "rg -f hello.txt x",
+    "diff --diff-program=sh hello.txt hello.txt",
+    "git config --file=x --list",
+    "git config -f x --list",
+    "git config --blob HEAD:x --list",
+])
+def test_round2_file_and_program_flags_refused(cmd: str) -> None:
+    ok, _, reason = _validate_command(cmd)
+    assert not ok and reason.startswith("Refused:"), cmd
+
+
+def test_round2_attached_and_equals_path_values_checked(run_workspace: Path, outside_secret: Path) -> None:
+    (run_workspace / ".env").write_text("X=1\n", encoding="utf-8")
+    for cmd in [
+        f"diff --from-file={outside_secret} hello.txt",
+        f"diff --to-file={outside_secret} hello.txt",
+        "diff --from-file=.env hello.txt",
+        f"pytest {outside_secret.parent}",
+        f"python -m pytest {outside_secret}",
+        f"swift test --package-path {outside_secret.parent}",
+        f"swift test --package-path={outside_secret.parent}",
+    ]:
+        res = _exec(run_workspace, cmd)
+        assert res.startswith("Refused:"), (cmd, res)
+        assert "OUTSIDE_ROOT_CONTENT" not in res
+
+
+def test_redaction_quoted_values_without_digits() -> None:
+    out = _redact_secrets('{"api_key": "abcdefghijk"}  password: "hunter-two-x"')
+    assert "abcdefghijk" not in out and "hunter-two-x" not in out

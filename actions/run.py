@@ -130,6 +130,11 @@ _SECRET_PATTERNS = [
         r"""(?i)(["']?[A-Za-z0-9_\-]*(?:api[_\-]?key|apikey|secret|token|passw(?:or)?d|auth[_\-]?key|private[_\-]?key)["']?\s*[:=]\s*["']?)"""
         r"""(?!\[REDACTED)(?=[A-Za-z0-9_\-+/=.~]*\d)([A-Za-z0-9_\-+/=.~]{8,})(?![\w(])"""
     ), r"\1[REDACTED_SECRET]"),
+    # Quoted credential values (JSON/YAML/TOML/code literals): redact regardless of digits.
+    (re.compile(
+        r"""(?i)(["']?[A-Za-z0-9_\-]*(?:api[_\-]?key|apikey|secret|token|passw(?:or)?d|auth[_\-]?key|private[_\-]?key)["']?\s*[:=]\s*["'])"""
+        r"""(?!\[REDACTED)([^"'\s]{8,})(?=["'])"""
+    ), r"\1[REDACTED_SECRET]"),
 ]
 
 # Environment variables whose values are always scrubbed from output.
@@ -249,12 +254,10 @@ _GIT_REF_VALUE_FLAGS = frozenset({
 _GIT_CONFIG_WRITE_FLAGS = frozenset({
     "--add", "--unset", "--unset-all", "--replace-all", "--edit", "-e", "--rename-section",
     "--remove-section", "set", "unset", "rename-section", "remove-section", "edit",
+    "-f", "--file", "--blob", "--worktree", "--system",
 })
 
 # Binaries whose non-flag arguments are file paths and must stay inside the allowed roots.
-_PATH_CHECKED_BINARIES = frozenset(SAFE_READ_BINARIES | {"find"})
-
-
 def _flag_base(tok: str) -> str:
     return tok.split("=", 1)[0]
 
@@ -282,15 +285,31 @@ def _validate_git_ref_args(subcmd: str, args: list[str]) -> str:
     return ""
 
 
-def _validate_path_args(binary: str, tokens: list[str], base_dir: Path, allowed_roots: list[Path]) -> str:
-    """Refuse read-tool arguments that point at existing paths outside the roots or at secret files."""
-    if binary not in _PATH_CHECKED_BINARIES:
-        return ""
+def _path_candidates(tokens: list[str]) -> list[tuple[str, str]]:
+    """(original token, path-like value) pairs: positionals, --flag=VALUE and attached -fVALUE."""
+    out: list[tuple[str, str]] = []
     for tok in tokens[1:]:
-        if tok.startswith("-") and tok != "-":
+        if tok == "-" or tok == "--":
+            continue
+        if tok.startswith("--"):
+            if "=" in tok:
+                out.append((tok, tok.split("=", 1)[1]))
+            continue
+        if tok.startswith("-"):
+            if len(tok) > 2:
+                out.append((tok, tok[2:]))
+            continue
+        out.append((tok, tok))
+    return out
+
+
+def _validate_path_args(binary: str, tokens: list[str], base_dir: Path, allowed_roots: list[Path]) -> str:
+    """Refuse arguments (any allowlisted tool) that point at existing paths outside the roots or at secret files."""
+    for tok, value in _path_candidates(tokens):
+        if not value:
             continue
         try:
-            cand = Path(os.path.expanduser(tok))
+            cand = Path(os.path.expanduser(value))
             if not cand.is_absolute():
                 cand = base_dir / cand
             resolved = cand.resolve()
@@ -368,8 +387,13 @@ def _validate_command(cmd_str: str, confirm: bool = False) -> tuple[bool, list[s
             return False, [], "Refused: this 'file' option reads or writes arbitrary magic/list files."
         if binary == "wc" and any(_flag_base(a) == "--files0-from" for a in tokens[1:]):
             return False, [], "Refused: 'wc --files0-from' is not permitted."
-        if binary in ("grep",) and any(_flag_base(a) in ("-f", "--file") for a in tokens[1:]):
-            return False, [], "Refused: 'grep -f' reads patterns from arbitrary files and is not permitted."
+        if binary in ("grep", "rg", "ripgrep") and any(
+            _flag_base(a) in ("--file", "--ignore-file") or (a.startswith("-f") and not a.startswith("--"))
+            for a in tokens[1:]
+        ):
+            return False, [], f"Refused: '{binary} -f/--file' reads patterns from arbitrary files and is not permitted."
+        if binary == "diff" and any(_flag_base(a) in ("--diff-program",) for a in tokens[1:]):
+            return False, [], "Refused: 'diff --diff-program' runs an external program and is not permitted."
         return True, tokens, ""
 
     # 3. 'find' safety check

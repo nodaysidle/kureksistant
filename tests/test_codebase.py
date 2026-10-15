@@ -286,3 +286,22 @@ def test_codebase_search_python_fallback_skips_secrets(secret_repo: Path, monkey
     res = codebase({"action": "search", "root": str(secret_repo), "query": "API_KEY"})
     assert FAKE_DS not in res and FAKE_GOOGLE not in res
     assert "innocent.txt" not in res
+
+
+def test_codebase_root_traversal_refused(test_workspace: dict[str, Path], tmp_path: Path) -> None:
+    outside = tmp_path / "outside_root_dir"
+    outside.mkdir()
+    (outside / "x.txt").write_text("OUTSIDE_ROOT_CONTENT", encoding="utf-8")
+    for root in ("../../outside_root_dir", "../outside_root_dir", str(outside)):
+        for action in ("tree", "search", "find"):
+            res = codebase({"action": action, "root": root, "query": "OUTSIDE"})
+            assert "OUTSIDE_ROOT_CONTENT" not in res and "x.txt" not in res, (root, action, res)
+
+
+@pytest.mark.parametrize("name", [".pgpass", "credentials.json", "API_KEYS.JSON", "cert.p12"])
+def test_codebase_search_and_read_skip_extra_secret_names(secret_repo: Path, name: str) -> None:
+    (secret_repo / name).write_text(f"value={FAKE_DS}\n", encoding="utf-8")
+    res = codebase({"action": "search", "root": str(secret_repo), "query": "value="})
+    assert FAKE_DS not in res and name not in res
+    assert codebase({"action": "read", "root": str(secret_repo), "path": name}).startswith("Refused")
+    assert codebase({"action": "outline", "root": str(secret_repo), "path": name}).startswith("Refused")

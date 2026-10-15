@@ -130,6 +130,11 @@ def get_allowed_roots() -> list[Path]:
 _SECRET_FILE_NAMES = frozenset({
     "api_keys.json", ".git-credentials", ".netrc", ".pgpass", "credentials.json",
 })
+# Globs excluded from rg searches; a superset of is_secret_file().
+_SECRET_SEARCH_GLOBS = (
+    ".env", ".env.*", "api_keys.json", ".git-credentials", ".netrc", ".pgpass", "credentials.json",
+    "*.pem", "*.key", "*.p12", "*.pfx", "id_*", ".git",
+)
 _ENV_TEMPLATE_NAMES = frozenset({".env.example", ".env.sample", ".env.template"})
 _SSH_KEY_RE = re.compile(r"^id_[a-z0-9]+$")
 
@@ -195,7 +200,7 @@ def _resolve_target(
             for ar in allowed_roots:
                 if ar.is_dir():
                     direct = (ar / r_str).resolve()
-                    if direct.is_dir():
+                    if direct.is_dir() and _is_path_allowed(direct, allowed_roots):
                         matched.append(direct)
                     else:
                         # Scan one level down (e.g. ~/dev/nodaysidle/kurekizmo)
@@ -203,7 +208,7 @@ def _resolve_target(
                             for sub in ar.iterdir():
                                 if sub.is_dir():
                                     sub_target = (sub / r_str).resolve()
-                                    if sub_target.is_dir():
+                                    if sub_target.is_dir() and _is_path_allowed(sub_target, allowed_roots):
                                         matched.append(sub_target)
                         except Exception:
                             pass
@@ -310,15 +315,9 @@ def _action_search(target_dir: Path, query: str, depth: int | None = None) -> st
             "-g", "!.venv",
             "-g", "!__pycache__",
             "-g", "!*.lock",
-            "-g", "!.env",
-            "-g", "!.env.*",
-            "-g", "!api_keys.json",
-            "-g", "!*.pem",
-            "-g", "!*.key",
-            "-g", "!id_*",
-            "-g", "!.git-credentials",
-            "-g", "!.netrc",
         ]
+        for secret_glob in _SECRET_SEARCH_GLOBS:
+            cmd.extend(["--iglob", f"!{secret_glob}"])
         if depth is not None and depth > 0:
             cmd.extend(["--max-depth", str(depth)])
         cmd.extend(["-e", query_str, str(target_dir)])
@@ -627,6 +626,8 @@ def _outline_file(file_path: Path) -> list[str]:
 
 
 def _action_outline(target: Path) -> str:
+    if target.is_file() and is_secret_file(target):
+        return f"Refused: '{target.name}' is a credential/secret file and cannot be outlined."
     if target.is_file():
         syms = _outline_file(target)
         if not syms:
