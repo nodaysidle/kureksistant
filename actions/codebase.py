@@ -24,6 +24,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -188,6 +189,21 @@ def git_safe_env(base: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+def _rg_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """ripgrep must not load a config file (it could enable --pre or --follow)."""
+    env = dict(os.environ if base is None else base)
+    env.pop("RIPGREP_CONFIG_PATH", None)
+    return env
+
+
+def _is_regular_file(path: Path) -> bool:
+    """True only for regular files (after following symlinks): no FIFO/device/socket."""
+    try:
+        return stat.S_ISREG(os.stat(path).st_mode)
+    except OSError:
+        return False
+
+
 def _redact(text: str) -> str:
     from actions.run import _redact_secrets  # lazy: actions.run imports this module
     return _redact_secrets(text)
@@ -310,6 +326,8 @@ def _is_binary(file_path: Path) -> bool:
     """Quickly check if file is binary by extension or null byte in first 1024 bytes."""
     if file_path.suffix.lower() in BINARY_EXTENSIONS:
         return True
+    if not _is_regular_file(file_path):
+        return True  # never open FIFOs, devices or sockets
     try:
         with open(file_path, "rb") as f:
             chunk = f.read(1024)
@@ -334,6 +352,7 @@ def _action_search(target_dir: Path, query: str, depth: int | None = None) -> st
     if rg_path:
         cmd = [
             rg_path,
+            "--no-config",
             "-n",
             "-C", "2",
             "--max-columns", "500",
@@ -355,7 +374,7 @@ def _action_search(target_dir: Path, query: str, depth: int | None = None) -> st
         cmd.extend(["-e", query_str, str(target_dir)])
 
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=12)
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=12, env=_rg_env())
             raw_out = res.stdout.strip()
             if not raw_out and res.returncode == 1:
                 return f"No matches found for '{query_str}' in {target_dir.name}."
@@ -468,6 +487,8 @@ def _action_read(target_file: Path, lines_arg: str | None = None) -> str:
         return f"Error: File '{target_file}' does not exist."
     if target_file.is_dir():
         return f"Error: Path '{target_file.name}' is a directory. Use action='tree' to list directory contents."
+    if not _is_regular_file(target_file):
+        return f"Refused: '{target_file.name}' is not a regular file (FIFO, device or socket)."
     if is_secret_file(target_file):
         return (
             f"Refused: '{target_file.name}' is a credential/secret file (.env*, api_keys.json, *.pem, "
@@ -538,6 +559,7 @@ def _action_find(target_dir: Path, query: str | None = None) -> str:
     if rg_path:
         cmd = [
             rg_path,
+            "--no-config",
             "--files",
             "--hidden",
             "-g", "!.git",
@@ -552,7 +574,7 @@ def _action_find(target_dir: Path, query: str | None = None) -> str:
             str(target_dir),
         ]
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=8, env=_rg_env())
             for l in res.stdout.splitlines():
                 if l.strip():
                     matches.append(Path(l.strip()))

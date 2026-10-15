@@ -402,3 +402,48 @@ def test_followup_outline_dir_skips_secret_and_outside_symlinks(test_workspace: 
     res = codebase({"action": "outline", "root": str(repo), "path": "."})
     assert "outside_only_symbol" not in res
     assert "ServiceEngine" in res
+
+
+
+# ---------------------------------------------------------------------------
+# Round 5 regression tests: (1) rg config, (5) regular files only
+# ---------------------------------------------------------------------------
+
+
+def test_r5_1_codebase_search_ignores_ripgrep_config(test_workspace: dict[str, Path], tmp_path: Path,
+                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = test_workspace["py"]
+    cfg = tmp_path / "rgrc"
+    cfg.write_text("--follow\n--pre=rm\n", encoding="utf-8")
+    monkeypatch.setenv("RIPGREP_CONFIG_PATH", str(cfg))
+    res = codebase({"action": "search", "root": str(repo), "query": "Hello world"})
+    assert "main.py" in res
+    assert (repo / "main.py").exists()
+    res = codebase({"action": "find", "root": str(repo), "query": "main"})
+    assert "main.py" in res and (repo / "main.py").exists()
+
+
+def test_r5_5_codebase_read_refuses_fifo(test_workspace: dict[str, Path]) -> None:
+    import threading
+    repo = test_workspace["py"]
+    fifo = repo / "pipe.txt"
+    os.mkfifo(fifo)
+    out: dict[str, str] = {}
+    th = threading.Thread(target=lambda: out.setdefault("r", codebase({"action": "read", "root": str(repo), "path": "pipe.txt"})), daemon=True)
+    th.start()
+    th.join(5)
+    assert not th.is_alive(), "codebase read blocked on a FIFO"
+    assert out["r"].startswith("Refused") and "regular file" in out["r"]
+    # search/outline over the directory must not block on it either
+    th2 = threading.Thread(target=lambda: out.setdefault("s", codebase({"action": "outline", "root": str(repo), "path": "."})), daemon=True)
+    th2.start()
+    th2.join(5)
+    assert not th2.is_alive()
+
+
+def test_r5_5_codebase_read_refuses_device(test_workspace: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = test_workspace["py"]
+    (repo / "devnull_link").symlink_to("/dev/null")
+    monkeypatch.setenv("KUREK_CODEBASE_ROOTS", f"{test_workspace['workspace']}:/dev")
+    res = codebase({"action": "read", "root": str(repo), "path": "devnull_link"})
+    assert res.startswith("Refused") and "regular file" in res

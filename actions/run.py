@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from actions.codebase import get_allowed_roots, _is_path_allowed, is_secret_file, git_safe_env
+from actions.codebase import get_allowed_roots, _is_path_allowed, is_secret_file, git_safe_env, _rg_env
 from core import confirm as _confirm
 
 # ---------------------------------------------------------------------------
@@ -428,7 +428,11 @@ def _validate_command(cmd_str: str, human_confirmed: bool = False) -> tuple[bool
             return False, [], "Refused: 'tail -f' never exits and is not permitted."
         if binary == "tree" and any(_flag_base(a) in ("-o", "-R") or a.startswith("-o") for a in tokens[1:]):
             return False, [], "Refused: 'tree -o' writes files and is not permitted."
-        if binary == "file" and any(_flag_base(a) in ("-C", "--compile", "-m", "--magic-file", "-f", "--files-from") for a in tokens[1:]):
+        if binary == "file" and any(
+            _flag_base(a) in ("--compile", "--magic-file", "--files-from")
+            or (a.startswith("-") and not a.startswith("--") and any(ch in a[1:] for ch in "Cmf"))
+            for a in tokens[1:]
+        ):
             return False, [], "Refused: this 'file' option reads or writes arbitrary magic/list files."
         if binary == "wc" and any(_flag_base(a) == "--files0-from" for a in tokens[1:]):
             return False, [], "Refused: 'wc --files0-from' is not permitted."
@@ -496,6 +500,8 @@ def _validate_command(cmd_str: str, human_confirmed: bool = False) -> tuple[bool
                 return False, [], "Refused: 'git config' write options are not permitted."
 
         for a in tokens[2:]:
+            if _flag_base(a) == "--textconv":
+                return False, [], "Refused: 'git --textconv' runs repository-configured filter programs."
             if _flag_base(a) in ("--output", "--output-directory", "-o", "--ext-diff", "--no-index", "--contents") or a.startswith("--output"):
                 return False, [], "Refused: File writing flag '--output' is not permitted in git commands."
 
@@ -761,10 +767,17 @@ def _git_emits_patches(tokens: list[str]) -> bool:
 
 
 def _tracked_secret_files(cwd_path: Path) -> list[str]:
-    """Secret files git tracks in the repo at cwd (they would appear in patch output)."""
+    """Secret files tracked anywhere in the repo containing cwd (they would appear in patch output)."""
     try:
+        top = subprocess.run(
+            ["git", "-C", str(cwd_path), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5, env=git_safe_env(),
+        )
+        if top.returncode != 0:
+            return []
+        repo_root = top.stdout.strip() or str(cwd_path)
         res = subprocess.run(
-            ["git", "-C", str(cwd_path), "ls-files", "-z"],
+            ["git", "-C", repo_root, "ls-files", "-z"],
             capture_output=True, text=True, timeout=5, env=git_safe_env(),
         )
     except Exception:
@@ -838,7 +851,9 @@ def _spawn_run(run_id: str, cmd_str: str, tokens: list[str], cwd_path: Path, tim
     env["npm_config_yes"] = "false"
     env["DEBIAN_FRONTEND"] = "noninteractive"
     # Neutralise repo-config hooks that make read-only git commands spawn programs.
-    env = git_safe_env(env)
+    env = git_safe_env(_rg_env(env))
+    if Path(tokens[0]).name in ("rg", "ripgrep"):
+        tokens = tokens[:1] + ["--no-config"] + tokens[1:]
     if Path(tokens[0]).name == "git" and len(tokens) > 1:
         sub = tokens[1].lower()
         if sub in ("diff", "log", "show"):

@@ -763,3 +763,66 @@ def test_followup_tracked_secret_files_block_patch_output(run_workspace: Path) -
 def test_followup_patch_output_allowed_without_tracked_secrets(run_workspace: Path) -> None:
     res = _exec(run_workspace, "git show HEAD")
     assert "Exit: 0" in res and "Safe read file" in res
+
+
+
+# ---------------------------------------------------------------------------
+# Round 5 regression tests: items (1)-(5)
+# ---------------------------------------------------------------------------
+
+
+def test_r5_1_rg_ignores_ripgrep_config(run_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    victim = run_workspace / "victim.txt"
+    victim.write_text("x\n", encoding="utf-8")
+    cfg = run_workspace.parent / "rgrc"
+    cfg.write_text("--pre=rm\n", encoding="utf-8")
+    monkeypatch.setenv("RIPGREP_CONFIG_PATH", str(cfg))
+    res = _exec(run_workspace, "rg x victim.txt")
+    assert "Exit: 0" in res, res
+    assert victim.exists()
+
+
+def test_r5_1_rg_child_gets_no_config(run_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RIPGREP_CONFIG_PATH", "/nonexistent/rgrc")
+    monkeypatch.setattr(run_mod.subprocess, "Popen", _FakeProc)
+    _exec(run_workspace, "rg Safe hello.txt")
+    assert _FakeProc.args_seen[1] == "--no-config"
+    assert "RIPGREP_CONFIG_PATH" not in _FakeProc.kwargs["env"]
+
+
+def test_r5_2_tracked_secret_check_uses_repo_root(run_workspace: Path) -> None:
+    secret = "root" + "TrackedSecret" + "55"
+    (run_workspace / ".env").write_text(f"X={secret}\n", encoding="utf-8")
+    sub = run_workspace / "pkg"
+    sub.mkdir()
+    (sub / "mod.txt").write_text("m\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(run_workspace), "add", "-f", ".env", "pkg/mod.txt"], check=True)
+    subprocess.run(["git", "-C", str(run_workspace), "commit", "-qm", "root secret"], check=True)
+    for cmd in ("git show HEAD", "git log -p -n 1", "git diff HEAD~1"):
+        res = _exec(sub, cmd)
+        assert res.startswith("Refused:") and ".env" in res, (cmd, res)
+        assert secret not in res
+
+
+@pytest.mark.parametrize("cmd", [
+    "git diff --textconv", "git log -p --textconv", "git show --textconv HEAD",
+    "git diff --textconv=yes", "git blame --textconv hello.txt", "git log --no-textconv --textconv",
+])
+def test_r5_3_textconv_refused_anywhere(cmd: str) -> None:
+    ok, _, reason = _validate_command(cmd)
+    assert not ok and "textconv" in reason, cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    "file -C", "file -Cm/tmp/magic", "file -m/tmp/magic hello.txt", "file -f/tmp/list",
+    "file -bm/tmp/magic hello.txt", "file -bC", "file --magic-file=/tmp/m hello.txt",
+    "file --compile", "file --files-from=/tmp/list",
+])
+def test_r5_4_file_attached_risky_flags_refused(cmd: str) -> None:
+    ok, _, reason = _validate_command(cmd)
+    assert not ok and reason.startswith("Refused:"), cmd
+
+
+def test_r5_4_file_plain_still_allowed(run_workspace: Path) -> None:
+    ok, _, reason = _validate_command("file -b hello.txt")
+    assert ok, reason
