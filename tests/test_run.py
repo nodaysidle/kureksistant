@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -12,6 +13,10 @@ import pytest
 
 import kurek_daemon as daemon
 from actions.run import run, _get_audit_log_path, _validate_command, _redact_secrets
+
+
+# Tests that execute the real 'rg' binary; skipped where ripgrep is not installed.
+needs_rg = pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep (rg) not installed")
 
 
 @pytest.fixture
@@ -229,6 +234,7 @@ def test_rg_pre_refused(run_workspace: Path, cmd: str) -> None:
     assert victim.exists()
 
 
+@needs_rg
 def test_rg_normal_search_still_works(run_workspace: Path) -> None:
     res = _exec(run_workspace, "rg -n Safe hello.txt")
     assert "Exit: 0" in res and "Safe read file" in res
@@ -792,6 +798,7 @@ def test_followup_patch_output_allowed_without_tracked_secrets(run_workspace: Pa
 # ---------------------------------------------------------------------------
 
 
+@needs_rg
 def test_r5_1_rg_ignores_ripgrep_config(run_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     victim = run_workspace / "victim.txt"
     victim.write_text("x\n", encoding="utf-8")
@@ -1063,9 +1070,11 @@ def secret_tree(run_workspace: Path) -> Path:
 
 
 @pytest.mark.parametrize("cmd", [
-    f"rg {_R8_SECRET}", f"rg --hidden --no-ignore {_R8_SECRET} .", f"rg -uuu {_R8_SECRET}",
-    f"rg -uu --hidden -g .env {_R8_SECRET} .", f"rg --no-ignore-vcs --hidden {_R8_SECRET} -- .",
-    f"rg -l --hidden --no-ignore {_R8_SECRET}", f"rg --files --hidden --no-ignore",
+    *[pytest.param(c, marks=needs_rg) for c in (
+        f"rg {_R8_SECRET}", f"rg --hidden --no-ignore {_R8_SECRET} .", f"rg -uuu {_R8_SECRET}",
+        f"rg -uu --hidden -g .env {_R8_SECRET} .", f"rg --no-ignore-vcs --hidden {_R8_SECRET} -- .",
+        f"rg -l --hidden --no-ignore {_R8_SECRET}", "rg --files --hidden --no-ignore",
+    )],
     f"grep -rn {_R8_SECRET} .", f"grep -r --exclude=visible.txt {_R8_SECRET} .", f"grep -rl {_R8_SECRET} .",
 ])
 def test_r8_1_recursive_search_never_prints_secret_files(secret_tree: Path, cmd: str) -> None:

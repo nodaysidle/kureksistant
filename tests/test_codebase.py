@@ -317,9 +317,35 @@ def test_round3_secret_file_as_direct_target_refused(secret_repo: Path, rel: str
 
 def test_round3_find_hides_secret_names(secret_repo: Path) -> None:
     res = codebase({"action": "find", "root": str(secret_repo), "query": "*"})
-    for name in (".env", "api_keys.json", "server.pem", "id_ed25519"):
-        assert f"/{name}" not in res and f" {name}" not in res, (name, res)
-    assert "main.py" in res
+    listed = {line.strip().rsplit("/", 1)[-1] for line in res.splitlines()[1:] if line.strip()}
+    # real secrets and the symlink to .env must not be listed; templates may be (owner decision)
+    for name in (".env", ".env.local", "api_keys.json", "server.pem", "id_ed25519", "innocent.txt"):
+        assert name not in listed, (name, res)
+    assert "main.py" in listed
+    assert all(n in _TEMPLATE_NAMES or not n.startswith(".env") for n in listed), res
+
+
+_TEMPLATE_NAMES = {".env.example", ".env.sample", ".env.template"}
+
+
+def test_r10_find_fallback_without_rg_hides_secrets_and_symlinks(secret_repo: Path, monkeypatch: pytest.MonkeyPatch,
+                                                                tmp_path: Path) -> None:
+    import actions.codebase as cb
+    monkeypatch.setattr(cb.shutil, "which", lambda name: None)  # force the no-rg fallback
+    outside = tmp_path / "outside_secret.txt"
+    outside.write_text("x\n", encoding="utf-8")
+    (secret_repo / "elsewhere.txt").symlink_to(outside)
+    for q in ("*", "innocent", ".env", "txt", "elsewhere"):
+        res = codebase({"action": "find", "root": str(secret_repo), "query": q})
+        listed = {line.strip().rsplit("/", 1)[-1] for line in res.splitlines()[1:] if line.strip()}
+        for name in (".env", ".env.local", "api_keys.json", "server.pem", "id_ed25519", "innocent.txt",
+                     "elsewhere.txt"):
+            assert name not in listed, (q, name, res)
+        assert FAKE_DS not in res and FAKE_GOOGLE not in res
+    res = codebase({"action": "find", "root": str(secret_repo), "query": "*"})
+    assert "main.py" in res and ".env.example" in res
+    res = codebase({"action": "search", "root": str(secret_repo), "query": FAKE_DS[:12]})
+    assert FAKE_DS not in res
 
 
 def test_round3_tree_does_not_descend_symlinked_outside_dir(test_workspace: dict[str, Path], tmp_path: Path) -> None:

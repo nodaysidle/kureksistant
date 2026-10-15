@@ -790,24 +790,43 @@ def _action_find(target_dir: Path, query: str | None = None) -> str:
             pass
 
     if not matches:
-        # Fallback using glob / walk
+        # Fallback using glob / walk (no rg). Like 'rg --files', it never lists
+        # symlinks: a symlink can point at a secret (innocent.txt -> .env) or
+        # leave the project roots.
         is_glob = any(c in pattern for c in ("*", "?", "["))
         p_lower = pattern.lower()
         for root, dirs, files in os.walk(target_dir):
             dirs[:] = [d for d in dirs if d not in STANDARD_IGNORES and not d.startswith(".")]
             for fname in files:
+                fpath = Path(root) / fname
+                if fpath.is_symlink():
+                    continue
                 if is_glob:
                     if Path(fname).match(pattern):
-                        matches.append(Path(root) / fname)
+                        matches.append(fpath)
                 else:
                     if p_lower in fname.lower():
-                        matches.append(Path(root) / fname)
+                        matches.append(fpath)
 
     if not matches:
         return f"No files found matching '{pattern}' in {target_dir.name}."
 
     dyn = _dynamic_secret_targets()
-    matches = [m for m in matches if not is_secret_file(m) and not _is_dynamic_secret(m, dyn)]
+    allowed_roots = get_allowed_roots()
+
+    def _listable(m: Path) -> bool:
+        if is_secret_file(m) or _is_dynamic_secret(m, dyn):
+            return False
+        try:
+            real = m.resolve()
+        except OSError:
+            return False
+        # same symlink-target check as the read/search paths
+        if is_secret_file(real) or not _is_path_allowed(real, allowed_roots):
+            return False
+        return True
+
+    matches = [m for m in matches if _listable(m)]
     if not matches:
         return f"No files found matching '{pattern}' in {target_dir.name}."
     matches.sort(key=lambda p: str(p).lower())

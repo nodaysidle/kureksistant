@@ -53,6 +53,9 @@ jobs:
       - name: Shellcheck installer
         run: shellcheck -x install_linux.sh
 
+      - name: Install ripgrep (codebase/run tool tests)
+        run: sudo apt-get install -y -qq ripgrep && rg --version | head -1
+
       - name: Trigger latency bench (informational)
         run: |
           # Soft bound only — print results; never fail the job on the bench.
