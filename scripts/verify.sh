@@ -41,7 +41,17 @@ if [ -z "${PYTHON:-}" ]; then
 fi
 TMP=$(mktemp -d -t kurek-verify-XXXXXX)
 DPID=""
-cleanup(){ [ -n "$DPID" ] && kill -TERM -- "-$DPID" 2>/dev/null; sleep 0.5; [ -n "$DPID" ] && kill -KILL -- "-$DPID" 2>/dev/null; [ "${VERIFY_KEEP:-0}" = 1 ] || rm -rf "$TMP"; }
+cleanup(){
+  [ -n "$DPID" ] && kill -TERM -- "-$DPID" 2>/dev/null
+  sleep 0.5
+  [ -n "$DPID" ] && kill -KILL -- "-$DPID" 2>/dev/null
+  # Belt and braces: mpv is spawned by the daemon under test. If the daemon is
+  # SIGKILLed it cannot run any shutdown hook, so reap anything still bound to
+  # this run's temp runtime dir. Without this, each run orphaned one idle mpv
+  # forever (observed: 20 leaked processes, ~250 MB, over 21 h).
+  pkill -f -- "input-ipc-server=$TMP/run/kurek_mpv.sock" 2>/dev/null
+  [ "${VERIFY_KEEP:-0}" = 1 ] || rm -rf "$TMP"
+}
 trap cleanup EXIT
 ORIG_HOME=$HOME
 mkdir -p "$TMP/src" "$TMP/home" "$TMP/run" "$TMP/cfg"; chmod 700 "$TMP/run"
@@ -52,20 +62,37 @@ git init -q . && git add -A && git -c user.name=verify -c user.email=verify@loca
 export HOME="$TMP/home" XDG_RUNTIME_DIR="$TMP/run" XDG_CONFIG_HOME="$TMP/cfg" PYTHONDONTWRITEBYTECODE=1
 unset KUREK_REMOTE_BIND KUREK_BIND KUREK_REMOTE_ALLOW_EXEC KUREK_REMOTE_TOKEN \
   DEEPSEEK_API_KEY XAI_API_KEY GEMINI_API_KEY DEEPGRAM_API_KEY TYPESAFE_API_KEY OPENROUTER_API_KEY
+# Deterministic gate: kurek_daemon.py does `import numpy` (which starts one
+# OpenBLAS thread per core) before `import sounddevice`, which dlopen()s
+# PortAudio. The glibc loader lock then races those fresh threads and the
+# daemon deadlocks at import -- measured 7/30 starts hung (23%), each one
+# surfacing here as a bogus `daemon not up` / `FAIL bind`. One BLAS thread
+# removes the race without changing what the daemon does.
+export OPENBLAS_NUM_THREADS=1
 RES=(); ok=1
 step(){ local name=$1; shift; if "$@" >"$TMP/$name.log" 2>&1; then RES+=("PASS $name"); else RES+=("FAIL $name (log: $TMP/$name.log)"); ok=0; VERIFY_KEEP=1; fi; }
 
-# 1. test suite (minus the :8790 smoke test)
-run_tests(){
-  # pyautogui/mouseinfo open $DISPLAY at import. Prefer a private Xvfb; else
-  # reuse the session's Xauthority (temp HOME has none) so collection works.
-  local pre=()
-  if command -v xvfb-run >/dev/null; then pre=(/usr/bin/env -u DISPLAY -u WAYLAND_DISPLAY xvfb-run -a)
+# pyautogui/mouseinfo open $DISPLAY at import, and the temp HOME has no
+# Xauthority. Prefer a private Xvfb; else reuse the session's Xauthority; else
+# give Xlib an (empty) file so the import succeeds. Sets DISPLAY_PRE.
+# Needed by BOTH the pytest step AND the daemon boot step: the daemon imports
+# actions/computer_control.py -> pyautogui too, so without this it dies before
+# it can bind and daemon_auth/bind fail.
+DISPLAY_PRE=()
+prepare_display(){
+  DISPLAY_PRE=()
+  if command -v xvfb-run >/dev/null; then
+    DISPLAY_PRE=(/usr/bin/env -u DISPLAY -u WAYLAND_DISPLAY xvfb-run -a)
   elif [ -n "${DISPLAY:-}" ]; then
     local xa=${XAUTHORITY:-$ORIG_HOME/.Xauthority}
     if [ -f "$xa" ]; then export XAUTHORITY="$xa"; else : >"$HOME/.Xauthority"; fi
   fi
-  "${pre[@]}" "$PYTHON" -m pytest -q -p no:cacheprovider \
+}
+
+# 1. test suite (minus the :8790 smoke test)
+run_tests(){
+  prepare_display
+  "${DISPLAY_PRE[@]}" "$PYTHON" -m pytest -q -p no:cacheprovider \
     --deselect tests/test_daemon_smoke.py \
     --deselect tests/test_open_app_grokbot.py::test_find_grok_desktop_file \
     tests
@@ -80,7 +107,8 @@ mod = runpy.run_path("kurek_daemon.py", run_name="kurek_verify")
 mod["run_server"](mod["KurekEngine"](), port=int(sys.argv[1]))
 PY
 daemon_and_auth(){
-  KUREK_REMOTE_TOKEN="$TOKEN" setsid "$PYTHON" -u "$TMP/boot.py" "$PORT" >"$TMP/daemon.out" 2>&1 &
+  prepare_display
+  KUREK_REMOTE_TOKEN="$TOKEN" setsid "${DISPLAY_PRE[@]}" "$PYTHON" -u "$TMP/boot.py" "$PORT" >"$TMP/daemon.out" 2>&1 &
   DPID=$!
   PORT="$PORT" TOKEN="$TOKEN" "$PYTHON" - <<'PY'
 import json, os, time, urllib.request, urllib.error
@@ -109,7 +137,7 @@ print("auth OK (200 status / 401 missing+bad / authorized 400 no-op)")
 PY
 }
 step daemon_auth daemon_and_auth
-grep -q "Listening at http://127.0.0.1:$PORT" "$TMP/daemon.out" || { RES+=("FAIL bind (not on 127.0.0.1:$PORT)"); ok=0; }
+grep -q "Listening at http://127.0.0.1:$PORT" "$TMP/daemon.out" || { RES+=("FAIL bind (no loopback bind on $PORT; daemon died or hung at startup -- see $TMP/daemon.out)"); ok=0; }
 grep -Eq "Listening at http://([0-9.]+):" "$TMP/daemon.out" && grep -Eo "Listening at http://[0-9.]+" "$TMP/daemon.out" | grep -qv 127.0.0.1 && { RES+=("FAIL bind (non-loopback host)"); ok=0; }
 
 # 4. memory migration on a temp DB
