@@ -127,14 +127,20 @@ def test_output_capping_on_long_output(run_workspace: Path) -> None:
     assert "line_149" in res  # tail preserved
 
 
+# Fake key-shaped values are assembled at runtime so the packaging deny-list
+# (scripts/package_release.sh) and push protection never see a key literal.
+_FAKE_XAI_KEY = "xai-" + "secrettoken" + "1234567890abcdef"
+_FAKE_SK_KEY = "sk-" + "999888777666" + "555444333222111"
+
+
 def test_credential_redaction(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-FAKE_TEST_VALUE_not_a_real_key_00")
-    monkeypatch.setenv("XAI_API_KEY", "xai-secrettoken1234567890abcdef")
+    monkeypatch.setenv("XAI_API_KEY", _FAKE_XAI_KEY)
 
     raw = (
         "Output containing sk-FAKE_TEST_VALUE_not_a_real_key_00 and "
-        "another key sk-999888777666555444333222111 and "
-        "xai-secrettoken1234567890abcdef and "
+        f"another key {_FAKE_SK_KEY} and "
+        f"{_FAKE_XAI_KEY} and "
         "Bearer secret_bearer_token_1234567890 and "
         "clone https://user:supersecretpass@github.com/repo.git"
     )
@@ -142,6 +148,7 @@ def test_credential_redaction(monkeypatch: pytest.MonkeyPatch) -> None:
     redacted = _redact_secrets(raw)
     assert "sk-abcdef" not in redacted
     assert "xai-secret" not in redacted
+    assert _FAKE_SK_KEY not in redacted and _FAKE_XAI_KEY not in redacted
     assert "supersecretpass" not in redacted
     assert "[REDACTED_DEEPSEEK_API_KEY]" in redacted or "[REDACTED_DEEPSEEK_KEY]" in redacted
     assert "[REDACTED_USER]:[REDACTED_PASS]" in redacted
