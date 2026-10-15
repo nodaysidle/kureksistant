@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.1"><img src="https://img.shields.io/badge/Release-v0.2.1-blue.svg?style=flat-square" alt="Release v0.2.1"></a>
   <img src="https://img.shields.io/badge/Desktop-Arch%20%2F%20Omarchy%20%2F%20Hyprland-1793D1?style=flat-square&logo=arch-linux&logoColor=white" alt="Arch / Omarchy / Hyprland">
-  <img src="https://img.shields.io/badge/Remote-Android%20app%20(build%20from%20source)-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android remote">
+  <img src="https://img.shields.io/badge/Remote-Android%20app%20(debug%20APK%20in%20v0.2.1)-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android remote">
   <img src="https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey?style=flat-square" alt="License">
 </p>
 
@@ -44,7 +44,7 @@ It is built and tested first on **Arch Linux with Omarchy / Hyprland**. A macOS 
 - An Android app, **Kurek Remote**, is built from [`android/`](android/). It sends prompts to `POST /remote/prompt` and receives the reply as a Server-Sent Events stream (`sentence` / `tool` / `done`).
 - Off by default. Enable it with `KUREK_REMOTE_BIND=tailscale` and a Bearer token of **32+ characters** (`KUREK_REMOTE_TOKEN`).
 - **Silent on the PC by default:** remote prompts don't speak through the PC's speakers. Opt in per request with `"speak_local": true`, or globally with `KUREK_REMOTE_LOCAL_TTS=1`.
-- No APK release has been published. Build it yourself (see below).
+- A debug-signed APK (Kurek Remote) is attached to the [v0.2.1 release](https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.1). Uninstall any older copy of the app first. You can also build it yourself (see below).
 
 ### Conversational yes/no confirmations
 - Risky actions ask for confirmation, shown on the PC via `notify-send`.
@@ -79,6 +79,18 @@ It is built and tested first on **Arch Linux with Omarchy / Hyprland**. A macOS 
 ---
 
 ## ⚡ Install (Linux)
+
+### Option: download the v0.2.1 bundle
+
+Download [`kureksistant-v0.2.1-linux-x86_64.tar.gz`](https://github.com/nodaysidle/kureksistant/releases/download/v0.2.1/kureksistant-v0.2.1-linux-x86_64.tar.gz) and [`SHA256SUMS.txt`](https://github.com/nodaysidle/kureksistant/releases/download/v0.2.1/SHA256SUMS.txt), then:
+
+```bash
+grep ' kureksistant-v0.2.1-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c - && \
+echo '8b3a7a6ec36795d6651a3b38d36b62f5dc1590a5a17abe1a3604ecf8c7a96b33  kureksistant-v0.2.1-linux-x86_64.tar.gz' | sha256sum -c - && \
+tar -xzf kureksistant-v0.2.1-linux-x86_64.tar.gz && \
+cd kureksistant-0.2.1 && \
+./install_linux.sh
+```
 
 ### 1. Clone and run the installer
 
@@ -173,7 +185,7 @@ kurek-trigger toggle   # C trigger over the Unix socket
 
 ## 📱 Android remote (Kurek Remote)
 
-There is **no published APK**. Build it from [`android/`](android/) (the Android SDK is required; the Gradle wrapper is included):
+A **debug-signed APK** (Kurek Remote) is attached to the [v0.2.1 release](https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.1). It is signed with a throwaway debug key, so **uninstall any older copy of the app first**. Or build it from [`android/`](android/) (the Android SDK is required; the Gradle wrapper is included):
 
 ```bash
 cd android
