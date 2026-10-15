@@ -12,6 +12,9 @@ Requirements & Scope Discipline:
   • Allowlist, not denylist. Only known-safe command families are permitted.
   • Read-oriented defaults: git log/diff/status, rg, ls, cat, find, stat, --version, --help.
   • Build and test permitted: cargo (check/test/build/clippy), npm/pnpm/yarn/bun (test, run test/build/lint), pytest, make.
+    Anything that runs repository code (tests, build scripts, Makefile/justfile recipes) waits for a
+    human yes/no via core.confirm; the model cannot approve it.
+  • Child environment is an allowlist (PATH, HOME, locale, toolchain dirs); output is streamed with a hard byte cap.
   • Destructive operations (rm, git push, git reset --hard, package install, curl|sh) are strictly blocked.
   • Never interactive: forces GIT_PAGER=cat, CI=1, TERM=dumb, DEBIAN_FRONTEND=noninteractive.
   • Hard timeouts with automatic process tree termination and optional process_sentinel handoff.
@@ -24,6 +27,7 @@ from __future__ import annotations
 
 import os
 import re
+import select
 import shlex
 import shutil
 import signal
@@ -232,6 +236,9 @@ _NODE_PM_BLOCKED_FLAGS = frozenset({
 })
 
 # go: options that execute a custom program.
+# cargo subcommands that compile/run build.rs, proc macros or tests from the repo.
+_CARGO_RUNS_REPO_CODE = frozenset({"check", "test", "build", "clippy", "bench"})
+
 _GO_BLOCKED_FLAGS = frozenset({"exec", "toolexec", "overlay", "modfile", "o", "pgo", "C"})
 
 # git branch/tag: read-only listing only.
@@ -359,6 +366,16 @@ def _validate_command(cmd_str: str, human_confirmed: bool = False) -> tuple[bool
     """
     confirm = human_confirmed
     cmd_str = (cmd_str or "").strip()
+
+    def _needs_human(what: str) -> tuple[bool, list[str], str]:
+        # Runs repository-controlled code (tests, conftest.py, build.rs, Makefile,
+        # package.json scripts, Package.swift): only after a person says yes.
+        if confirm:
+            return True, tokens, ""
+        return False, [], (
+            f"Refused: '{what}' runs code from the repository, so it needs your confirmation on the HUD "
+            "(or a yes/no reply)."
+        )
     if not cmd_str:
         return False, [], "Refused: Command string is empty."
 
@@ -529,16 +546,18 @@ def _validate_command(cmd_str: str, human_confirmed: bool = False) -> tuple[bool
                     f"Refused: 'cargo {a}' can override build configuration, toolchains, or output paths "
                     "and is not permitted."
                 )
+        if subcmd in _CARGO_RUNS_REPO_CODE:
+            return _needs_human(f"cargo {subcmd}")
         return True, tokens, ""
 
     # 6. 'pytest'
     if binary == "pytest":
-        return True, tokens, ""
+        return _needs_human("pytest")
 
     # 7. 'python' / 'python3'
     if binary in ("python", "python3"):
         if len(tokens) >= 3 and tokens[1] == "-m" and tokens[2].lower() in ("pytest", "unittest"):
-            return True, tokens, ""
+            return _needs_human(f"{binary} -m {tokens[2].lower()}")
         if len(tokens) == 2 and tokens[1] in ("--version", "-V", "--help", "-h"):
             return True, tokens, ""
         return False, [], (
@@ -554,16 +573,16 @@ def _validate_command(cmd_str: str, human_confirmed: bool = False) -> tuple[bool
         for a in tokens[1:]:
             if _flag_base(a) in _NODE_PM_BLOCKED_FLAGS:
                 return False, [], f"Refused: '{binary} {a}' can change the shell, config, or directory and is not permitted."
-        if subcmd in ("test", "--version", "-v", "--help", "-h"):
+        if subcmd in ("--version", "-v", "--help", "-h"):
             return True, tokens, ""
+        if subcmd == "test":
+            return _needs_human(f"{binary} test")
         elif subcmd == "run":
             if len(tokens) < 3:
                 return False, [], f"Refused: '{binary} run' requires a target (e.g. '{binary} run test')."
             target = tokens[2].lower()
-            if target in ALLOWED_BUILD_TARGETS:
-                return True, tokens, ""
-            if confirm:
-                return True, tokens, ""
+            if target in ALLOWED_BUILD_TARGETS or confirm:
+                return _needs_human(f"{binary} run {target}")
             return False, [], (
                 f"Refused: Script target '{target}' is not in the safe build/test allowlist "
                 f"({', '.join(sorted(ALLOWED_BUILD_TARGETS))}). Custom targets need your confirmation on the HUD."
@@ -582,6 +601,8 @@ def _validate_command(cmd_str: str, human_confirmed: bool = False) -> tuple[bool
                 name = _flag_base(a).lstrip("-")
                 if a.startswith("-") and name in _GO_BLOCKED_FLAGS:
                     return False, [], f"Refused: 'go {a}' can execute custom programs or write outside the repo."
+            if subcmd == "test":
+                return _needs_human("go test")
             return True, tokens, ""
         return False, [], f"Refused: 'go {subcmd}' is not in the allowlist (allowed: test, build, vet, version)."
 
@@ -590,6 +611,8 @@ def _validate_command(cmd_str: str, human_confirmed: bool = False) -> tuple[bool
         subcmd = tokens[1].lower() if len(tokens) > 1 else ""
         allowed_swift = {"build", "test", "--version", "--help"}
         if subcmd in allowed_swift:
+            if subcmd in ("build", "test"):
+                return _needs_human(f"swift {subcmd}")
             return True, tokens, ""
         return False, [], f"Refused: 'swift {subcmd}' is not in the allowlist (allowed: build, test, --version)."
 
@@ -617,7 +640,7 @@ def _validate_command(cmd_str: str, human_confirmed: bool = False) -> tuple[bool
                     f"Refused: 'make {t}' is not in the safe targets allowlist "
                     f"({', '.join(sorted(ALLOWED_BUILD_TARGETS))}). Custom targets need your confirmation on the HUD."
                 )
-        return True, tokens, ""
+        return _needs_human("make " + " ".join(t for t in tokens[1:] if not t.startswith("-")))
 
     # 12. 'just'
     if binary == "just":
@@ -643,7 +666,9 @@ def _validate_command(cmd_str: str, human_confirmed: bool = False) -> tuple[bool
                     f"Refused: 'just {t}' is not in the safe recipes allowlist "
                     f"({', '.join(sorted(ALLOWED_BUILD_TARGETS))}). Custom recipes need your confirmation on the HUD."
                 )
-        return True, tokens, ""
+        if listing:
+            return True, tokens, ""
+        return _needs_human("just " + " ".join(t for t in tokens[1:] if not t.startswith("-")))
 
     # 13. General compiler / tool version queries
     if len(tokens) == 2 and tokens[1] in ("--version", "-V", "-v", "--help", "-h"):
@@ -694,7 +719,8 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any) -> str:
     is_allowed, tokens, reason = _validate_command(cmd_str)
     needs_confirmation = False
     if not is_allowed:
-        # Custom npm/make/just targets are allowed only after a human confirms on the HUD.
+        # Test runners, build tools and custom targets run only after a human confirms
+        # (HUD button or the daemon's yes/no reply); the model cannot approve them.
         ok_if_confirmed, confirmed_tokens, _ = _validate_command(cmd_str, human_confirmed=True)
         if ok_if_confirmed:
             is_allowed, tokens, needs_confirmation = True, confirmed_tokens, True
@@ -726,13 +752,13 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any) -> str:
         return path_reason
 
     if Path(tokens[0]).name == "git" and _git_emits_patches(tokens):
-        tracked = _tracked_secret_files(cwd_path)
+        tracked = _tracked_secret_files(cwd_path) or _touched_secret_files(tokens, cwd_path)
         if tracked:
             reason = (
-                "Refused: this repository tracks credential files "
+                "Refused: this command would show credential files "
                 f"({', '.join(tracked[:5])}{', ...' if len(tracked) > 5 else ''}), so patch output "
-                "(git diff/show/log -p) could print them. Use --stat/--name-only on git log, "
-                "or untrack those files."
+                "(git diff/show/log -p, stash show -p) could print them, including deleted ones. "
+                "Use --stat/--name-only on git log, or limit the range/paths."
             )
             rec = RunRecord(run_id=run_id, cmd=cmd_str, cwd=str(cwd_path), status="refused", exit_code=-1, output=reason)
             with _RUN_LOCK:
@@ -787,6 +813,82 @@ def _tracked_secret_files(cwd_path: Path) -> list[str]:
     return [f for f in res.stdout.split("\0") if f and is_secret_file(Path(f))]
 
 
+def _git_repo_root(cwd_path: Path) -> str | None:
+    try:
+        top = subprocess.run(
+            ["git", "-C", str(cwd_path), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5, env=git_safe_env(),
+        )
+    except Exception:
+        return None
+    if top.returncode != 0:
+        return None
+    return top.stdout.strip() or str(cwd_path)
+
+
+_GIT_PATCH_STRIP = _GIT_LOG_PATCH_FLAGS | {"--word-diff-regex", "--stat", "--numstat", "--shortstat",
+                                          "--name-status", "--raw", "--summary", "--dirstat"}
+
+
+def _touched_secret_files(tokens: list[str], cwd_path: Path) -> list[str]:
+    """Secret-named paths touched by the commits/range a patch command would print.
+
+    Re-runs the same git command with --name-only (no renames, merges split per
+    parent) so deleted and renamed secret files are seen. Fails closed."""
+    sub = tokens[1].lower()
+    args = tokens[2:]
+    if sub == "stash":
+        args = args[1:]
+    if "--" in args:
+        i = args.index("--")
+        revs, paths = args[:i], args[i:]
+    else:
+        revs, paths = args, []
+    kept: list[str] = []
+    skip_next = False
+    for a in revs:
+        if skip_next:
+            skip_next = False
+            continue
+        base = _flag_base(a)
+        if a == "-L":
+            skip_next = True
+            continue
+        if base in _GIT_PATCH_STRIP or a.startswith("-L") or a.startswith("--word-diff") \
+                or a.startswith("--stat") or a.startswith("--dirstat"):
+            continue
+        if sub == "stash" and a in ("-u", "--include-untracked", "--only-untracked"):
+            continue
+        kept.append(a)
+    names = ["--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z"]
+    if sub == "diff":
+        cmd = ["diff", *names]
+    elif sub == "stash" and tokens[2:3] == ["list"]:
+        cmd = ["log", "-g", "refs/stash", *names, "--format=", "--diff-merges=separate"]
+    elif sub == "stash":
+        cmd = ["stash", "show", *names, "--include-untracked"]
+    else:  # log, show
+        cmd = [sub, *names, "--format=", "--diff-merges=separate"]
+    repo_root = _git_repo_root(cwd_path)
+    if repo_root is None:
+        return []
+    try:
+        res = subprocess.run(
+            ["git", "-C", str(cwd_path), *cmd, *kept, *paths],
+            capture_output=True, timeout=15, env=git_safe_env(),
+        )
+    except Exception:
+        return ["(could not list the paths this command would show)"]
+    if res.returncode != 0:
+        return ["(could not list the paths this command would show)"]
+    hits: list[str] = []
+    for piece in re.split(r"[\0\n\t]", res.stdout.decode("utf-8", "replace")):
+        piece = piece.strip()
+        if piece and is_secret_file(Path(piece)) and piece not in hits:
+            hits.append(piece)
+    return hits
+
+
 def _request_human_confirmation(run_id: str, cmd_str: str, tokens: list[str], cwd_path: Path, timeout_arg: Any) -> str:
     """Park a custom build/test target behind core.confirm (the daemon's yes/no gate).
 
@@ -827,6 +929,84 @@ def _request_human_confirmation(run_id: str, cmd_str: str, tokens: list[str], cw
     return f"{msg} (run id {run_id}; read its output with action='read' once confirmed)"
 
 
+# Only these variables are passed to children (plus LC_*). Everything else is dropped.
+_CHILD_ENV_ALLOW = frozenset({
+    "PATH", "HOME", "LANG", "LANGUAGE", "TERM", "USER", "LOGNAME", "TMPDIR",
+    "CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN",
+    "GOPATH", "GOCACHE", "GOMODCACHE", "GOROOT",
+    "VIRTUAL_ENV", "PYTHONPATH",
+    "SSL_CERT_FILE", "SSL_CERT_DIR",
+})
+
+
+def _child_env_base() -> dict[str, str]:
+    return {
+        k: v for k, v in os.environ.items()
+        if k in _CHILD_ENV_ALLOW or k.startswith("LC_")
+    }
+
+
+# Hard cap on combined stdout+stderr bytes read from a child.
+_MAX_OUTPUT_BYTES = 1_000_000
+
+
+def _stream_output(proc: subprocess.Popen, timeout: float, cap: int | None = None) -> tuple[str, str, str]:
+    """Read stdout/stderr incrementally (select + os.read) with a hard byte cap.
+
+    Returns (stdout, stderr, outcome) with outcome "exited", "timeout" or "capped".
+    On timeout or cap the whole process group is SIGKILLed and reading stops; no
+    more than `cap` bytes are ever held in memory."""
+    cap = _MAX_OUTPUT_BYTES if cap is None else cap
+    bufs: dict[str, list[bytes]] = {"out": [], "err": []}
+    fds: dict[int, str] = {}
+    for name, stream in (("out", proc.stdout), ("err", proc.stderr)):
+        if stream is not None:
+            fds[stream.fileno()] = name
+    total = 0
+    deadline = time.monotonic() + timeout
+    outcome = "exited"
+    while fds:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            outcome = "timeout"
+            break
+        ready, _, _ = select.select(list(fds), [], [], min(remaining, 0.1))
+        for fd in ready:
+            chunk = os.read(fd, min(65536, cap - total + 1))
+            if not chunk:
+                fds.pop(fd, None)
+                continue
+            if total + len(chunk) > cap:
+                chunk = chunk[: cap - total]
+                outcome = "capped"
+            bufs[fds[fd]].append(chunk)
+            total += len(chunk)
+            if outcome == "capped":
+                break
+        if outcome == "capped":
+            break
+    if outcome == "exited":
+        try:
+            proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            outcome = "timeout"
+    if outcome != "exited":
+        _kill_process_group(proc, signal.SIGKILL)
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+    for stream in (proc.stdout, proc.stderr):
+        try:
+            if stream is not None:
+                stream.close()
+        except Exception:
+            pass
+    out = b"".join(bufs["out"]).decode("utf-8", "replace")
+    err = b"".join(bufs["err"]).decode("utf-8", "replace")
+    return out, err, outcome
+
+
 def _spawn_run(run_id: str, cmd_str: str, tokens: list[str], cwd_path: Path, timeout_arg: Any) -> str:
     exe = shutil.which(tokens[0])
     if exe:
@@ -839,9 +1019,9 @@ def _spawn_run(run_id: str, cmd_str: str, tokens: list[str], cwd_path: Path, tim
         timeout = 30.0
     timeout = max(1.0, min(timeout, 300.0))
 
-    # Clean non-interactive environment
-    # Child processes never receive API keys, tokens, or remote-access settings.
-    env = {k: v for k, v in os.environ.items() if not _is_sensitive_env(k)}
+    # Clean non-interactive environment built from an ALLOWLIST: children never see
+    # API keys, cloud credentials, tokens or remote-access settings.
+    env = _child_env_base()
     env["GIT_PAGER"] = "cat"
     env["PAGER"] = "cat"
     env["CI"] = "1"
@@ -881,58 +1061,60 @@ def _spawn_run(run_id: str, cmd_str: str, tokens: list[str], cwd_path: Path, tim
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
-            text=True,
             start_new_session=True,
         )
         record.process = proc
 
-        try:
-            stdout, stderr = proc.communicate(timeout=timeout)
-            duration = time.time() - start_time
-            exit_code = proc.returncode
+        stdout, stderr, outcome = _stream_output(proc, timeout)
+        duration = time.time() - start_time
+        combined = stdout
+        if stderr:
+            combined = f"{stdout}\n[STDERR]\n{stderr}" if stdout else stderr
+        redacted = _redact_secrets(combined.strip())
 
-            combined = stdout
-            if stderr:
-                combined = f"{stdout}\n[STDERR]\n{stderr}" if stdout else stderr
-
-            redacted = _redact_secrets(combined.strip())
-            capped_output, total_lines = _cap_output(redacted, duration, exit_code)
-
-            record.exit_code = exit_code
-            record.duration = duration
-            record.status = "completed" if exit_code == 0 else "failed"
-            record.output = capped_output
-            record.total_lines = total_lines
-
-            _audit_log(record)
-
-            header = (
-                f"[{record.run_id}] Exit: {exit_code} | Duration: {duration:.2f}s | "
-                f"Cwd: {cwd_path.name}\nCommand: {cmd_str}\n\n"
-            )
-            return header + (capped_output or "(No output)")
-
-        except subprocess.TimeoutExpired:
-            _kill_process_group(proc, signal.SIGKILL)
-            try:
-                stdout, stderr = proc.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                stdout, stderr = "", ""
-            duration = time.time() - start_time
+        if outcome == "timeout":
             record.exit_code = -1
             record.duration = duration
-            record.status = "timed_out"
-
-            combined = stdout or stderr or ""
-            redacted, _ = _cap_output(_redact_secrets(combined.strip()), duration, -1)
-            record.output = f"TIMED OUT after {timeout}s.\n" + redacted
+            if record.status != "cancelled":
+                record.status = "timed_out"
+            capped_out, _ = _cap_output(redacted, duration, -1)
+            record.output = f"TIMED OUT after {timeout}s.\n" + capped_out
             _audit_log(record, reason="timeout")
-
-            # Try handing off notification to process sentinel if requested or long
             return (
                 f"TIMED OUT: Command '{cmd_str}' timed out after {timeout:.1f}s and was terminated.\n"
                 f"Output before timeout:\n{record.output}"
             )
+
+        if outcome == "capped":
+            record.exit_code = -1
+            record.duration = duration
+            if record.status != "cancelled":
+                record.status = "failed"
+            capped_out, total_lines = _cap_output(redacted, duration, -1)
+            record.output = (
+                f"OUTPUT LIMIT: stopped after {_MAX_OUTPUT_BYTES} bytes and killed the process.\n" + capped_out
+            )
+            record.total_lines = total_lines
+            _audit_log(record, reason="output cap")
+            return (
+                f"[{record.run_id}] OUTPUT LIMIT: '{cmd_str}' produced more than {_MAX_OUTPUT_BYTES} bytes "
+                f"and was terminated.\n\n{record.output}"
+            )
+
+        exit_code = proc.returncode
+        capped_output, total_lines = _cap_output(redacted, duration, exit_code)
+        record.exit_code = exit_code
+        record.duration = duration
+        if record.status != "cancelled":
+            record.status = "completed" if exit_code == 0 else "failed"
+        record.output = capped_output
+        record.total_lines = total_lines
+        _audit_log(record)
+        header = (
+            f"[{record.run_id}] Exit: {exit_code} | Duration: {duration:.2f}s | "
+            f"Cwd: {cwd_path.name}\nCommand: {cmd_str}\n\n"
+        )
+        return header + (capped_output or "(No output)")
 
     except Exception as e:
         duration = time.time() - start_time
@@ -1072,7 +1254,8 @@ TOOL = {
     "description": (
         "Sandboxed, auditable command runner for workstation inspection and build/test tasks. "
         "Permits allowlisted read-only commands (git status/diff/log, rg, ls, cat, find, stat, --version) "
-        "and declared project build/test tools (cargo check/test/build/clippy, npm test, pnpm, pytest, make). "
+        "and declared project build/test tools (cargo check/test/build/clippy, npm test, pnpm, pytest, make); "
+        "build/test commands run repository code and wait for the user's yes/no confirmation. "
         "Destructive commands (rm, git push, git reset --hard, curl|sh) are strictly disallowed. "
         "Never interactive. All runs are strictly root-scoped, timeout-bounded, and recorded in an append-only audit log."
     ),

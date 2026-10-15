@@ -252,8 +252,10 @@ def test_make_and_just_dangerous_flags_refused(run_workspace: Path, cmd: str) ->
 
 @pytest.mark.parametrize("cmd", ["make test", "make -n test", "make -j4 -k test", "make -s build"])
 def test_make_safe_forms_validate(cmd: str) -> None:
-    ok, _, reason = _validate_command(cmd)
+    ok, _, reason = _validate_command(cmd, human_confirmed=True)
     assert ok, reason
+    ok, _, reason = _validate_command(cmd)
+    assert not ok and "confirmation" in reason
 
 
 @pytest.mark.parametrize("cmd", [
@@ -273,8 +275,10 @@ def test_cargo_config_and_target_dir_refused(cmd: str) -> None:
 
 @pytest.mark.parametrize("cmd", ["cargo test", "cargo build --release", "cargo test -- --nocapture --config x"])
 def test_cargo_safe_forms_validate(cmd: str) -> None:
-    ok, _, reason = _validate_command(cmd)
+    ok, _, reason = _validate_command(cmd, human_confirmed=True)
     assert ok, reason
+    ok, _, reason = _validate_command(cmd)
+    assert not ok and "confirmation" in reason
 
 
 @pytest.mark.parametrize("argv0", ["x/cat", "./x/cat", "/usr/bin/cat", "~/cat", "../cat"])
@@ -459,9 +463,19 @@ class _FakeProc:
         _FakeProc.args_seen = list(args[0]) if args else list(kwargs.get("args", []))
         self.pid = 999999
         self.returncode = 0
+        r_out, w_out = os.pipe()
+        r_err, w_err = os.pipe()
+        os.write(w_out, b"ok")
+        os.close(w_out)
+        os.close(w_err)
+        self.stdout = os.fdopen(r_out, "rb")
+        self.stderr = os.fdopen(r_err, "rb")
 
-    def communicate(self, timeout=None):
-        return "ok", ""
+    def poll(self):
+        return 0
+
+    def wait(self, timeout=None):
+        return 0
 
 
 def test_child_env_strips_secrets_and_uses_process_group(run_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -616,7 +630,7 @@ def test_d_bare_make_and_just_refused(cmd: str) -> None:
 
 @pytest.mark.parametrize("cmd", ["make test", "make -n build", "just test", "just --list"])
 def test_d_explicit_targets_allowed(cmd: str) -> None:
-    ok, _, reason = _validate_command(cmd)
+    ok, _, reason = _validate_command(cmd, human_confirmed=True)
     assert ok, reason
 
 
@@ -826,3 +840,171 @@ def test_r5_4_file_attached_risky_flags_refused(cmd: str) -> None:
 def test_r5_4_file_plain_still_allowed(run_workspace: Path) -> None:
     ok, _, reason = _validate_command("file -b hello.txt")
     assert ok, reason
+
+
+
+# ---------------------------------------------------------------------------
+# Round 6 regression tests: items (1)-(4)
+# ---------------------------------------------------------------------------
+
+
+def test_r6_1_child_env_is_an_allowlist(run_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIA" + "X" * 16)
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "s" * 40)
+    monkeypatch.setenv("SOME_RANDOM_CREDENTIAL", "c" * 20)
+    monkeypatch.setenv("DATABASE_URL", "postgres://u:p@h/db")
+    monkeypatch.setenv("LC_ALL", "C")
+    monkeypatch.setenv("CARGO_HOME", "/tmp/cargo-home")
+    monkeypatch.setattr(run_mod.subprocess, "Popen", _FakeProc)
+    res = _exec(run_workspace, "git status")
+    assert "Exit: 0" in res, res
+    env = _FakeProc.kwargs["env"]
+    for k in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "SOME_RANDOM_CREDENTIAL", "DATABASE_URL"):
+        assert k not in env, k
+    assert env["LC_ALL"] == "C" and env["CARGO_HOME"] == "/tmp/cargo-home"
+    assert "PATH" in env and env["HOME"]
+    # git safety env is still injected
+    assert env["GIT_PAGER"] == "cat" and int(env["GIT_CONFIG_COUNT"]) > 0
+    allowed_extra = {"GIT_PAGER", "PAGER", "CI", "TERM", "NO_COLOR", "CARGO_TERM_COLOR", "npm_config_yes",
+                     "DEBIAN_FRONTEND", "GIT_TERMINAL_PROMPT", "GIT_LITERAL_PATHSPECS", "GIT_CONFIG_COUNT"}
+    for k in env:
+        assert (k in run_mod._CHILD_ENV_ALLOW or k.startswith("LC_") or k in allowed_extra
+                or k.startswith("GIT_CONFIG_KEY_") or k.startswith("GIT_CONFIG_VALUE_")), k
+
+
+def test_r6_1_real_child_cannot_print_aws_secret(run_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    secret = "aws" + "SecretValue" + "123456"
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", secret)
+    proc_env = run_mod._child_env_base()
+    assert "AWS_SECRET_ACCESS_KEY" not in proc_env
+
+
+def _commit(ws: Path, msg: str, *paths: str, force: bool = True) -> None:
+    present = [p for p in paths if (ws / p).exists()]
+    if present:
+        subprocess.run(["git", "-C", str(ws), "add", *(["-f"] if force else []), *present], check=True)
+    gone = [p for p in paths if not (ws / p).exists()]
+    if gone:
+        subprocess.run(["git", "-C", str(ws), "rm", "-q", "--cached", "--ignore-unmatch", *gone], check=True)
+    subprocess.run(["git", "-C", str(ws), "commit", "-qm", msg], check=True)
+
+
+def test_r6_2_deleted_secret_in_history_blocks_patch_output(run_workspace: Path) -> None:
+    secret = "deleted" + "SecretValue" + "88"
+    (run_workspace / ".env").write_text(f"X={secret}\n", encoding="utf-8")
+    _commit(run_workspace, "add env", ".env")
+    (run_workspace / ".env").unlink()
+    _commit(run_workspace, "remove env", ".env")
+    assert run_mod._tracked_secret_files(run_workspace) == []  # no longer tracked
+    for cmd in ("git show HEAD", "git show HEAD~1", "git log -p", "git log --patch -n 2",
+                "git diff HEAD~2 HEAD~1", "git diff HEAD~1..HEAD", "git log -p HEAD~2..HEAD",
+                "git log -m -p", "git show --stat HEAD"):
+        res = _exec(run_workspace, cmd)
+        assert res.startswith("Refused:") and ".env" in res, (cmd, res)
+        assert secret not in res
+
+
+def test_r6_2_renamed_secret_blocks_patch_output(run_workspace: Path) -> None:
+    secret = "renamed" + "SecretValue" + "66"
+    (run_workspace / ".env").write_text(f"X={secret}\n", encoding="utf-8")
+    _commit(run_workspace, "add env", ".env")
+    subprocess.run(["git", "-C", str(run_workspace), "mv", ".env", "notes.txt"], check=True)
+    _commit(run_workspace, "rename", ".env", "notes.txt")
+    res = _exec(run_workspace, "git show HEAD")
+    assert res.startswith("Refused:") and secret not in res, res
+
+
+def test_r6_2_stash_with_secret_blocks_stash_patch(run_workspace: Path) -> None:
+    secret = "stash" + "SecretValue" + "44"
+    (run_workspace / ".env").write_text(f"X={secret}\n", encoding="utf-8")
+    (run_workspace / "hello.txt").write_text("changed\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(run_workspace), "stash", "push", "-q", "--include-untracked"], check=True)
+    for cmd in ("git stash show -p", "git stash show -p -u", "git stash list -p"):
+        res = _exec(run_workspace, cmd)
+        assert res.startswith("Refused:"), (cmd, res)
+        assert secret not in res
+
+
+def test_r6_2_clean_history_still_allows_patches(run_workspace: Path) -> None:
+    (run_workspace / "hello.txt").write_text("v2\n", encoding="utf-8")
+    _commit(run_workspace, "v2", "hello.txt", force=False)
+    for cmd in ("git show HEAD", "git log -p -n 1", "git diff HEAD~1 HEAD"):
+        res = _exec(run_workspace, cmd)
+        assert "Exit: 0" in res and "v2" in res, (cmd, res)
+
+
+@pytest.mark.parametrize("cmd", [
+    "pytest", "pytest -q tests", "python -m pytest", "python3 -m pytest -x", "python -m unittest",
+    "npm test", "pnpm test", "yarn test", "bun test", "npm run test", "pnpm run build",
+    "go test ./...", "cargo test", "cargo check", "cargo build", "cargo clippy", "cargo bench",
+    "make test", "make check", "just test", "swift test", "swift build",
+])
+def test_r6_3_test_runners_need_human_confirmation(cmd: str) -> None:
+    ok, _, reason = _validate_command(cmd)
+    assert not ok and "confirmation" in reason, (cmd, reason)
+    ok, _, reason = _validate_command(cmd, human_confirmed=True)
+    assert ok, (cmd, reason)
+
+
+def test_r6_3_pytest_conftest_runs_only_after_yes(run_workspace: Path, hud) -> None:
+    marker = run_workspace / "conftest_ran"
+    (run_workspace / "conftest.py").write_text(
+        f"open({str(marker)!r}, 'w').close()\n", encoding="utf-8")
+    (run_workspace / "test_x.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    res = run({"action": "exec", "cmd": "pytest -q -p no:cacheprovider", "cwd": str(run_workspace), "confirm": True})
+    assert "[CONFIRMATION_PENDING]" in res, res
+    time.sleep(0.5)
+    assert not marker.exists()  # model's confirm=True approved nothing
+    core_confirm.resolve(False)
+    time.sleep(0.3)
+    assert not marker.exists()
+
+
+def test_r6_3_version_queries_need_no_confirmation() -> None:
+    for cmd in ("cargo --version", "npm --version", "go version", "python --version", "just --list"):
+        ok, _, reason = _validate_command(cmd)
+        assert ok, (cmd, reason)
+
+
+def test_r6_4_output_cap_kills_process_group(run_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(run_mod, "_MAX_OUTPUT_BYTES", 4096)
+    proc = subprocess.Popen(["sh", "-c", "yes kurek & yes kurek; wait"], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, start_new_session=True)
+    t0 = time.time()
+    out, err, outcome = run_mod._stream_output(proc, timeout=30)
+    assert outcome == "capped"
+    assert len(out.encode()) + len(err.encode()) <= 4096
+    assert time.time() - t0 < 10
+    assert proc.poll() is not None
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        try:
+            os.killpg(proc.pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("process group still alive after output cap")
+
+
+def test_r6_4_exec_reports_output_limit(run_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(run_mod, "_MAX_OUTPUT_BYTES", 2048)
+    big = run_workspace / "big.txt"
+    big.write_text("line of text\n" * 20000, encoding="utf-8")
+    res = _exec(run_workspace, "cat big.txt")
+    assert "OUTPUT LIMIT" in res, res[:300]
+    assert len(res) < 20000
+
+
+def test_r6_4_timeout_still_kills_group(run_workspace: Path) -> None:
+    proc = subprocess.Popen(["sh", "-c", "sleep 30 & sleep 30; wait"], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, start_new_session=True)
+    t0 = time.time()
+    _, _, outcome = run_mod._stream_output(proc, timeout=1)
+    assert outcome == "timeout" and time.time() - t0 < 8
+    assert proc.poll() is not None
+
+
+def test_r6_4_normal_output_unchanged(run_workspace: Path) -> None:
+    res = _exec(run_workspace, "cat hello.txt")
+    assert "Exit: 0" in res and "Safe read file line 1" in res
