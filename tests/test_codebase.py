@@ -447,3 +447,179 @@ def test_r5_5_codebase_read_refuses_device(test_workspace: dict[str, Path], monk
     monkeypatch.setenv("KUREK_CODEBASE_ROOTS", f"{test_workspace['workspace']}:/dev")
     res = codebase({"action": "read", "root": str(repo), "path": "devnull_link"})
     assert res.startswith("Refused") and "regular file" in res
+
+
+# ---------------------------------------------------------------------------
+# Round 7 regression tests: (1) registry auth files, (2) byte caps
+# ---------------------------------------------------------------------------
+
+_REG_AUTH_VALUE = "cmVn" + "QXV0aFZhbHVl" + "OTk="
+_REG_AUTH_FILES = [
+    ".docker/config.json", ".config/containers/auth.json", "run/containers/auth.json",
+    ".dockercfg", ".npmrc", ".pypirc", ".cargo/credentials.toml", ".gem/credentials",
+]
+
+
+@pytest.fixture
+def registry_repo(test_workspace: dict[str, Path]) -> Path:
+    repo = test_workspace["py"]
+    for rel in _REG_AUTH_FILES:
+        f = repo / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text('{"auths": {"ghcr.io": {"auth": "%s"}}}\n' % _REG_AUTH_VALUE, encoding="utf-8")
+    return repo
+
+
+@pytest.mark.parametrize("rel", _REG_AUTH_FILES)
+def test_r7_1_registry_auth_files_refused(registry_repo: Path, rel: str) -> None:
+    from actions.codebase import is_secret_file
+    assert is_secret_file(Path(rel))
+    res = codebase({"action": "read", "root": str(registry_repo), "path": rel})
+    assert res.startswith("Refused"), (rel, res)
+    assert _REG_AUTH_VALUE not in res
+
+
+def test_r7_1_registry_auth_hidden_from_search_and_find(registry_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for action, q in (("search", "auths"), ("find", "*.json"), ("find", "config")):
+        res = codebase({"action": action, "root": str(registry_repo), "path": ".", "query": q})
+        assert _REG_AUTH_VALUE not in res, (action, res)
+        assert "docker/config.json" not in res and "containers/auth.json" not in res, (action, res)
+    import actions.codebase as cb
+    monkeypatch.setattr(cb.shutil, "which", lambda name: None)  # python fallback
+    res = codebase({"action": "search", "root": str(registry_repo), "path": ".", "query": "auths"})
+    assert _REG_AUTH_VALUE not in res
+
+
+def test_r7_1_registry_auth_file_env_override(test_workspace: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    from actions.codebase import is_secret_file
+    repo = test_workspace["py"]
+    custom = repo / "my-reg-auth.json"
+    custom.write_text('{"auths": {}}\n', encoding="utf-8")
+    monkeypatch.setenv("REGISTRY_AUTH_FILE", str(custom))
+    assert is_secret_file(custom)
+    dcfg = repo / "dockercfgdir"
+    dcfg.mkdir()
+    (dcfg / "config.json").write_text("{}\n", encoding="utf-8")
+    monkeypatch.setenv("DOCKER_CONFIG", str(dcfg))
+    assert is_secret_file(dcfg / "config.json")
+    assert not is_secret_file(repo / "package.json")
+
+
+def test_r7_1_plain_config_json_still_readable(test_workspace: dict[str, Path]) -> None:
+    repo = test_workspace["py"]
+    (repo / "config.json").write_text('{"name": "demo"}\n', encoding="utf-8")
+    res = codebase({"action": "read", "root": str(repo), "path": "config.json"})
+    assert "demo" in res and not res.startswith("Refused")
+
+
+def test_r7_1_registry_values_redacted() -> None:
+    from actions.run import _redact_secrets
+    text = ('{"auths": {"a": {"auth": "dXNlcjpwYXNz"}, "b": {"identitytoken": "abc", '
+            '"registrytoken": "def", "password": "hunter2"}}}\n'
+            "//registry.npmjs.org/:_authToken=npm_abcdef\n_auth=Zm9vOmJhcg==\n")
+    out = _redact_secrets(text)
+    for v in ("dXNlcjpwYXNz", '"abc"', '"def"', "hunter2", "npm_abcdef", "Zm9vOmJhcg=="):
+        assert v not in out, v
+    code = "auth = get_auth()\npassword: str = field()\nif auth:\n"
+    assert _redact_secrets(code) == code
+
+
+def test_r7_2_read_never_reads_whole_file(test_workspace: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    import builtins
+    import actions.codebase as cb
+    repo = test_workspace["py"]
+    big = repo / "big.txt"
+    big.write_text("x" * 99 + "\n" * 1, encoding="utf-8")
+    with open(big, "a", encoding="utf-8") as f:
+        for _ in range(30000):
+            f.write("y" * 99 + "\n")
+    monkeypatch.setattr(cb, "_READ_MAX_BYTES", 50_000)
+    sizes: list[int] = []
+    real_open = builtins.open
+
+    class _Spy:
+        def __init__(self, fh):
+            self._fh = fh
+        def read(self, n=-1):
+            sizes.append(n)
+            return self._fh.read(n)
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            self._fh.close()
+        def __getattr__(self, k):
+            return getattr(self._fh, k)
+
+    def spy_open(path, mode="r", *a, **kw):
+        fh = real_open(path, mode, *a, **kw)
+        return _Spy(fh) if str(path) == str(big) and "b" in mode else fh
+
+    monkeypatch.setattr(builtins, "open", spy_open)
+    res = codebase({"action": "read", "root": str(repo), "path": "big.txt"})
+    monkeypatch.setattr(builtins, "open", real_open)
+    assert "larger than 50000 bytes" in res, res[-300:]
+    reads = [n for n in sizes if n != 1024]  # _is_binary probe
+    assert reads and all(0 < n <= 50_001 for n in reads), sizes
+    res2 = codebase({"action": "read", "root": str(repo), "path": "big.txt", "lines": "29000-29010"})
+    assert res2.startswith("Error") or "y" * 99 not in res2
+
+
+def test_r7_2_search_output_capped_and_rg_group_killed(test_workspace: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    import actions.codebase as cb
+    if not shutil.which("rg"):
+        pytest.skip("rg not installed")
+    repo = test_workspace["py"]
+    for i in range(20):
+        (repo / f"many_{i}.txt").write_text("needle line\n" * 2000, encoding="utf-8")
+    monkeypatch.setattr(cb, "_SEARCH_MAX_BYTES", 8192)
+    seen: dict[str, object] = {}
+    real = cb._run_rg_capped
+
+    def spy(cmd, timeout):
+        out, err, outcome, rc = real(cmd, timeout)
+        seen["outcome"], seen["bytes"] = outcome, len(out.encode()) + len(err.encode())
+        return out, err, outcome, rc
+
+    monkeypatch.setattr(cb, "_run_rg_capped", spy)
+    res = codebase({"action": "search", "root": str(repo), "path": ".", "query": "needle"})
+    assert seen["outcome"] == "capped" and seen["bytes"] <= 8192
+    assert "Output limit" in res
+
+
+def test_r7_2_rg_capped_kills_process_group(monkeypatch: pytest.MonkeyPatch) -> None:
+    import actions.codebase as cb
+    import actions.run as run_mod
+    monkeypatch.setattr(cb, "_SEARCH_MAX_BYTES", 4096)
+    started: dict[str, object] = {}
+    real_popen = cb.subprocess.Popen
+
+    def popen(*a, **kw):
+        p = real_popen(*a, **kw)
+        started["p"], started["kw"] = p, kw
+        return p
+
+    monkeypatch.setattr(cb.subprocess, "Popen", popen)
+    out, err, outcome, _ = cb._run_rg_capped(["sh", "-c", "yes kurek & yes kurek; wait"], timeout=30)
+    assert outcome == "capped" and len(out.encode()) + len(err.encode()) <= 4096
+    assert started["kw"]["start_new_session"] is True
+    p = started["p"]
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        try:
+            os.killpg(p.pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("rg process group still alive after cap")
+
+
+def test_r7_2_fallback_search_capped(test_workspace: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    import actions.codebase as cb
+    repo = test_workspace["py"]
+    for i in range(10):
+        (repo / f"fb_{i}.txt").write_text("needle line\n" * 2000, encoding="utf-8")
+    monkeypatch.setattr(cb.shutil, "which", lambda name: None)
+    monkeypatch.setattr(cb, "_SEARCH_MAX_BYTES", 8192)
+    res = codebase({"action": "search", "root": str(repo), "path": ".", "query": "needle"})
+    assert "Output limit" in res

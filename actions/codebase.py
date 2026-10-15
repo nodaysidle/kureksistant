@@ -130,11 +130,23 @@ def get_allowed_roots() -> list[Path]:
 
 _SECRET_FILE_NAMES = frozenset({
     "api_keys.json", ".git-credentials", ".netrc", ".pgpass", "credentials.json", ".envrc",
+    # container / package registry auth
+    ".dockercfg", ".npmrc", ".pypirc", ".yarnrc.yml",
+})
+# (parent dir, file name) pairs that hold registry credentials:
+#   ~/.docker/config.json, ~/.config/containers/auth.json, $XDG_RUNTIME_DIR/containers/auth.json,
+#   /etc/containers/auth.json, ~/.cargo/credentials(.toml), ~/.gem/credentials
+_SECRET_DIR_FILES = frozenset({
+    (".docker", "config.json"), ("containers", "auth.json"),
+    (".cargo", "credentials"), (".cargo", "credentials.toml"), (".gem", "credentials"),
 })
 # Globs excluded from rg searches; a superset of is_secret_file().
 _SECRET_SEARCH_GLOBS = (
     ".env", ".env*", "api_keys.json", ".git-credentials", ".netrc", ".pgpass", "credentials.json",
     "*.pem", "*.key", "*.p12", "*.pfx", "id_*", ".git",
+    ".dockercfg", ".npmrc", ".pypirc", ".yarnrc.yml",
+    "**/.docker/config.json", "**/containers/auth.json",
+    "**/.cargo/credentials", "**/.cargo/credentials.toml", "**/.gem/credentials",
 )
 _ENV_TEMPLATE_NAMES = frozenset({".env.example", ".env.sample", ".env.template"})
 _SSH_KEY_RE = re.compile(r"^id_[a-z0-9_\-]+$")
@@ -146,6 +158,12 @@ def is_secret_file(path: Path) -> bool:
     lower = name.lower()
     if lower in _SECRET_FILE_NAMES:
         return True
+    parent = path.parent.name.lower()
+    if (parent, lower) in _SECRET_DIR_FILES:
+        return True
+    if lower in ("auth.json", "config.json") or os.environ.get("REGISTRY_AUTH_FILE"):
+        if _is_registry_auth_location(path):
+            return True
     if lower.startswith(".env") and lower not in _ENV_TEMPLATE_NAMES:
         return True
     if lower.endswith((".pem", ".key", ".p12", ".pfx")):
@@ -154,6 +172,23 @@ def is_secret_file(path: Path) -> bool:
         return True
     if ".git" in path.parts:
         return True
+    return False
+
+
+def _is_registry_auth_location(path: Path) -> bool:
+    """REGISTRY_AUTH_FILE / DOCKER_CONFIG may point anywhere; treat those targets as secrets."""
+    for var, fname in (("REGISTRY_AUTH_FILE", None), ("DOCKER_CONFIG", "config.json")):
+        val = os.environ.get(var)
+        if not val:
+            continue
+        target = Path(os.path.expanduser(val))
+        if fname:
+            target = target / fname
+        try:
+            if path.resolve() == target.resolve():
+                return True
+        except OSError:
+            continue
     return False
 
 
@@ -322,6 +357,35 @@ def _resolve_target(
     return resolved_root, resolved_target, None
 
 
+# Hard caps: codebase never reads more than this from one file, and never keeps more
+# than this much search output in memory.
+_READ_MAX_BYTES = 1_000_000
+_SEARCH_MAX_BYTES = 1_000_000
+
+
+def _read_capped(file_path: Path, cap: int | None = None) -> tuple[str, bool]:
+    """Read at most `cap` bytes; returns (text, truncated). Never reads the whole file."""
+    cap = _READ_MAX_BYTES if cap is None else cap
+    with open(file_path, "rb") as f:
+        data = f.read(cap + 1)
+    truncated = len(data) > cap
+    return data[:cap].decode("utf-8", "replace"), truncated
+
+
+def _run_rg_capped(cmd: list[str], timeout: float) -> tuple[str, str, str, int | None]:
+    """Run rg in its own process group and stream output under _SEARCH_MAX_BYTES.
+
+    Returns (stdout, stderr, outcome, returncode); outcome is exited/timeout/capped.
+    On cap or timeout the whole group is killed (see actions.run._stream_output)."""
+    from actions.run import _stream_output  # lazy: actions.run imports this module
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+        env=_rg_env(), start_new_session=True,
+    )
+    out, err, outcome = _stream_output(proc, timeout, cap=_SEARCH_MAX_BYTES)
+    return out, err, outcome, proc.returncode
+
+
 def _is_binary(file_path: Path) -> bool:
     """Quickly check if file is binary by extension or null byte in first 1024 bytes."""
     if file_path.suffix.lower() in BINARY_EXTENSIONS:
@@ -348,6 +412,7 @@ def _action_search(target_dir: Path, query: str, depth: int | None = None) -> st
 
     query_str = query.strip()
     rg_path = shutil.which("rg")
+    search_capped = False
 
     if rg_path:
         cmd = [
@@ -374,23 +439,29 @@ def _action_search(target_dir: Path, query: str, depth: int | None = None) -> st
         cmd.extend(["-e", query_str, str(target_dir)])
 
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=12, env=_rg_env())
-            raw_out = res.stdout.strip()
-            if not raw_out and res.returncode == 1:
+            out, err, outcome, rc = _run_rg_capped(cmd, timeout=12)
+            if outcome == "timeout":
+                return f"Search timed out after 12s. Narrow query or specify a subpath."
+            raw_out = out.strip()
+            if outcome == "capped":
+                search_capped = True
+                raw_out = raw_out.rsplit("\n", 1)[0] if "\n" in raw_out else raw_out
+            if not raw_out and rc == 1:
                 return f"No matches found for '{query_str}' in {target_dir.name}."
-            if not raw_out and res.stderr:
-                return f"Search notice: {res.stderr.strip()}"
+            if not raw_out and err:
+                return f"Search notice: {_redact(err.strip()[:2000])}"
             lines = raw_out.splitlines()
-        except subprocess.TimeoutExpired:
-            return f"Search timed out after 12s. Narrow query or specify a subpath."
         except Exception as e:
             lines = []
     else:
         # Fallback pure Python search
         lines = []
+        collected = 0
         try:
             pattern = re.compile(re.escape(query_str), re.IGNORECASE)
             for root, dirs, files in os.walk(target_dir):
+                if search_capped:
+                    break
                 dirs[:] = [d for d in dirs if d not in STANDARD_IGNORES and not d.startswith(".")]
                 for fname in sorted(files):
                     fpath = Path(root) / fname
@@ -400,13 +471,20 @@ def _action_search(target_dir: Path, query: str, depth: int | None = None) -> st
                     if _is_binary(fpath) or is_secret_file(fpath) or is_secret_file(real):
                         continue
                     try:
-                        content_lines = fpath.read_text(encoding="utf-8", errors="replace").splitlines()
-                        for idx, l in enumerate(content_lines):
+                        text, _ = _read_capped(fpath)
+                        for idx, l in enumerate(text.splitlines()):
                             if pattern.search(l):
                                 rel = fpath.relative_to(target_dir)
-                                lines.append(f"{rel}:{idx+1}:{l}")
+                                entry = f"{rel}:{idx+1}:{l[:500]}"
+                                collected += len(entry.encode("utf-8", "replace")) + 1
+                                if collected > _SEARCH_MAX_BYTES:
+                                    search_capped = True
+                                    break
+                                lines.append(entry)
                     except Exception:
                         pass
+                    if search_capped:
+                        break
         except Exception as e:
             return f"Search error: {e}"
 
@@ -427,6 +505,11 @@ def _action_search(target_dir: Path, query: str, depth: int | None = None) -> st
         )
     else:
         footer = ""
+    if search_capped:
+        footer += (
+            f"\n\n[Output limit: search stopped after {_SEARCH_MAX_BYTES} bytes. "
+            "Narrow your query or path.]"
+        )
 
     return _redact(header + body + footer)
 
@@ -498,9 +581,12 @@ def _action_read(target_file: Path, lines_arg: str | None = None) -> str:
         return f"Refused: File '{target_file.name}' is a binary file. Reading binary files is not supported."
 
     try:
-        content = target_file.read_text(encoding="utf-8", errors="replace")
+        content, read_truncated = _read_capped(target_file)
     except Exception as e:
         return f"Error reading file '{target_file.name}': {e}"
+    if read_truncated:
+        # drop the possibly partial last line
+        content = content.rsplit("\n", 1)[0]
 
     all_lines = content.splitlines()
     total_lines = len(all_lines)
@@ -544,6 +630,11 @@ def _action_read(target_file: Path, lines_arg: str | None = None) -> str:
     for i, line in enumerate(selected, start=start_line):
         formatted.append(f"{i:4d} | {line}")
 
+    if read_truncated:
+        truncated_msg += (
+            f"\n\n[File is larger than {_READ_MAX_BYTES} bytes: only the first {_READ_MAX_BYTES} bytes "
+            "are readable through codebase.]"
+        )
     return _redact("\n".join(formatted) + truncated_msg)
 
 
@@ -574,8 +665,10 @@ def _action_find(target_dir: Path, query: str | None = None) -> str:
             str(target_dir),
         ]
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=8, env=_rg_env())
-            for l in res.stdout.splitlines():
+            out, _err, outcome, _rc = _run_rg_capped(cmd, timeout=8)
+            if outcome == "capped" and "\n" in out:
+                out = out.rsplit("\n", 1)[0]
+            for l in out.splitlines():
                 if l.strip():
                     matches.append(Path(l.strip()))
         except Exception:
@@ -646,7 +739,7 @@ def _outline_file(file_path: Path) -> list[str]:
         return []
 
     try:
-        content = file_path.read_text(encoding="utf-8", errors="replace")
+        content, _ = _read_capped(file_path)
     except Exception:
         return []
 

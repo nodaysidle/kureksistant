@@ -130,6 +130,15 @@ _SECRET_PATTERNS = [
     (re.compile(r"\bBearer\s+[a-zA-Z0-9_\-\.=]{20,}"), "Bearer [REDACTED_TOKEN]"),
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"), "[REDACTED_PRIVATE_KEY]"),
     (re.compile(r"(https?://)([^:\s@/]+):([^@\s]+)@"), r"\1[REDACTED_USER]:[REDACTED_PASS]@"),
+    # Container/package registry auth: docker/podman "auth", "identitytoken", "registrytoken",
+    # "password" values (any length, quoted JSON/YAML), and .npmrc _auth/_authToken.
+    (re.compile(
+        r"""(?i)(["'](?:auth|identitytoken|registrytoken|password)["']\s*:\s*["'])(?!\[REDACTED)([^"']+)(?=["'])"""
+    ), r"\1[REDACTED_REGISTRY_AUTH]"),
+    (re.compile(
+        r"""(?i)(\b(?:auth|identitytoken|registrytoken|password)\s*[:=]\s*["'])(?!\[REDACTED)([^"'\n]+)(?=["'])"""
+    ), r"\1[REDACTED_REGISTRY_AUTH]"),
+    (re.compile(r"""(?i)((?:^|[\s:])_auth(?:token)?\s*=\s*)(?!\[REDACTED)(\S+)"""), r"\1[REDACTED_REGISTRY_AUTH]"),
     # Generic key/value assignments: KEY=value, "api_key": "value", token: value
     (re.compile(
         r"""(?i)(["']?[A-Za-z0-9_\-]*(?:api[_\-]?key|apikey|secret|token|passw(?:or)?d|auth[_\-]?key|private[_\-]?key)["']?\s*[:=]\s*["']?)"""

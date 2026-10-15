@@ -1008,3 +1008,28 @@ def test_r6_4_timeout_still_kills_group(run_workspace: Path) -> None:
 def test_r6_4_normal_output_unchanged(run_workspace: Path) -> None:
     res = _exec(run_workspace, "cat hello.txt")
     assert "Exit: 0" in res and "Safe read file line 1" in res
+
+
+# ---------------------------------------------------------------------------
+# Round 7 regression tests: registry auth files in run
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("rel", [".docker/config.json", ".config/containers/auth.json", ".dockercfg", ".npmrc"])
+def test_r7_1_run_refuses_registry_auth_files(run_workspace: Path, rel: str) -> None:
+    value = "cmVn" + "UnVuVmFsdWU" + "5OQ=="
+    f = run_workspace / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text('{"auths": {"x": {"auth": "%s"}}}\n' % value, encoding="utf-8")
+    for cmd in (f"cat {rel}", f"head {rel}", f"grep auth {rel}"):
+        res = _exec(run_workspace, cmd)
+        assert res.startswith("Refused:") and value not in res, (cmd, res)
+    subprocess.run(["git", "-C", str(run_workspace), "add", "-f", rel], check=True)
+    subprocess.run(["git", "-C", str(run_workspace), "commit", "-qm", "reg auth"], check=True)
+    res = _exec(run_workspace, "git show HEAD")
+    assert res.startswith("Refused:") and value not in res, res
+
+
+def test_r7_1_run_output_redacts_registry_auth(run_workspace: Path) -> None:
+    (run_workspace / "notes.txt").write_text('{"auth": "c2VjcmV0dmFsdWU=", "password": "pw1"}\n', encoding="utf-8")
+    res = _exec(run_workspace, "cat notes.txt")
+    assert "Exit: 0" in res and "c2VjcmV0dmFsdWU=" not in res and '"pw1"' not in res
