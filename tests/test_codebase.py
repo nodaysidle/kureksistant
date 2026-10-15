@@ -623,3 +623,78 @@ def test_r7_2_fallback_search_capped(test_workspace: dict[str, Path], monkeypatc
     monkeypatch.setattr(cb, "_SEARCH_MAX_BYTES", 8192)
     res = codebase({"action": "search", "root": str(repo), "path": ".", "query": "needle"})
     assert "Output limit" in res
+
+
+# ---------------------------------------------------------------------------
+# Round 8 regression tests: (2) dynamic registry auth targets, (3) walk limits
+# ---------------------------------------------------------------------------
+
+_R8_VAL = "r8" + "DynAuth" + "Value55"
+
+
+def test_r8_2_custom_registry_auth_file_excluded_from_search_and_find(test_workspace: dict[str, Path],
+                                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = test_workspace["py"]
+    custom = repo / "my-registry-login.json"
+    custom.write_text(f'{{"auths": {{"x": {{"value": "{_R8_VAL}"}}}}}}\n', encoding="utf-8")
+    dcfg = repo / "dockerstuff"
+    dcfg.mkdir()
+    (dcfg / "config.json").write_text(f'{{"other": "{_R8_VAL}"}}\n', encoding="utf-8")
+    monkeypatch.setenv("REGISTRY_AUTH_FILE", str(custom))
+    monkeypatch.setenv("DOCKER_CONFIG", str(dcfg))
+    for action, q in (("search", _R8_VAL), ("find", "*.json"), ("find", "registry")):
+        res = codebase({"action": action, "root": str(repo), "path": ".", "query": q})
+        body = res.split("\n", 1)[1] if "\n" in res else ""
+        assert _R8_VAL not in body and "my-registry-login.json" not in res, (action, res)
+        assert "dockerstuff/config.json" not in res, (action, res)
+    import actions.codebase as cb
+    monkeypatch.setattr(cb.shutil, "which", lambda name: None)
+    res = codebase({"action": "search", "root": str(repo), "path": ".", "query": _R8_VAL})
+    assert res.startswith("No matches found"), res
+
+
+def test_r8_2_resolved_path_compare_via_symlink(test_workspace: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    from actions.codebase import _is_dynamic_secret
+    repo = test_workspace["py"]
+    real = repo / "real-auth.json"
+    real.write_text("{}\n", encoding="utf-8")
+    link = repo / "linkdir"
+    link.symlink_to(repo)
+    monkeypatch.setenv("REGISTRY_AUTH_FILE", str(link / "real-auth.json"))
+    assert _is_dynamic_secret(real)          # different spelling, same resolved file
+    assert not _is_dynamic_secret(repo / "main.py")
+
+
+def test_r8_2_search_still_finds_normal_matches(test_workspace: dict[str, Path]) -> None:
+    res = codebase({"action": "search", "root": str(test_workspace["py"]), "query": "Hello world"})
+    assert "Hello world from python" in res and "main.py" in res
+
+
+def test_r8_3_index_status_file_limit(test_workspace: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    import actions.codebase as cb
+    repo = test_workspace["py"]
+    for i in range(30):
+        (repo / f"f{i}.txt").write_text("x\n", encoding="utf-8")
+    monkeypatch.setattr(cb, "_WALK_MAX_FILES", 10)
+    for action in ("status", "index"):
+        res = codebase({"action": action, "root": str(repo)})
+        assert "Truncated" in res and "10 files" in res, (action, res)
+
+
+def test_r8_3_index_status_time_limit(test_workspace: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    import actions.codebase as cb
+    repo = test_workspace["py"]
+    for i in range(5):
+        (repo / f"d{i}").mkdir()
+        (repo / f"d{i}" / "a.txt").write_text("x\n", encoding="utf-8")
+    monkeypatch.setattr(cb, "_WALK_MAX_SECONDS", 0.0)
+    t0 = time.time()
+    total, _, notice = cb._count_repo_files(repo)
+    assert "Truncated" in notice and time.time() - t0 < 2
+    res = codebase({"action": "status", "root": str(repo)})
+    assert "Truncated" in res
+
+
+def test_r8_3_small_repo_not_truncated(test_workspace: dict[str, Path]) -> None:
+    res = codebase({"action": "status", "root": str(test_workspace["py"])})
+    assert "Truncated" not in res

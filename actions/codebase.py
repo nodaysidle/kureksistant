@@ -175,6 +175,33 @@ def is_secret_file(path: Path) -> bool:
     return False
 
 
+def _dynamic_secret_targets() -> set[Path]:
+    """Resolved $REGISTRY_AUTH_FILE and $DOCKER_CONFIG/config.json (they can have any name)."""
+    out: set[Path] = set()
+    for var, fname in (("REGISTRY_AUTH_FILE", None), ("DOCKER_CONFIG", "config.json")):
+        val = os.environ.get(var)
+        if not val:
+            continue
+        target = Path(os.path.expanduser(val))
+        if fname:
+            target = target / fname
+        try:
+            out.add(target.resolve())
+        except OSError:
+            continue
+    return out
+
+
+def _is_dynamic_secret(path: Path, targets: set[Path] | None = None) -> bool:
+    targets = _dynamic_secret_targets() if targets is None else targets
+    if not targets:
+        return False
+    try:
+        return path.resolve() in targets
+    except OSError:
+        return True
+
+
 def _is_registry_auth_location(path: Path) -> bool:
     """REGISTRY_AUTH_FILE / DOCKER_CONFIG may point anywhere; treat those targets as secrets."""
     for var, fname in (("REGISTRY_AUTH_FILE", None), ("DOCKER_CONFIG", "config.json")):
@@ -431,6 +458,7 @@ def _action_search(target_dir: Path, query: str, depth: int | None = None) -> st
             "-g", "!.venv",
             "-g", "!__pycache__",
             "-g", "!*.lock",
+            "--null",
         ]
         for secret_glob in _SECRET_SEARCH_GLOBS:
             cmd.extend(["--iglob", f"!{secret_glob}"])
@@ -450,7 +478,28 @@ def _action_search(target_dir: Path, query: str, depth: int | None = None) -> st
                 return f"No matches found for '{query_str}' in {target_dir.name}."
             if not raw_out and err:
                 return f"Search notice: {_redact(err.strip()[:2000])}"
-            lines = raw_out.splitlines()
+            dyn = _dynamic_secret_targets()
+            lines = []
+            for raw in raw_out.splitlines():
+                if "\0" not in raw:
+                    lines.append(raw)  # '--' context separator
+                    continue
+                fpath, rest = raw.split("\0", 1)
+                fp = Path(fpath)
+                if is_secret_file(fp) or _is_dynamic_secret(fp, dyn):
+                    continue  # resolved-path check: custom REGISTRY_AUTH_FILE / DOCKER_CONFIG
+                lines.append(f"{fpath}:{rest}")
+            # drop context separators left dangling by filtered files
+            cleaned: list[str] = []
+            for ln in lines:
+                if ln == "--" and (not cleaned or cleaned[-1] == "--"):
+                    continue
+                cleaned.append(ln)
+            while cleaned and cleaned[-1] == "--":
+                cleaned.pop()
+            lines = cleaned
+            if not lines:
+                return f"No matches found for '{query_str}' in {target_dir.name}."
         except Exception as e:
             lines = []
     else:
@@ -468,7 +517,8 @@ def _action_search(target_dir: Path, query: str, depth: int | None = None) -> st
                     real = fpath.resolve()
                     if fpath.is_symlink() and not _is_path_allowed(real, get_allowed_roots()):
                         continue  # symlink leaves the project roots
-                    if _is_binary(fpath) or is_secret_file(fpath) or is_secret_file(real):
+                    if _is_binary(fpath) or is_secret_file(fpath) or is_secret_file(real) \
+                            or _is_dynamic_secret(fpath):
                         continue
                     try:
                         text, _ = _read_capped(fpath)
@@ -691,7 +741,8 @@ def _action_find(target_dir: Path, query: str | None = None) -> str:
     if not matches:
         return f"No files found matching '{pattern}' in {target_dir.name}."
 
-    matches = [m for m in matches if not is_secret_file(m)]
+    dyn = _dynamic_secret_targets()
+    matches = [m for m in matches if not is_secret_file(m) and not _is_dynamic_secret(m, dyn)]
     if not matches:
         return f"No files found matching '{pattern}' in {target_dir.name}."
     matches.sort(key=lambda p: str(p).lower())
@@ -881,19 +932,36 @@ def _get_repo_git_info(repo_dir: Path) -> dict[str, Any]:
     return info
 
 
-def _count_repo_files(repo_dir: Path) -> tuple[int, dict[str, int]]:
-    """Counts files and aggregates counts by language/extension."""
+# Limits for index/status walks so huge trees cannot keep the tool busy.
+_WALK_MAX_FILES = 50_000
+_WALK_MAX_SECONDS = 5.0
+
+
+def _count_repo_files(repo_dir: Path) -> tuple[int, dict[str, int], str]:
+    """Counts files by extension; stops at _WALK_MAX_FILES or _WALK_MAX_SECONDS.
+
+    Returns (total, ext_counts, truncated_notice) where the notice is "" when complete."""
     total = 0
     ext_counts: dict[str, int] = {}
+    deadline = time.monotonic() + _WALK_MAX_SECONDS
+    notice = ""
     for root, dirs, files in os.walk(repo_dir):
         dirs[:] = [d for d in dirs if d not in STANDARD_IGNORES and not d.startswith(".")]
+        if time.monotonic() > deadline:
+            notice = f"[Truncated: file walk stopped after {_WALK_MAX_SECONDS:g}s; counts are partial.]"
+            break
         for fname in files:
             if fname.startswith("."):
                 continue
+            if total >= _WALK_MAX_FILES:
+                notice = f"[Truncated: file walk stopped at {_WALK_MAX_FILES} files; counts are partial.]"
+                break
             total += 1
             ext = Path(fname).suffix.lower() or "no_ext"
             ext_counts[ext] = ext_counts.get(ext, 0) + 1
-    return total, ext_counts
+        if notice:
+            break
+    return total, ext_counts, notice
 
 
 def _index_cache_path(repo_dir: Path) -> Path:
@@ -903,7 +971,7 @@ def _index_cache_path(repo_dir: Path) -> Path:
 
 def _action_index(repo_dir: Path) -> str:
     git_info = _get_repo_git_info(repo_dir)
-    total_files, ext_counts = _count_repo_files(repo_dir)
+    total_files, ext_counts, walk_notice = _count_repo_files(repo_dir)
 
     top_exts = sorted(ext_counts.items(), key=lambda x: x[1], reverse=True)[:5]
     top_exts_str = ", ".join(f"{ext}: {count}" for ext, count in top_exts)
@@ -920,6 +988,7 @@ def _action_index(repo_dir: Path) -> str:
         "indexed_at_ts": now_ts,
         "file_count": total_files,
         "languages": ext_counts,
+        "truncated": bool(walk_notice),
     }
 
     cache_file = _index_cache_path(repo_dir)
@@ -933,12 +1002,13 @@ def _action_index(repo_dir: Path) -> str:
         f"Indexed '{repo_dir.name}' at commit {commit_disp} (branch: {git_info.get('branch')}).\n"
         f"Total files: {total_files} ({top_exts_str}).\n"
         f"Index status: Fresh (snapshot saved)."
+        + (f"\n{walk_notice}" if walk_notice else "")
     )
 
 
 def _action_status(repo_dir: Path) -> str:
     git_info = _get_repo_git_info(repo_dir)
-    total_files, ext_counts = _count_repo_files(repo_dir)
+    total_files, ext_counts, walk_notice = _count_repo_files(repo_dir)
     top_exts = sorted(ext_counts.items(), key=lambda x: x[1], reverse=True)[:5]
     top_exts_str = ", ".join(f"{ext}: {count}" for ext, count in top_exts)
 
@@ -976,6 +1046,8 @@ def _action_status(repo_dir: Path) -> str:
         f"Files: {total_files} ({top_exts_str})",
         f"Index Freshness: {freshness}",
     ]
+    if walk_notice:
+        lines.append(walk_notice)
     return "\n".join(lines)
 
 

@@ -1033,3 +1033,120 @@ def test_r7_1_run_output_redacts_registry_auth(run_workspace: Path) -> None:
     (run_workspace / "notes.txt").write_text('{"auth": "c2VjcmV0dmFsdWU=", "password": "pw1"}\n', encoding="utf-8")
     res = _exec(run_workspace, "cat notes.txt")
     assert "Exit: 0" in res and "c2VjcmV0dmFsdWU=" not in res and '"pw1"' not in res
+
+
+# ---------------------------------------------------------------------------
+# Round 8 regression tests: (1) recursive search excludes, (4) redaction
+# ---------------------------------------------------------------------------
+
+_R8_SECRET = "r8" + "LeakMarker" + "Q7"
+
+
+@pytest.fixture
+def secret_tree(run_workspace: Path) -> Path:
+    files = [".env", ".env.local", "api_keys.json", "config/api_keys.json", "server.pem", "tls.key",
+             "id_ed25519", ".docker/config.json", ".config/containers/auth.json", ".npmrc", ".pypirc",
+             ".dockercfg", ".cargo/credentials.toml", ".gem/credentials", ".git-credentials", ".netrc"]
+    for rel in files:
+        f = run_workspace / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(f"value={_R8_SECRET}\n", encoding="utf-8")
+    (run_workspace / "visible.txt").write_text(f"{_R8_SECRET} public\n", encoding="utf-8")
+    return run_workspace
+
+
+@pytest.mark.parametrize("cmd", [
+    f"rg {_R8_SECRET}", f"rg --hidden --no-ignore {_R8_SECRET} .", f"rg -uuu {_R8_SECRET}",
+    f"rg -uu --hidden -g .env {_R8_SECRET} .", f"rg --no-ignore-vcs --hidden {_R8_SECRET} -- .",
+    f"rg -l --hidden --no-ignore {_R8_SECRET}", f"rg --files --hidden --no-ignore",
+    f"grep -rn {_R8_SECRET} .", f"grep -r --exclude=visible.txt {_R8_SECRET} .", f"grep -rl {_R8_SECRET} .",
+])
+def test_r8_1_recursive_search_never_prints_secret_files(secret_tree: Path, cmd: str) -> None:
+    res = _exec(secret_tree, cmd)
+    if res.startswith("Refused:"):
+        assert _R8_SECRET not in res.split("\n", 1)[0].replace(cmd, "")
+        return
+    assert "Exit:" in res, (cmd, res)
+    for name in (".env", "api_keys.json", "server.pem", "tls.key", "id_ed25519", "config.json",
+                 "auth.json", ".npmrc", ".pypirc", ".dockercfg", "credentials", ".git-credentials", ".netrc"):
+        for line in res.splitlines():
+            if _R8_SECRET in line or line.strip().endswith(name):
+                assert name not in line.split(":")[0].split("/")[-1] or "visible" in line, (cmd, line)
+    assert res.count(_R8_SECRET) <= 2  # only visible.txt (and the echoed command line)
+
+
+def test_r8_1_excludes_are_appended_last(run_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(run_mod.subprocess, "Popen", _FakeProc)
+    _exec(run_workspace, "rg -uuu -g .env x .")
+    argv = _FakeProc.args_seen
+    assert argv[1] == "--no-config"
+    last_user = argv.index(".")
+    assert "!.env*" in argv[last_user:]
+    _exec(run_workspace, "grep -r x -- .")
+    argv = _FakeProc.args_seen
+    assert argv.index("--") > argv.index("--exclude=.env*")
+
+
+@pytest.mark.parametrize("cmd", [
+    "grep -r --include=.env x .", "grep -r --include .env x .", "grep -r --exclude-from=list x .",
+    "diff -r . /tmp", "diff -ru a b", "diff --recursive a b",
+])
+def test_r8_1_risky_override_flags_refused(cmd: str) -> None:
+    ok, _, reason = _validate_command(cmd)
+    assert not ok and reason.startswith("Refused:"), cmd
+
+
+def test_r8_1_search_inside_git_or_docker_dir_refused(secret_tree: Path) -> None:
+    (secret_tree / ".git" / "config").exists()
+    for sub, cmd in ((".git", "rg url ."), (".docker", f"rg {_R8_SECRET} ."), (".", "grep -r x .git"),
+                     (".", f"rg {_R8_SECRET} .docker")):
+        res = _exec(secret_tree / sub if sub != "." else secret_tree, cmd)
+        assert res.startswith("Refused:") and _R8_SECRET not in res, (sub, cmd, res)
+
+
+def test_r8_1_direct_secret_target_still_refused(secret_tree: Path) -> None:
+    for cmd in (f"rg {_R8_SECRET} .env", f"grep {_R8_SECRET} .docker/config.json", "rg x api_keys.json"):
+        res = _exec(secret_tree, cmd)
+        assert res.startswith("Refused:") and _R8_SECRET not in res, (cmd, res)
+
+
+def test_r8_1_dynamic_registry_auth_name_excluded(run_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    custom = run_workspace / "my-registry-login.json"
+    custom.write_text(f'{{"x": "{_R8_SECRET}"}}\n', encoding="utf-8")
+    monkeypatch.setenv("REGISTRY_AUTH_FILE", str(custom))
+    for cmd in (f"rg --hidden --no-ignore {_R8_SECRET}", f"grep -rn {_R8_SECRET} ."):
+        res = _exec(run_workspace, cmd)
+        assert "my-registry-login.json" not in res, (cmd, res)
+
+
+def test_r8_4_redaction_aws_and_token_prefixes() -> None:
+    samples = {
+        "AKIA" + "ABCDEFGHIJKLMNOP": "AWS_KEY_ID",
+        "ASIA" + "QRSTUVWXYZ234567": "AWS_KEY_ID",
+        "ghp_" + "a" * 36: "GH_TOKEN",
+        "gho_" + "b" * 36: "GH_TOKEN",
+        "github_pat_" + "c" * 40: "GH_TOKEN",
+        "glpat-" + "d" * 20: "GITLAB",
+        "xoxb-" + "1" * 12 + "-abc": "SLACK",
+        "xoxp-" + "2" * 12: "SLACK",
+        "sk_live_" + "e" * 24: "STRIPE",
+        "rk_live_" + "f" * 24: "STRIPE",
+        "hf_" + "g" * 34: "HF_TOKEN",
+        "npm_" + "h" * 36: "NPM_TOKEN",
+    }
+    for value, label in samples.items():
+        out = _redact_secrets(f"x {value} y")
+        assert value not in out and label in out, (value, out)
+    aws_secret = "wJalr" + "XUtnFEMI/K7MDENG/bPxRfiCY" + "EXAMPLEKEY"
+    for line in (f"aws_secret_access_key = {aws_secret}", f'"AWS_SECRET_ACCESS_KEY": "{aws_secret}"',
+                 f"AWS_SECRET_ACCESS_KEY={aws_secret}"):
+        assert aws_secret not in _redact_secrets(line), line
+    code = "from huggingface_hub import hf_hub_download\nnpm_config_yes = 1\nAKIA_PREFIX = 'AKIA'\n"
+    assert _redact_secrets(code) == code
+
+
+def test_r8_4_run_output_redacts_aws_key(run_workspace: Path) -> None:
+    key = "AKIA" + "ZYXWVUTSRQPONMLK"
+    (run_workspace / "notes.txt").write_text(f"key {key}\n", encoding="utf-8")
+    res = _exec(run_workspace, "cat notes.txt")
+    assert "Exit: 0" in res and key not in res

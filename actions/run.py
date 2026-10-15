@@ -39,7 +39,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from actions.codebase import get_allowed_roots, _is_path_allowed, is_secret_file, git_safe_env, _rg_env
+from actions.codebase import (
+    get_allowed_roots, _is_path_allowed, is_secret_file, git_safe_env, _rg_env,
+    _SECRET_SEARCH_GLOBS, _dynamic_secret_targets,
+)
 from core import confirm as _confirm
 
 # ---------------------------------------------------------------------------
@@ -127,6 +130,30 @@ _SECRET_PATTERNS = [
     (re.compile(r"\bAIza[0-9A-Za-z_\-]{30,}"), "[REDACTED_GOOGLE_KEY]"),
     (re.compile(r"\btskey-[a-zA-Z0-9_\-]{8,}"), "[REDACTED_TAILSCALE_KEY]"),
     (re.compile(r"\b(?:gh[pousr]_[a-zA-Z0-9]{20,}|github_pat_[a-zA-Z0-9_]{20,})"), "[REDACTED_GH_TOKEN]"),
+    # AWS access key IDs and secret access keys in assignments
+    (re.compile(r"\b(?:AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|APKA|ABIA|ACCA)[A-Z0-9]{16}\b"), "[REDACTED_AWS_KEY_ID]"),
+    (re.compile(
+        r"""(?i)((?:aws_?secret_?access_?key|aws_?secret_?key|aws_?secret|secret_?access_?key)["']?\s*[:=]\s*["']?)"""
+        r"""(?!\[REDACTED)([A-Za-z0-9/+=]{30,})"""
+    ), r"\1[REDACTED_AWS_SECRET]"),
+    (re.compile(r"""(?i)((?:aws_?session_?token)["']?\s*[:=]\s*["']?)(?!\[REDACTED)([A-Za-z0-9/+=]{20,})"""), r"\1[REDACTED_AWS_SECRET]"),
+    # Common provider token prefixes
+    (re.compile(r"\bglpat-[A-Za-z0-9_\-]{20,}"), "[REDACTED_GITLAB_TOKEN]"),
+    (re.compile(r"\bgl(?:dt|rt|ptt|cbt|imt|soat|ffct)-[A-Za-z0-9_\-]{16,}"), "[REDACTED_GITLAB_TOKEN]"),
+    (re.compile(r"\bxox[abprse]-[A-Za-z0-9\-]{10,}"), "[REDACTED_SLACK_TOKEN]"),
+    (re.compile(r"\bxapp-[A-Za-z0-9\-]{10,}"), "[REDACTED_SLACK_TOKEN]"),
+    (re.compile(r"https://hooks\.slack\.com/services/[A-Za-z0-9/]+"), "[REDACTED_SLACK_WEBHOOK]"),
+    (re.compile(r"\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}"), "[REDACTED_STRIPE_KEY]"),
+    (re.compile(r"\bwhsec_[A-Za-z0-9]{20,}"), "[REDACTED_STRIPE_KEY]"),
+    (re.compile(r"\bhf_[A-Za-z0-9]{30,}"), "[REDACTED_HF_TOKEN]"),
+    (re.compile(r"\bnpm_[A-Za-z0-9]{30,}"), "[REDACTED_NPM_TOKEN]"),
+    (re.compile(r"\bpypi-[A-Za-z0-9_\-]{50,}"), "[REDACTED_PYPI_TOKEN]"),
+    (re.compile(r"\bshp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}\b"), "[REDACTED_SHOPIFY_TOKEN]"),
+    (re.compile(r"\bSG\.[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{16,}"), "[REDACTED_SENDGRID_KEY]"),
+    (re.compile(r"\bdop_v1_[a-f0-9]{64}\b"), "[REDACTED_DO_TOKEN]"),
+    (re.compile(r"\b(?:AccountKey|SharedAccessKey)=[A-Za-z0-9+/=]{20,}"), "[REDACTED_AZURE_KEY]"),
+    (re.compile(r"\bya29\.[A-Za-z0-9_\-]{20,}"), "[REDACTED_GOOGLE_OAUTH]"),
+    (re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}"), "[REDACTED_JWT]"),
     (re.compile(r"\bBearer\s+[a-zA-Z0-9_\-\.=]{20,}"), "Bearer [REDACTED_TOKEN]"),
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"), "[REDACTED_PRIVATE_KEY]"),
     (re.compile(r"(https?://)([^:\s@/]+):([^@\s]+)@"), r"\1[REDACTED_USER]:[REDACTED_PASS]@"),
@@ -469,6 +496,22 @@ def _validate_command(cmd_str: str, human_confirmed: bool = False) -> tuple[bool
             return False, [], f"Refused: '{binary} -f/--file' reads patterns from arbitrary files and is not permitted."
         if binary == "diff" and any(_flag_base(a) in ("--diff-program",) for a in tokens[1:]):
             return False, [], "Refused: 'diff --diff-program' runs an external program and is not permitted."
+        if binary == "diff" and any(
+            _flag_base(a) in ("--recursive", "--new-file", "--unidirectional-new-file", "--exclude-from")
+            or (re.fullmatch(r"-[A-Za-z]+", a) and "r" in a[1:])
+            for a in tokens[1:]
+        ):
+            return False, [], (
+                "Refused: recursive 'diff -r' can print secret files and is not permitted; "
+                "diff two named files instead."
+            )
+        if binary == "grep" and any(
+            _flag_base(a) in ("--include", "--exclude-from", "--files-from", "--null-data") for a in tokens[1:]
+        ):
+            return False, [], (
+                "Refused: 'grep --include/--exclude-from' can override the secret-file excludes; "
+                "pass a narrower path instead."
+            )
         return True, tokens, ""
 
     # 3. 'find' safety check
@@ -760,6 +803,14 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any) -> str:
         _audit_log(rec, reason=path_reason)
         return path_reason
 
+    scope_reason = _search_scope_reason(tokens, cwd_path)
+    if scope_reason:
+        rec = RunRecord(run_id=run_id, cmd=cmd_str, cwd=str(cwd_path), status="refused", exit_code=-1, output=scope_reason)
+        with _RUN_LOCK:
+            _RUN_HISTORY[run_id] = rec
+        _audit_log(rec, reason=scope_reason)
+        return scope_reason
+
     if Path(tokens[0]).name == "git" and _git_emits_patches(tokens):
         tracked = _tracked_secret_files(cwd_path) or _touched_secret_files(tokens, cwd_path)
         if tracked:
@@ -1016,6 +1067,76 @@ def _stream_output(proc: subprocess.Popen, timeout: float, cap: int | None = Non
     return out, err, outcome
 
 
+_SECRET_SCOPE_DIRS = frozenset({".git", ".docker"})
+
+
+def _search_scope_reason(tokens: list[str], cwd_path: Path) -> str:
+    """rg/grep must not search from inside .git/ or .docker/ (or $DOCKER_CONFIG):
+    relative paths there ('./config', './config.json') escape the exclude globs."""
+    if tokens[0].lower() not in ("rg", "ripgrep", "grep"):
+        return ""
+    scopes = [cwd_path]
+    for _tok, value in _path_candidates(tokens):
+        try:
+            cand = Path(os.path.expanduser(value))
+            if not cand.is_absolute():
+                cand = cwd_path / cand
+            if cand.is_dir():
+                scopes.append(cand)
+        except Exception:
+            continue
+    docker_dirs: set[Path] = set()
+    if os.environ.get("DOCKER_CONFIG"):
+        try:
+            docker_dirs.add(Path(os.path.expanduser(os.environ["DOCKER_CONFIG"])).resolve())
+        except OSError:
+            pass
+    for s in scopes:
+        try:
+            r = s.resolve()
+        except OSError:
+            continue
+        if _SECRET_SCOPE_DIRS.intersection(r.parts) or r in docker_dirs \
+                or any(d in r.parents for d in docker_dirs):
+            return (
+                f"Refused: searching inside '{s}' could print credential files "
+                "(.git/, .docker/, $DOCKER_CONFIG); search the project root instead."
+            )
+    return ""
+
+
+# grep --exclude matches base names only, so path-shaped secrets are covered by
+# their directory (--exclude-dir) or by the base name.
+_GREP_EXCLUDE_NAMES = (
+    ".env*", "api_keys.json", ".git-credentials", ".netrc", ".pgpass", "credentials.json",
+    "*.pem", "*.key", "*.p12", "*.pfx", "id_*", ".dockercfg", ".npmrc", ".pypirc", ".yarnrc.yml",
+    "auth.json", "credentials", "credentials.toml",
+)
+_GREP_EXCLUDE_DIRS = (".git", ".docker")
+
+
+def _with_secret_excludes(tokens: list[str]) -> list[str]:
+    """Append secret-file excludes AFTER the user's flags (before any '--').
+
+    rg: later globs win over earlier ones and --no-ignore/-u/--hidden do not
+    disable explicit -g overrides. grep: the last matching --include/--exclude
+    wins and --include is refused, so the excludes always apply."""
+    name = Path(tokens[0]).name
+    dyn_names = sorted({p.name for p in _dynamic_secret_targets()})
+    extra: list[str] = []
+    if name in ("rg", "ripgrep"):
+        for g in (*_SECRET_SEARCH_GLOBS, "**/.git/**", "auth.json", "credentials", "credentials.toml",
+                  *dyn_names):
+            extra += ["-g", f"!{g}", "--iglob", f"!{g}"]
+    else:
+        extra += [f"--exclude={g}" for g in (*_GREP_EXCLUDE_NAMES, *dyn_names)]
+        extra += [f"--exclude-dir={d}" for d in _GREP_EXCLUDE_DIRS]
+    if "--" in tokens[1:]:
+        i = tokens.index("--", 1)
+        return tokens[:i] + extra + tokens[i:]
+    return tokens + extra
+
+
 def _spawn_run(run_id: str, cmd_str: str, tokens: list[str], cwd_path: Path, timeout_arg: Any) -> str:
     exe = shutil.which(tokens[0])
     if exe:
@@ -1043,6 +1164,8 @@ def _spawn_run(run_id: str, cmd_str: str, tokens: list[str], cwd_path: Path, tim
     env = git_safe_env(_rg_env(env))
     if Path(tokens[0]).name in ("rg", "ripgrep"):
         tokens = tokens[:1] + ["--no-config"] + tokens[1:]
+    if Path(tokens[0]).name in ("rg", "ripgrep", "grep"):
+        tokens = _with_secret_excludes(tokens)
     if Path(tokens[0]).name == "git" and len(tokens) > 1:
         sub = tokens[1].lower()
         if sub in ("diff", "log", "show"):
