@@ -1434,3 +1434,66 @@ def test_r11_missing_binary_still_asks_then_refuses_after_yes(
     time.sleep(0.5)
     assert not marker.exists()
     assert "not found in the trusted binary dirs" in run({"action": "read", "run_id": res.split("run id ")[1].split(";")[0]})
+
+
+# ---------------------------------------------------------------------------
+# Round 12: go build/vet confirmed; -vettool/-o blocked; audit log hardening
+# ---------------------------------------------------------------------------
+
+import stat  # noqa: E402
+
+_R12_PASSWORD = "hunter-" + "two"
+
+
+@pytest.mark.parametrize("cmd", ["go build", "go build ./...", "go vet ./...", "go vet ."])
+def test_r12_1_go_build_and_vet_need_confirmation(cmd: str) -> None:
+    ok, _, reason = _validate_command(cmd)
+    assert not ok and "confirmation" in reason, (cmd, reason)
+    ok, _, reason = _validate_command(cmd, human_confirmed=True)
+    assert ok, (cmd, reason)
+
+
+@pytest.mark.parametrize("cmd", [
+    "go vet -vettool=/tmp/evil.so ./...",
+    "go vet -vettool /tmp/evil.so ./...",
+    "go build -o=/tmp/out ./...",
+    "go build -o /tmp/out ./...",
+])
+def test_r12_1_go_vettool_and_output_flags_refused(cmd: str) -> None:
+    for confirmed in (False, True):
+        ok, _, reason = _validate_command(cmd, human_confirmed=confirmed)
+        assert not ok and reason.startswith("Refused:"), (cmd, confirmed, reason)
+
+
+def test_r12_1_go_vettool_refused_end_to_end(run_workspace: Path) -> None:
+    res = _exec(run_workspace, "go vet -vettool=/tmp/evil.so ./...")
+    assert res.startswith("Refused:") and "vettool" in res, res
+
+
+def test_r12_2_audit_log_redacts_secret(run_workspace: Path) -> None:
+    audit_file = _get_audit_log_path()
+    if audit_file.exists():
+        audit_file.unlink()
+    res = _exec(run_workspace, f"rg --pre=rm x PASSWORD={_R12_PASSWORD} hello.txt")
+    assert res.startswith("Refused:"), res
+    content = audit_file.read_text(encoding="utf-8")
+    assert "PASSWORD=" in content, content
+    assert "[REDACTED_SECRET]" in content, content
+    assert _R12_PASSWORD not in content, content
+
+
+def test_r12_2_audit_log_file_is_0600_and_dir_is_0700(run_workspace: Path) -> None:
+    audit_file = _get_audit_log_path()
+    if audit_file.exists():
+        audit_file.unlink()
+    _exec(run_workspace, "cat hello.txt")
+    assert audit_file.exists()
+    assert stat.S_IMODE(audit_file.stat().st_mode) == 0o600
+    assert stat.S_IMODE(audit_file.parent.stat().st_mode) == 0o700
+
+
+def test_r12_3_run_history_capped(run_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(run_mod, "_RUN_HISTORY_MAX", 5)
+    for _ in range(8):
+        _exec(run_workspace, "cat hello.txt")
+    assert len(run_mod._RUN_HISTORY) <= 5, len(run_mod._RUN_HISTORY)

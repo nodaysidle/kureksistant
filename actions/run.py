@@ -84,18 +84,33 @@ class RunRecord:
 
 
 _RUN_HISTORY: dict[str, RunRecord] = {}
+_RUN_HISTORY_MAX = 200
 _RUN_COUNTER = 0
 _RUN_LOCK = threading.Lock()
+
+
+def _cap_run_history() -> None:
+    """Keep only the most recent _RUN_HISTORY_MAX records (insertion order)."""
+    while len(_RUN_HISTORY) > _RUN_HISTORY_MAX:
+        _RUN_HISTORY.pop(next(iter(_RUN_HISTORY)))
 
 
 def _get_audit_log_path() -> Path:
     state_dir = Path.home() / ".local" / "state" / "kurek"
     try:
         state_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(state_dir, 0o700)
+        except OSError:
+            pass
         return state_dir / "run_audit.log"
     except Exception:
         fallback = Path.home() / ".config" / "kurek"
         fallback.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(fallback, 0o700)
+        except OSError:
+            pass
         return fallback / "run_audit.log"
 
 
@@ -107,10 +122,15 @@ def _audit_log(record: RunRecord, reason: str = "") -> None:
     line = (
         f"[{now_iso}] ID={record.run_id} | STATUS={record.status} | "
         f"EXIT={exit_str} | DUR={record.duration:.2f}s | "
-        f"CWD={record.cwd} | CMD={shlex.quote(record.cmd)}{extra}\n"
+        f"CWD={record.cwd} | CMD={shlex.quote(_redact_secrets(record.cmd))}{extra}\n"
     )
     try:
-        with open(path, "a", encoding="utf-8") as f:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except OSError:
+            pass
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
             f.write(line)
     except Exception:
         pass
@@ -326,7 +346,7 @@ _NODE_PM_BLOCKED_FLAGS = frozenset({
 # need a human yes; only 'cargo --version/-V/--help' runs without one.
 _CARGO_REAL_SUBCOMMANDS = frozenset({"check", "test", "build", "clippy", "bench", "tree", "metadata", "version"})
 
-_GO_BLOCKED_FLAGS = frozenset({"exec", "toolexec", "overlay", "modfile", "o", "pgo", "C"})
+_GO_BLOCKED_FLAGS = frozenset({"exec", "toolexec", "vettool", "overlay", "modfile", "o", "pgo", "C"})
 
 # git branch/tag: read-only listing only.
 _GIT_REF_MUTATING = {
@@ -702,8 +722,10 @@ def _validate_command(cmd_str: str, human_confirmed: bool = False) -> tuple[bool
                 name = _flag_base(a).lstrip("-")
                 if a.startswith("-") and name in _GO_BLOCKED_FLAGS:
                     return False, [], f"Refused: 'go {a}' can execute custom programs or write outside the repo."
-            if subcmd == "test":
-                return _needs_human("go test")
+            if subcmd in ("test", "build", "vet"):
+                # 'go build'/'go vet' run repository-controlled build steps and vet
+                # plugins exactly like 'go test': a human must say yes first.
+                return _needs_human(f"go {subcmd}")
             return True, tokens, ""
         return False, [], f"Refused: 'go {subcmd}' is not in the allowlist (allowed: test, build, vet, version)."
 
@@ -841,6 +863,7 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any) -> str:
         )
         with _RUN_LOCK:
             _RUN_HISTORY[run_id] = rec
+            _cap_run_history()
         _audit_log(rec, reason=reason)
         return reason
 
@@ -849,6 +872,7 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any) -> str:
         rec = RunRecord(run_id=run_id, cmd=cmd_str, cwd=str(cwd_path), status="refused", exit_code=-1, output=path_reason)
         with _RUN_LOCK:
             _RUN_HISTORY[run_id] = rec
+            _cap_run_history()
         _audit_log(rec, reason=path_reason)
         return path_reason
 
@@ -857,6 +881,7 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any) -> str:
         rec = RunRecord(run_id=run_id, cmd=cmd_str, cwd=str(cwd_path), status="refused", exit_code=-1, output=scope_reason)
         with _RUN_LOCK:
             _RUN_HISTORY[run_id] = rec
+            _cap_run_history()
         _audit_log(rec, reason=scope_reason)
         return scope_reason
 
@@ -872,6 +897,7 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any) -> str:
             rec = RunRecord(run_id=run_id, cmd=cmd_str, cwd=str(cwd_path), status="refused", exit_code=-1, output=reason)
             with _RUN_LOCK:
                 _RUN_HISTORY[run_id] = rec
+                _cap_run_history()
             _audit_log(rec, reason=reason)
             return reason
 
@@ -883,6 +909,7 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any) -> str:
         rec = RunRecord(run_id=run_id, cmd=cmd_str, cwd=str(cwd_path), status="refused", exit_code=-1, output=why)
         with _RUN_LOCK:
             _RUN_HISTORY[run_id] = rec
+            _cap_run_history()
         _audit_log(rec, reason=why)
         return why
 
@@ -1065,12 +1092,14 @@ def _request_human_confirmation(run_id: str, cmd_str: str, tokens: list[str], cw
         rec = RunRecord(run_id=run_id, cmd=cmd_str, cwd=str(cwd_path), status="refused", exit_code=-1, output=reason)
         with _RUN_LOCK:
             _RUN_HISTORY[run_id] = rec
+            _cap_run_history()
         _audit_log(rec, reason=reason)
         return reason
 
     rec = RunRecord(run_id=run_id, cmd=cmd_str, cwd=str(cwd_path), status="awaiting_confirmation")
     with _RUN_LOCK:
         _RUN_HISTORY[run_id] = rec
+        _cap_run_history()
     _audit_log(rec, reason="awaiting human confirmation")
 
     frozen_tokens = list(tokens)
@@ -1248,6 +1277,7 @@ def _spawn_run(run_id: str, cmd_str: str, tokens: list[str], cwd_path: Path, tim
         rec = RunRecord(run_id=run_id, cmd=cmd_str, cwd=str(cwd_path), status="refused", exit_code=-1, output=why)
         with _RUN_LOCK:
             _RUN_HISTORY[run_id] = rec
+            _cap_run_history()
         _audit_log(rec, reason=why)
         return why
     tokens = [exe] + tokens[1:]
@@ -1291,6 +1321,7 @@ def _spawn_run(run_id: str, cmd_str: str, tokens: list[str], cwd_path: Path, tim
     )
     with _RUN_LOCK:
         _RUN_HISTORY[run_id] = record
+        _cap_run_history()
 
     start_time = time.time()
     proc: subprocess.Popen | None = None
