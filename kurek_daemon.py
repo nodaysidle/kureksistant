@@ -28,8 +28,13 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-import numpy as np
+# PortAudio (sounddevice) dlopen()s a native library, while numpy starts an
+# OpenBLAS thread pool (one thread per core) at import. If the threads exist
+# first, glibc's loader lock races them and the process deadlocks at import --
+# measured 7/30 starts hung forever, which under Type=simple looks like a
+# healthy service that never binds. Import PortAudio before any thread pool.
 import sounddevice as sd
+import numpy as np
 
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))

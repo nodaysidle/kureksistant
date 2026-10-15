@@ -7,6 +7,9 @@ PartOf=graphical-session.target
 Type=simple
 WorkingDirectory=@KUREK_DIR@
 EnvironmentFile=-@KUREK_DIR@/.env
+# Defense in depth for the import-order fix in kurek_daemon.py: keep BLAS to one
+# thread so no thread pool can exist when PortAudio dlopen()s at import.
+Environment=OPENBLAS_NUM_THREADS=1
 ExecStart=@KUREK_DIR@/.venv/bin/python -u @KUREK_DIR@/kurek_daemon.py
 Restart=on-failure
 RestartSec=2
