@@ -305,6 +305,15 @@ def _path_candidates(tokens: list[str]) -> list[tuple[str, str]]:
 
 def _validate_path_args(binary: str, tokens: list[str], base_dir: Path, allowed_roots: list[Path]) -> str:
     """Refuse arguments (any allowlisted tool) that point at existing paths outside the roots or at secret files."""
+    if binary == "git":
+        # git can read secrets that are not on disk: 'HEAD:.env', 'log -p -- .env', '-- config/api_keys.json'.
+        for tok, value in _path_candidates(tokens[1:]):
+            spec = value.split(":", 1)[1] if ":" in value else value
+            if spec and is_secret_file(Path(spec)):
+                return (
+                    f"Refused: git argument '{tok}' targets a credential/secret file "
+                    "(.env*, api_keys.json, *.pem, id_* keys, .git/*)."
+                )
     for tok, value in _path_candidates(tokens):
         if not value:
             continue
@@ -666,6 +675,17 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any, confirm_ar
     env["CARGO_TERM_COLOR"] = "never"
     env["npm_config_yes"] = "false"
     env["DEBIAN_FRONTEND"] = "noninteractive"
+    # Neutralise repo-config hooks that make read-only git commands spawn programs.
+    for key in ("GIT_EXTERNAL_DIFF", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS", "GIT_CONFIG_PARAMETERS"):
+        env.pop(key, None)
+    git_overrides = [("core.fsmonitor", "false"), ("core.pager", "cat"), ("core.hooksPath", os.devnull),
+                     ("diff.external", ""), ("credential.helper", "")]
+    env["GIT_CONFIG_COUNT"] = str(len(git_overrides))
+    for i, (k, v) in enumerate(git_overrides):
+        env[f"GIT_CONFIG_KEY_{i}"] = k
+        env[f"GIT_CONFIG_VALUE_{i}"] = v
+    if Path(tokens[0]).name == "git" and len(tokens) > 1 and tokens[1].lower() in ("diff", "log", "show"):
+        tokens = tokens[:2] + ["--no-ext-diff", "--no-textconv"] + tokens[2:]
 
     record = RunRecord(
         run_id=run_id,

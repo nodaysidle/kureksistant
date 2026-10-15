@@ -305,3 +305,29 @@ def test_codebase_search_and_read_skip_extra_secret_names(secret_repo: Path, nam
     assert FAKE_DS not in res and name not in res
     assert codebase({"action": "read", "root": str(secret_repo), "path": name}).startswith("Refused")
     assert codebase({"action": "outline", "root": str(secret_repo), "path": name}).startswith("Refused")
+
+
+@pytest.mark.parametrize("rel", [".env", "api_keys.json", "innocent.txt", ".git/config", "config/api_keys.json"])
+@pytest.mark.parametrize("action", ["search", "find", "outline", "tree", "read"])
+def test_round3_secret_file_as_direct_target_refused(secret_repo: Path, rel: str, action: str) -> None:
+    res = codebase({"action": action, "root": str(secret_repo), "path": rel, "query": "KEY"})
+    assert res.startswith("Refused"), (action, rel, res)
+    assert FAKE_DS not in res and FAKE_GOOGLE not in res
+
+
+def test_round3_find_hides_secret_names(secret_repo: Path) -> None:
+    res = codebase({"action": "find", "root": str(secret_repo), "query": "*"})
+    for name in (".env", "api_keys.json", "server.pem", "id_ed25519"):
+        assert f"/{name}" not in res and f" {name}" not in res, (name, res)
+    assert "main.py" in res
+
+
+def test_round3_tree_does_not_descend_symlinked_outside_dir(test_workspace: dict[str, Path], tmp_path: Path) -> None:
+    outside = tmp_path / "outside_tree"
+    outside.mkdir()
+    (outside / "hidden_outside_name.txt").write_text("x", encoding="utf-8")
+    repo = test_workspace["py"]
+    (repo / "linkdir").symlink_to(outside, target_is_directory=True)
+    res = codebase({"action": "tree", "root": str(repo), "depth": 3})
+    assert "linkdir/" in res
+    assert "hidden_outside_name.txt" not in res

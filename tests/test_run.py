@@ -539,3 +539,29 @@ def test_round2_attached_and_equals_path_values_checked(run_workspace: Path, out
 def test_redaction_quoted_values_without_digits() -> None:
     out = _redact_secrets('{"api_key": "abcdefghijk"}  password: "hunter-two-x"')
     assert "abcdefghijk" not in out and "hunter-two-x" not in out
+
+
+@pytest.mark.parametrize("cmd", [
+    "git show HEAD:.env",
+    "git show HEAD:config/api_keys.json",
+    "git log -p -- .env",
+    "git diff HEAD~1 -- server.pem",
+    "git blame .env",
+])
+def test_round3_git_object_secret_paths_refused(run_workspace: Path, cmd: str) -> None:
+    res = _exec(run_workspace, cmd)
+    assert res.startswith("Refused:"), (cmd, res)
+
+
+def test_round3_git_repo_config_cannot_spawn_programs(run_workspace: Path) -> None:
+    marker = run_workspace.parent / "fsmonitor_ran"
+    hook = run_workspace.parent / "hook.sh"
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    hook.chmod(0o755)
+    subprocess.run(["git", "-C", str(run_workspace), "config", "core.fsmonitor", str(hook)], check=True)
+    subprocess.run(["git", "-C", str(run_workspace), "config", "diff.external", str(hook)], check=True)
+    (run_workspace / "hello.txt").write_text("changed\n", encoding="utf-8")
+    for cmd in ("git status", "git diff", "git log -p -n 1"):
+        res = _exec(run_workspace, cmd)
+        assert "Exit: 0" in res, (cmd, res)
+    assert not marker.exists()

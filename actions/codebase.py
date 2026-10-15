@@ -410,6 +410,9 @@ def _action_tree(target_dir: Path, depth: int = 2) -> str:
 
             if entry.is_dir():
                 lines.append(f"{prefix}{connector}{entry.name}/")
+                # Don't descend into symlinked directories that leave the project tree.
+                if entry.is_symlink() and not _is_path_allowed(entry, get_allowed_roots()):
+                    continue
                 _walk(entry, child_prefix, current_depth + 1)
             else:
                 lines.append(f"{prefix}{connector}{entry.name}")
@@ -510,6 +513,7 @@ def _action_find(target_dir: Path, query: str | None = None) -> str:
             "-g", "!.venv",
             "-g", "!__pycache__",
             "-g", pattern if ("*" in pattern or "?" in pattern) else f"*{pattern}*",
+            *[arg for g in _SECRET_SEARCH_GLOBS for arg in ("--iglob", f"!{g}")],
             str(target_dir),
         ]
         try:
@@ -537,6 +541,9 @@ def _action_find(target_dir: Path, query: str | None = None) -> str:
     if not matches:
         return f"No files found matching '{pattern}' in {target_dir.name}."
 
+    matches = [m for m in matches if not is_secret_file(m)]
+    if not matches:
+        return f"No files found matching '{pattern}' in {target_dir.name}."
     matches.sort(key=lambda p: str(p).lower())
     total = len(matches)
     shown = matches[:100]
@@ -851,6 +858,14 @@ def codebase(parameters: dict | None = None, **kwargs) -> str:
         depth = int(depth_arg) if depth_arg is not None else None
     except (ValueError, TypeError):
         depth = None
+
+    # Secret files (or anything under .git) are never a valid target for any action,
+    # including symlinks that resolve to one.
+    if is_secret_file(target) or (target_path is not None and is_secret_file(Path(os.path.expanduser(str(path_arg or ""))))):
+        return (
+            f"Refused: '{target.name}' is a credential/secret file (.env*, api_keys.json, *.pem, "
+            "id_* keys, .git/*) and cannot be accessed through codebase."
+        )
 
     if action == "search":
         return _action_search(target, query or "", depth=depth)
