@@ -78,6 +78,7 @@ REMOTE_BLOCKED_EXEC_TOOLS = frozenset({
     "desktop_control",
     "code_helper",
     "dev_agent",
+    "run",
 })
 
 

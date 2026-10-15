@@ -69,6 +69,8 @@
 | **Memory Tool** | [`actions/memory_tool.py`](actions/memory_tool.py) | `manage_memory(action='remember'|'recall')`. Bidirectionally syncs with Hermes `USER.md` & `MEMORY.md`. |
 | **External Memory** | `HERMES_PROFILE` / `HERMES_MEMORIES_DIR` / `~/.hermes/memories` | Optional Hermes `USER.md` + `MEMORY.md` continuity. |
 | **Knowledge Vault** | [`actions/vault_knowledge.py`](actions/vault_knowledge.py) | `vault_knowledge(action='list_projects'\|'read'\|'search'\|'add_inbox')`. Accesses nodaysidle-knowledge Obsidian vault notes, PRDs, roadmaps, and social media plans. |
+| **Codebase Tool** | [`actions/codebase.py`](actions/codebase.py) | `codebase(action='search'\|'tree'\|'read'\|'find'\|'outline'\|'index'\|'status')`. Ground-truth repo-aware code inspection across allowed project roots. |
+| **Run Tool** | [`actions/run.py`](actions/run.py) | `run(action='exec'\|'read'\|'list'\|'cancel')`. Sandboxed, auditable runner for read-only inspection and build/test commands. |
 | **Decision Client** | [`core/decision_client.py`](core/decision_client.py) | Optional OpenRouter Decision-1 `needs_screen` gate for auto screen-context; TypeSafe Jev remains the fallback. |
 | **Android Remote APK** | [`android/`](android/) | Native Android client with voice dictation, live SSE streaming tokens, and Bearer token auth (`/remote/prompt`) over Tailscale (opt-in `KUREK_REMOTE_BIND`). |
 
@@ -140,6 +142,8 @@ The daemon auto-discovers all tools in the [`actions/`](actions/) directory:
 - **`web_search`**: DuckDuckGo web search and real-time news retrieval.
 - **`manage_memory`**: Stores and retrieves personal knowledge, synced with Hermes.
 - **`vault_knowledge`**: Reads and searches the `nodaysidle-knowledge` Obsidian vault (projects, PRDs, social media plans, inbox).
+- **`codebase`**: Repo-aware search, tree inspection, line-range read, symbol outlines, index snapshots, and status.
+- **`run`**: Sandboxed command runner for read-only inspection and safe build/test commands.
 - **`weather_report`**, **`youtube_video`**, **`code_helper`**, **`file_controller`**, etc.
 
 ---
@@ -188,4 +192,4 @@ HTTP defaults to `127.0.0.1:8790`. For the Android app over Tailscale:
 2. Build/install the APK from [`android/`](android/) (`./gradlew :app:assembleDebug`, then `adb install -r app/build/outputs/apk/debug/app-debug.apk`).
 3. In the app Settings, enter the PC Tailscale IP/MagicDNS name, port `8790`, and the same token.
 
-The app uses GET `/status` and POST `/remote/prompt` (JSON + `Authorization: Bearer …`, SSE). Transport security is Tailscale/WireGuard (no daemon TLS). Remote prompts block `desktop_control` / `code_helper` / `dev_agent` unless `KUREK_REMOTE_ALLOW_EXEC=1`. Rotate the token if it was ever shared.
+The app uses GET `/status` and POST `/remote/prompt` (JSON + `Authorization: Bearer …`, SSE). Transport security is Tailscale/WireGuard (no daemon TLS). Remote prompts block `desktop_control` / `code_helper` / `dev_agent` / `run` unless `KUREK_REMOTE_ALLOW_EXEC=1`. Rotate the token if it was ever shared.
