@@ -78,10 +78,19 @@
         </LinearLayout>
 
         <ImageButton
-            android:id="@+id/btnSettings"
+            android:id="@+id/btnSpeaker"
             android:layout_width="38dp"
             android:layout_height="38dp"
             android:layout_marginStart="8dp"
+            android:background="?selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_volume_off"
+            android:contentDescription="Toggle Speak Out Loud" />
+
+        <ImageButton
+            android:id="@+id/btnSettings"
+            android:layout_width="38dp"
+            android:layout_height="38dp"
+            android:layout_marginStart="4dp"
             android:background="?selectableItemBackgroundBorderless"
             android:src="@drawable/ic_settings"
             android:contentDescription="Server Settings" />

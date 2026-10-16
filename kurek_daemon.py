@@ -12,6 +12,7 @@ Connects with:
   • xAI Grok TTS (Sol) via persistent mpv PipeWire sink
 """
 import asyncio
+import base64
 import hmac
 import io
 import ipaddress
@@ -59,7 +60,7 @@ from core.decision_client import (
 )
 from core.llm_client import query_deepseek, stream_deepseek_sentences
 from core.tts import create_tts_player
-from core.stt import DeepgramSTT, WhisperSTT
+from core.stt import DeepgramSTT, OpenRouterSTT, WhisperSTT
 from core.action_loader import discover_actions
 from core.hyprland_watcher import get_hyprland_watcher
 from core.mpv_sink import get_mpv_sink
@@ -71,8 +72,10 @@ from memory.memory_manager import load_memory, format_memory_for_prompt
 SAMPLE_RATE = 16000
 CHANNELS = 1
 SILENCE_THRESHOLD = 0.003  # Sensitive threshold for USB/desk mics
-SILENCE_DURATION = 1.2   # Seconds of silence after speech to auto-submit
-MAX_RECORD_SECONDS = 12.0 # Maximum listen window
+SILENCE_DURATION = float(os.environ.get("KUREK_SILENCE_DURATION", "2.2"))   # Seconds of silence after speech to auto-submit (was 1.2s)
+MAX_RECORD_SECONDS = float(os.environ.get("KUREK_MAX_RECORD_SECONDS", "30.0")) # Maximum listen window (was 12.0s)
+INITIAL_SILENCE_TIMEOUT = float(os.environ.get("KUREK_INITIAL_SILENCE_TIMEOUT", "6.0")) # Seconds before giving up if no speech detected (was 4.5s)
+
 
 # HTTP remote-access hardening
 HTTP_MAX_BODY_BYTES = 64 * 1024
@@ -362,11 +365,22 @@ class KurekEngine:
         self.history = self._load_history()
         print(f"[Kurek Memory] Loaded {len(self.history)} prior conversation turns.")
 
-        # STT Engine
+        # STT Engine: Prioritize OpenRouter multilingual Whisper Large v3 Turbo, fallback to Deepgram / local
+        stt_provider = (os.environ.get("KUREK_STT_PROVIDER") or "openrouter").strip().lower()
+        or_key = get_openrouter_api_key()
         dg_key = get_deepgram_key()
-        if dg_key:
+
+        if stt_provider == "openrouter" and or_key:
+            or_model = os.environ.get("OPENROUTER_STT_MODEL", "openai/whisper-large-v3-turbo")
+            print(f"[Kurek] Using OpenRouter STT ({or_model}) for multilingual speech recognition")
+            self.stt = OpenRouterSTT(api_key=or_key, model=or_model)
+        elif dg_key:
             print("[Kurek] Using Deepgram Nova-2 for ultra-fast STT")
             self.stt = DeepgramSTT(api_key=dg_key)
+        elif or_key:
+            or_model = os.environ.get("OPENROUTER_STT_MODEL", "openai/whisper-large-v3-turbo")
+            print(f"[Kurek] Using OpenRouter STT ({or_model}) for multilingual speech recognition")
+            self.stt = OpenRouterSTT(api_key=or_key, model=or_model)
         else:
             print("[Kurek] Using local faster-whisper (base.en) STT…")
             try:
@@ -638,6 +652,7 @@ class KurekEngine:
         callback=None,
         mute_speaker: bool = False,
         remote: bool = False,
+        stream_audio: bool = False,
     ):
         begin_query()
         self.set_state(KurekState.THINKING)
@@ -647,6 +662,7 @@ class KurekEngine:
                 callback=callback,
                 mute_speaker=mute_speaker,
                 remote=remote,
+                stream_audio=stream_audio,
             )
         except Exception as e:
             print(f"[Kurek] Unhandled query error: {e}", flush=True)
@@ -695,6 +711,7 @@ class KurekEngine:
         callback=None,
         mute_speaker: bool = False,
         remote: bool = False,
+        stream_audio: bool = False,
     ):
         # Pending-confirmation shortcut. A short reply that is ONLY a yes/no
         # word or phrase resolves the waiting confirmation; anything else
@@ -710,7 +727,15 @@ class KurekEngine:
                 reply = "Confirmed and executed." if verdict else "Action cancelled."
                 if callback:
                     try:
-                        callback({"type": "sentence", "sentence": reply})
+                        audio_b64 = None
+                        if stream_audio:
+                            audio_bytes = self.synthesize_speech_bytes(reply)
+                            if audio_bytes:
+                                audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+                        ev_payload = {"type": "sentence", "sentence": reply}
+                        if audio_b64:
+                            ev_payload["audio"] = audio_b64
+                        callback(ev_payload)
                         callback({"type": "done", "reply": reply})
                     except Exception:
                         pass
@@ -802,6 +827,7 @@ class KurekEngine:
             "• draft_to_clipboard: format dictated text into conventional commits, GitHub PR descriptions, issues, docstrings, or markdown notes and copies immediately to the Wayland system clipboard (wl-copy) for instant pasting with Ctrl+V. "
             "• workstation_radar: parallel health scan across repositories in ~/Projects and similar project roots. Use action='actionable' to report dirty working trees, untracked files, and unpushed commits ahead of upstream. "
             "• dream_tool: executes the Muse Memory reflection cycle. Synthesizes today's daily log into an atmospheric dream journal (~/dreams/YYYY-MM-DD.md) and updates standing guidance in ~/ALIGNMENT_SYNTHESIS.md. "
+            "• run: execute workstation shell commands, system management tasks, terminal commands, or build scripts directly on the system. Use action='exec' with cmd='...' to run any command. "
             "• vault_knowledge: access the nodaysidle-knowledge llm-wiki and Obsidian vault. Use action='list_projects' when asked about what projects exist in the nodaysidle portfolio, what is done, active projects, or releases. Use action='read' with note_name (e.g. 'x-promo-strategy', 'cascade-v3-overview', 'nodaysrammar-overview', 'kureksistant-overview', 'nodaysidle-sonora-overview') to read architecture specs, project PRDs, roadmaps, or social media promotion plans. Use action='search' with a query to look up anything across all notes in the vault. Use action='add_inbox' to capture quick ideas or tasks directly into the vault inbox. "
             "Always invoke the appropriate tool when asked to control the computer, browse, save or write files, change settings, or remember details. "
             "CONVERSATION & OPINIONS: "
@@ -872,6 +898,8 @@ class KurekEngine:
                         "content": ev.get("content") or "",
                         "tool_calls": tool_calls,
                     }
+                    if ev.get("reasoning_content"):
+                        asst_msg["reasoning_content"] = ev["reasoning_content"]
                     messages.append(asst_msg)
 
                     last_tool_output = ""
@@ -919,7 +947,15 @@ class KurekEngine:
                         streamed_sentences.append(raw_sentence)
                         if callback:
                             try:
-                                callback({"type": "sentence", "sentence": raw_sentence})
+                                audio_b64 = None
+                                if stream_audio:
+                                    audio_bytes = self.synthesize_speech_bytes(clean_sentence)
+                                    if audio_bytes:
+                                        audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+                                ev_payload = {"type": "sentence", "sentence": raw_sentence}
+                                if audio_b64:
+                                    ev_payload["audio"] = audio_b64
+                                callback(ev_payload)
                             except Exception:
                                 pass
 
@@ -951,11 +987,38 @@ class KurekEngine:
                     print(f"[Kurek] TTS error: {e}")
             return
 
+        if not reply_text and sentence_count == 0 and last_tool_output:
+            # DeepSeek ran tools but did not emit spoken response tokens. Request a 1-sentence synthesis.
+            try:
+                summary_msgs = list(messages)
+                summary_msgs.append({
+                    "role": "user",
+                    "content": "In 1 or 2 concise, spoken sentences, directly tell me what was done or found.",
+                })
+                for ev in stream_deepseek_sentences(messages=summary_msgs, tools=None, model="deepseek-flash"):
+                    if ev.get("type") == "sentence":
+                        raw_sentence = ev.get("sentence", "")
+                        clean_sentence = self.sanitize_text_for_speech(raw_sentence)
+                        if clean_sentence and not self._cancel_requested:
+                            if not mute_speaker:
+                                if sentence_count == 0:
+                                    self.set_state(KurekState.SPEAKING)
+                                self.tts.speak_chunk(clean_sentence, append=(sentence_count > 0))
+                            sentence_count += 1
+                            streamed_sentences.append(raw_sentence)
+                    elif ev.get("type") == "done":
+                        reply_text = ev.get("full_content", "") or " ".join(streamed_sentences)
+                        break
+            except Exception as e:
+                print(f"[Kurek] Summary synthesis notice: {e}")
+
         if not reply_text and last_tool_output:
-            if "Contents of " in last_tool_output or ("\n" in last_tool_output and len(last_tool_output) > 120):
-                reply_text = "I executed the requested action on your system."
+            if "error" in last_tool_output.lower():
+                reply_text = f"Notice: {last_tool_output.strip()[:140]}"
+            elif len(last_tool_output) <= 120 and "\n" not in last_tool_output:
+                reply_text = last_tool_output.strip()
             else:
-                reply_text = last_tool_output
+                reply_text = "Done."
 
         # Strip DeepSeek safety tags, thinking wrappers, and DSML markup if present
         reply_text = re.sub(r"<ds_safety>.*?</ds_safety>", "", reply_text, flags=re.DOTALL)
@@ -994,11 +1057,42 @@ class KurekEngine:
 
         if callback:
             try:
-                callback({"type": "done", "reply": reply_text})
+                done_payload = {"type": "done", "reply": reply_text}
+                if stream_audio and sentence_count == 0 and reply_text:
+                    clean_reply = self.sanitize_text_for_speech(reply_text)
+                    audio_bytes = self.synthesize_speech_bytes(clean_reply)
+                    if audio_bytes:
+                        done_payload["audio"] = base64.b64encode(audio_bytes).decode("utf-8")
+                callback(done_payload)
             except Exception:
                 pass
 
         return reply_text
+
+    def synthesize_speech_bytes(self, text: str) -> bytes | None:
+        """Synthesize audio bytes using xAI Grok Cloud TTS (voice: sal)."""
+        xai_key = get_xai_key()
+        if not xai_key or not text or not text.strip():
+            return None
+        import requests
+        try:
+            payload = {
+                "text": text.strip(),
+                "voice_id": "sal",
+                "language": "en",
+            }
+            headers = {
+                "Authorization": f"Bearer {xai_key}",
+                "Content-Type": "application/json",
+            }
+            resp = requests.post("https://api.x.ai/v1/tts", headers=headers, json=payload, timeout=12)
+            if resp.status_code == 200:
+                return resp.content
+            else:
+                print(f"[xAI TTS Remote] HTTP {resp.status_code}: {resp.text}")
+        except Exception as e:
+            print(f"[xAI TTS Remote] Error: {e}")
+        return None
 
     @staticmethod
     def sanitize_text_for_speech(text: str) -> str:
@@ -1377,6 +1471,7 @@ class KurekHTTPHandler(BaseHTTPRequestHandler):
             if data is None:
                 return
             prompt_text = data.get("prompt", "")
+            stream_audio = bool(data.get("stream_audio", False))
             speak_local = (
                 data.get("speak_local") is True
                 or os.environ.get("KUREK_REMOTE_LOCAL_TTS") == "1"
@@ -1410,6 +1505,7 @@ class KurekHTTPHandler(BaseHTTPRequestHandler):
                 callback=_sse_callback,
                 mute_speaker=mute_speaker,
                 remote=is_remote,
+                stream_audio=stream_audio,
             )
             return
 
@@ -1702,17 +1798,17 @@ if __name__ == "__main__":
             time.sleep(0.1)
             if engine.is_recording:
                 now = time.time()
-                # 1. If speech was detected and followed by silence (1.2s) -> auto submit
+                # 1. If speech was detected and followed by silence -> auto submit
                 if engine.has_speech and (now - engine.last_sound_time > SILENCE_DURATION):
-                    print(f"[Kurek] Silence detected after speech ({now - engine.last_sound_time:.2f}s) — auto-submitting…", flush=True)
+                    print(f"[Kurek] Silence detected after speech ({now - engine.last_sound_time:.2f}s > {SILENCE_DURATION}s) — auto-submitting…", flush=True)
                     engine.stop_listening_and_process()
-                # 2. If no speech detected at all within 4.5s -> auto stop
-                elif not engine.has_speech and (now - engine.record_start_time > 4.5):
-                    print("[Kurek] No speech detected within 4.5s — auto-stopping listening…", flush=True)
+                # 2. If no speech detected at all within INITIAL_SILENCE_TIMEOUT -> auto stop
+                elif not engine.has_speech and (now - engine.record_start_time > INITIAL_SILENCE_TIMEOUT):
+                    print(f"[Kurek] No speech detected within {INITIAL_SILENCE_TIMEOUT}s — auto-stopping listening…", flush=True)
                     engine.stop_listening_and_process()
                 # 3. Safety cap: stop after MAX_RECORD_SECONDS
                 elif engine.record_start_time > 0 and (now - engine.record_start_time > MAX_RECORD_SECONDS):
-                    print("[Kurek] Max recording duration reached — auto-submitting…", flush=True)
+                    print(f"[Kurek] Max recording duration reached ({MAX_RECORD_SECONDS}s) — auto-submitting…", flush=True)
                     engine.stop_listening_and_process()
 
     threading.Thread(target=silence_watchdog, daemon=True).start()

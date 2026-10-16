@@ -65,7 +65,8 @@
 | **macOS Menu Bar UI** | [`menubar/KurekBar.swift`](menubar/KurekBar.swift) | Native Swift 6 status item for macOS. Polls `/status` at 10 Hz and monitors global `Fn` modifier flags. |
 | **LLM Client** | [`core/llm_client.py`](core/llm_client.py) | Direct `api.deepseek.com` client with sentence-buffered streaming pipeline (`stream_deepseek_sentences`). |
 | **TTS Engine** | [`core/tts.py`](core/tts.py) | Implements `XAITTSEngine` (Grok Cloud TTS, voice: **Sol** / `sal`) with chunk streaming into `MpvPipeWireSink`. |
-| **STT Engine** | [`core/stt.py`](core/stt.py) | Implements `DeepgramSTT` (Nova-2) and `WhisperSTT` (`faster-whisper`) with DC offset stripping and peak normalization. |
+| **STT Engine** | [`core/stt.py`](core/stt.py) | Implements `OpenRouterSTT` (multilingual `openai/whisper-large-v3-turbo`), `DeepgramSTT` (Nova-2), and `WhisperSTT` (`faster-whisper`) with DC offset stripping and peak normalization. |
+
 | **Memory Tool** | [`actions/memory_tool.py`](actions/memory_tool.py) | `manage_memory(action='remember'|'recall')`. Bidirectionally syncs with Hermes `USER.md` & `MEMORY.md`. |
 | **External Memory** | `HERMES_PROFILE` / `HERMES_MEMORIES_DIR` / `~/.hermes/memories` | Optional Hermes `USER.md` + `MEMORY.md` continuity. |
 | **Knowledge Vault** | [`actions/vault_knowledge.py`](actions/vault_knowledge.py) | `vault_knowledge(action='list_projects'\|'read'\|'search'\|'add_inbox')`. Accesses nodaysidle-knowledge Obsidian vault notes, PRDs, roadmaps, and social media plans. |

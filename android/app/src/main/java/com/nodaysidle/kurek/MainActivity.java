@@ -10,6 +10,7 @@ import android.os.Vibrator;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
+import android.speech.tts.TextToSpeech;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
@@ -21,6 +22,7 @@ import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.widget.SwitchCompat;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
@@ -37,18 +39,24 @@ public class MainActivity extends AppCompatActivity {
     private static final String KEY_HOST = "kurek_host";
     private static final String KEY_PORT = "kurek_port";
     private static final String KEY_TOKEN = "kurek_token";
+    private static final String KEY_SPEAK_OUT_LOUD = "kurek_speak_out_loud";
 
     private RecyclerView recyclerChat;
     private ChatAdapter chatAdapter;
     private List<ChatMessage> messageList;
     private EditText editPrompt;
-    private ImageButton btnSend, btnMic, btnSettings;
+    private ImageButton btnSend, btnMic, btnSettings, btnSpeaker;
     private TextView txtStatus, txtHostLabel;
     private View statusDot;
     private Vibrator vibrator;
 
     private SpeechRecognizer speechRecognizer;
     private boolean isListeningSpeech = false;
+
+    private TextToSpeech tts;
+    private boolean isTtsInitialized = false;
+    private boolean speakOutLoud = false;
+    private AudioQueuePlayer audioPlayer;
 
     private final KurekClient client = new KurekClient();
     private String host = "";
@@ -61,12 +69,14 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+        audioPlayer = new AudioQueuePlayer(this);
         loadPreferences();
 
         initViews();
         setupChatRecycler();
         setupListeners();
         setupSpeechRecognizer();
+        setupTts();
 
         refreshConnectionUi();
     }
@@ -76,17 +86,28 @@ public class MainActivity extends AppCompatActivity {
         host = sp.getString(KEY_HOST, "");
         port = sp.getInt(KEY_PORT, 8790);
         token = sp.getString(KEY_TOKEN, "");
+        speakOutLoud = sp.getBoolean(KEY_SPEAK_OUT_LOUD, false);
         if (host == null) host = "";
         if (token == null) token = "";
     }
 
-    private void savePreferences(String h, int p, String t) {
+    private void savePreferences(String h, int p, String t, boolean speak) {
         SharedPreferences sp = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-        sp.edit().putString(KEY_HOST, h).putInt(KEY_PORT, p).putString(KEY_TOKEN, t).apply();
+        sp.edit().putString(KEY_HOST, h)
+                .putInt(KEY_PORT, p)
+                .putString(KEY_TOKEN, t)
+                .putBoolean(KEY_SPEAK_OUT_LOUD, speak)
+                .apply();
         this.host = h;
         this.port = p;
         this.token = t;
+        this.speakOutLoud = speak;
+        updateSpeakerButtonUi();
         refreshConnectionUi();
+    }
+
+    private void savePreferences(String h, int p, String t) {
+        savePreferences(h, p, t, this.speakOutLoud);
     }
 
     private boolean isConfigured() {
@@ -110,9 +131,12 @@ public class MainActivity extends AppCompatActivity {
         btnSend = findViewById(R.id.btnSend);
         btnMic = findViewById(R.id.btnMic);
         btnSettings = findViewById(R.id.btnSettings);
+        btnSpeaker = findViewById(R.id.btnSpeaker);
         txtStatus = findViewById(R.id.txtStatus);
         txtHostLabel = findViewById(R.id.txtHostLabel);
         statusDot = findViewById(R.id.statusDot);
+
+        updateSpeakerButtonUi();
 
         findViewById(R.id.chipGrokbot).setOnClickListener(v -> dispatchUserPrompt("Open Grokbot on my workstation"));
         findViewById(R.id.chipSysStatus).setOnClickListener(v -> dispatchUserPrompt("Check workstation system resources and CPU load"));
@@ -161,7 +185,58 @@ public class MainActivity extends AppCompatActivity {
             toggleVoiceRecording();
         });
 
+        btnSpeaker.setOnClickListener(v -> toggleSpeakOutLoud());
         btnSettings.setOnClickListener(v -> showSettingsDialog());
+    }
+
+    private void setupTts() {
+        tts = new TextToSpeech(this, status -> {
+            if (status == TextToSpeech.SUCCESS) {
+                isTtsInitialized = true;
+                try {
+                    int res = tts.setLanguage(Locale.getDefault());
+                    if (res == TextToSpeech.LANG_MISSING_DATA || res == TextToSpeech.LANG_NOT_SUPPORTED) {
+                        tts.setLanguage(Locale.US);
+                    }
+                } catch (Exception ignored) {}
+            }
+        });
+    }
+
+    private void toggleSpeakOutLoud() {
+        speakOutLoud = !speakOutLoud;
+        SharedPreferences sp = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        sp.edit().putBoolean(KEY_SPEAK_OUT_LOUD, speakOutLoud).apply();
+        updateSpeakerButtonUi();
+        triggerHaptic(40);
+        if (!speakOutLoud) {
+            stopAudio();
+            Toast.makeText(this, "xAI Voice: OFF", Toast.LENGTH_SHORT).show();
+        } else {
+            Toast.makeText(this, "xAI Voice (Sal): ON", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void updateSpeakerButtonUi() {
+        if (btnSpeaker != null) {
+            btnSpeaker.setImageResource(speakOutLoud ? R.drawable.ic_volume_up : R.drawable.ic_volume_off);
+        }
+    }
+
+    private void speakText(String text) {
+        if (!speakOutLoud || !isTtsInitialized || tts == null || text == null) return;
+        String clean = text.replaceAll("[*#`_~]", "").trim();
+        if (clean.isEmpty()) return;
+        tts.speak(clean, TextToSpeech.QUEUE_ADD, null, "kurek_utt_" + System.currentTimeMillis());
+    }
+
+    private void stopAudio() {
+        if (audioPlayer != null) {
+            audioPlayer.stop();
+        }
+        if (tts != null) {
+            tts.stop();
+        }
     }
 
     private void setupSpeechRecognizer() {
@@ -195,6 +270,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void toggleVoiceRecording() {
+        stopAudio();
         if (speechRecognizer == null) return;
         if (isListeningSpeech) {
             speechRecognizer.stopListening();
@@ -221,6 +297,7 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
+        stopAudio();
         triggerHaptic(40);
         ChatMessage userMsg = new ChatMessage(ChatMessage.TYPE_USER, prompt, getTime());
         messageList.add(userMsg);
@@ -237,8 +314,10 @@ public class MainActivity extends AppCompatActivity {
         setStatusState("THINKING", getColor(R.color.status_amber));
 
         final StringBuilder streamedContent = new StringBuilder();
+        final int[] streamedSentencesCount = new int[]{0};
+        final boolean[] receivedAudioChunk = new boolean[]{false};
 
-        client.sendPrompt(host, port, token, prompt, new KurekClient.Callback() {
+        client.sendPrompt(host, port, token, prompt, speakOutLoud, new KurekClient.Callback() {
             @Override
             public void onToolCalled(String toolDescription) {
                 triggerHaptic(20);
@@ -247,23 +326,42 @@ public class MainActivity extends AppCompatActivity {
             }
 
             @Override
+            public void onAudio(byte[] audioBytes) {
+                receivedAudioChunk[0] = true;
+                if (speakOutLoud && audioPlayer != null) {
+                    audioPlayer.enqueue(audioBytes);
+                }
+            }
+
+            @Override
             public void onSentence(String sentence) {
+                streamedSentencesCount[0]++;
                 if (streamedContent.length() > 0) streamedContent.append(" ");
                 streamedContent.append(sentence);
                 kurekMsg.setText(streamedContent.toString());
                 kurekMsg.setPending(false);
                 chatAdapter.notifyItemChanged(kurekPos);
                 recyclerChat.smoothScrollToPosition(kurekPos);
+
+                // Fallback to local TTS only if server didn't stream xAI audio chunks
+                if (speakOutLoud && !receivedAudioChunk[0]) {
+                    speakText(sentence);
+                }
             }
 
             @Override
             public void onDone(String fullReply) {
                 triggerHaptic(50);
-                kurekMsg.setText(fullReply.isEmpty() ? (streamedContent.length() > 0 ? streamedContent.toString() : "Action completed.") : fullReply);
+                String finalText = fullReply.isEmpty() ? (streamedContent.length() > 0 ? streamedContent.toString() : "Action completed.") : fullReply;
+                kurekMsg.setText(finalText);
                 kurekMsg.setPending(false);
                 chatAdapter.notifyItemChanged(kurekPos);
                 recyclerChat.smoothScrollToPosition(kurekPos);
                 setStatusState("ONLINE", getColor(R.color.status_green));
+
+                if (speakOutLoud && streamedSentencesCount[0] == 0 && !receivedAudioChunk[0]) {
+                    speakText(finalText);
+                }
             }
 
             @Override
@@ -272,6 +370,9 @@ public class MainActivity extends AppCompatActivity {
                 kurekMsg.setPending(false);
                 chatAdapter.notifyItemChanged(kurekPos);
                 setStatusState("OFFLINE", getColor(R.color.text_muted));
+                if (speakOutLoud && !receivedAudioChunk[0]) {
+                    speakText("Error: " + error);
+                }
             }
         });
     }
@@ -310,11 +411,15 @@ public class MainActivity extends AppCompatActivity {
         EditText eHost = dialogView.findViewById(R.id.editHost);
         EditText ePort = dialogView.findViewById(R.id.editPort);
         EditText eToken = dialogView.findViewById(R.id.editToken);
+        SwitchCompat switchSpeak = dialogView.findViewById(R.id.switchSpeakOutLoud);
         Button btnSave = dialogView.findViewById(R.id.btnSaveSettings);
 
         eHost.setText(host);
         ePort.setText(String.valueOf(port));
         eToken.setText(token);
+        if (switchSpeak != null) {
+            switchSpeak.setChecked(speakOutLoud);
+        }
 
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setView(dialogView)
@@ -325,12 +430,13 @@ public class MainActivity extends AppCompatActivity {
             int newPort = 8790;
             try { newPort = Integer.parseInt(ePort.getText().toString().trim()); } catch (Exception ignored) {}
             String newToken = eToken.getText().toString().trim();
+            boolean newSpeak = switchSpeak != null && switchSpeak.isChecked();
 
             if (newHost.isEmpty() || newToken.isEmpty()) {
                 Toast.makeText(this, "Host and token are required", Toast.LENGTH_LONG).show();
                 return;
             }
-            savePreferences(newHost, newPort, newToken);
+            savePreferences(newHost, newPort, newToken, newSpeak);
             dialog.dismiss();
             Toast.makeText(this, "Settings saved!", Toast.LENGTH_SHORT).show();
         });
@@ -352,8 +458,15 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        if (audioPlayer != null) {
+            audioPlayer.stop();
+        }
         if (speechRecognizer != null) {
             speechRecognizer.destroy();
+        }
+        if (tts != null) {
+            tts.stop();
+            tts.shutdown();
         }
         super.onDestroy();
     }

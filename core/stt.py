@@ -162,3 +162,83 @@ class DeepgramSTT:
             print(f"[Deepgram] Error: {e}")
         return ""
 
+
+class OpenRouterSTT:
+    """Cloud STT via OpenRouter audio transcriptions (default: openai/whisper-large-v3-turbo)."""
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str = "openai/whisper-large-v3-turbo",
+        language: str | None = None,
+    ):
+        import os
+        from memory.config_manager import get_openrouter_api_key
+        self.api_key = api_key or get_openrouter_api_key() or os.environ.get("OPENROUTER_API_KEY", "")
+        self.model = model
+        self.language = language
+
+    def transcribe(self, audio_data, sample_rate: int = 16000) -> str:
+        """Transcribe PCM int16 or WAV bytes via OpenRouter /api/v1/audio/transcriptions."""
+        import base64
+        import io
+        import wave
+        import requests
+
+        if not self.api_key:
+            print("[OpenRouter STT] ⚠️ OPENROUTER_API_KEY is not set.")
+            return ""
+
+        # Convert numpy or raw bytes to WAV in memory
+        if isinstance(audio_data, np.ndarray):
+            clean_audio = audio_data - np.mean(audio_data)
+            peak = float(np.max(np.abs(clean_audio)))
+            if peak > 1e-4:
+                clean_audio = (clean_audio / peak) * 0.95
+            else:
+                clean_audio = audio_data
+
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(sample_rate)
+                if clean_audio.dtype in (np.float32, np.float64):
+                    scaled = (np.clip(clean_audio, -1.0, 1.0) * 32767).astype(np.int16)
+                    wf.writeframes(scaled.tobytes())
+                else:
+                    wf.writeframes(clean_audio.tobytes())
+            raw_bytes = buf.getvalue()
+        elif isinstance(audio_data, bytes):
+            raw_bytes = audio_data
+        else:
+            return ""
+
+        b64_audio = base64.b64encode(raw_bytes).decode("utf-8")
+        url = "https://openrouter.ai/api/v1/audio/transcriptions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self.model,
+            "input_audio": {
+                "data": b64_audio,
+                "format": "wav",
+            },
+        }
+        if self.language:
+            payload["language"] = self.language
+
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=15)
+            if resp.status_code == 200:
+                res = resp.json()
+                return res.get("text", "").strip()
+            else:
+                print(f"[OpenRouter STT] HTTP {resp.status_code}: {resp.text}")
+        except Exception as e:
+            print(f"[OpenRouter STT] Error: {e}")
+        return ""
+
+

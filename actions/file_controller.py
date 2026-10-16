@@ -164,6 +164,11 @@ def _resolve_path(raw: str) -> Path:
     if lower in shortcuts:
         return shortcuts[lower]
 
+    for name, base_path in shortcuts.items():
+        if lower.startswith(f"{name}/") or lower.startswith(f"{name}\\"):
+            sub = raw[len(name)+1:]
+            return base_path / sub
+
     # Remap foreign absolute home-style prefixes onto the current user's home
     if _OS != "Darwin" and raw.startswith("/Users/"):
         parts = raw.split("/", 3)
@@ -688,38 +693,38 @@ def file_controller(
         player.write_log(f"[file] {action} {name or path}")
 
     try:
-        if action == "list":
+        if action in ("list", "ls", "dir"):
             return list_files(path)
 
-        elif action == "create_file":
+        elif action in ("create_file", "create", "touch", "new_file", "make_file"):
             return create_file(path, name=name, content=params.get("content", ""))
 
-        elif action == "create_folder":
+        elif action in ("create_folder", "mkdir", "make_folder", "folder"):
             return create_folder(path, name=name)
 
-        elif action == "delete":
+        elif action in ("delete", "remove", "rm", "unlink"):
             return delete_file(path, name=name, confirmed=bool(params.get("confirmed", False)))
 
-        elif action == "move":
+        elif action in ("move", "mv"):
             return move_file(path, name=name, destination=params.get("destination", ""))
 
-        elif action == "copy":
+        elif action in ("copy", "cp"):
             return copy_file(path, name=name, destination=params.get("destination", ""))
 
-        elif action == "rename":
+        elif action in ("rename", "mv_name"):
             return rename_file(path, name=name, new_name=params.get("new_name", ""))
 
-        elif action == "read":
+        elif action in ("read", "cat", "view"):
             return read_file(path, name=name)
 
-        elif action == "write":
+        elif action in ("write", "write_file", "save", "save_file"):
             return write_file(
                 path, name=name,
                 content=params.get("content", ""),
                 append=params.get("append", False)
             )
 
-        elif action == "find":
+        elif action in ("find", "search"):
             return find_files(
                 name=name or params.get("name", ""),
                 extension=params.get("extension", ""),

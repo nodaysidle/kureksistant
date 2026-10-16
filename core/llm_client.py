@@ -870,6 +870,7 @@ def stream_deepseek(
         return
 
     full_text = ""
+    full_reasoning = ""
     tool_calls_map: dict[int, dict] = {}
     has_tool_calls = False
 
@@ -893,6 +894,11 @@ def stream_deepseek(
             if not choices:
                 continue
             delta = choices[0].get("delta", {})
+
+            # Accumulate DeepSeek reasoning tokens if present
+            reasoning = delta.get("reasoning_content", "")
+            if reasoning:
+                full_reasoning += reasoning
 
             # Check for tool call stream chunks
             if delta.get("tool_calls"):
@@ -927,6 +933,7 @@ def stream_deepseek(
             "type": "tool_calls",
             "tool_calls": compiled_calls,
             "content": full_text.strip(),
+            "reasoning_content": full_reasoning.strip() if full_reasoning else None,
         }
     else:
         # Check for DSML markup if formatted in content
@@ -936,9 +943,14 @@ def stream_deepseek(
                 "type": "tool_calls",
                 "tool_calls": dsml_calls,
                 "content": clean_text,
+                "reasoning_content": full_reasoning.strip() if full_reasoning else None,
             }
         else:
-            yield {"type": "done", "full_content": full_text.strip()}
+            yield {
+                "type": "done",
+                "full_content": full_text.strip(),
+                "reasoning_content": full_reasoning.strip() if full_reasoning else None,
+            }
 
 
 def stream_deepseek_sentences(

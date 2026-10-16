@@ -64,4 +64,5 @@ screenshots/
 
 # Local workspace & scratch
 workspace/
+.commandcode/
 
