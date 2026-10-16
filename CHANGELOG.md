@@ -11,6 +11,28 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 - **Correction to the 0.2.0 entry below:** it lists "~0.8ms median trigger, 24 tools" as measured figures. The bundled tool count is **25**: 25 `actions/*.py` files define a `TOOL` dict, and `core/action_loader.discover_actions()` loads 25 at runtime. The trigger timing is an informational, machine-dependent benchmark of `bin/kurek-trigger` against a mock UDS daemon (`scripts/bench_trigger.py`), not end-to-end latency, so it is no longer quoted as a number. The 0.2.0 entry is left unchanged as a historical record.
 - AGENTS.md: removed the "~0.8ms median" figure and describes the benchmark as above.
 
+## [0.2.2] — Unreleased
+
+### Added
+- **OpenRouter speech-to-text by default:** new `OpenRouterSTT` in `core/stt.py` using `openai/whisper-large-v3-turbo` (override with `OPENROUTER_STT_MODEL`). `KUREK_STT_PROVIDER` defaults to `openrouter`; without an OpenRouter key the daemon falls back to Deepgram Nova-2, then local faster-whisper.
+- **Spoken summaries and fallback replies:** when tools run but the model emits no spoken text, the daemon asks DeepSeek-Flash for a 1–2 sentence spoken summary. Final fallbacks: an error notice, the short tool output itself, or "Done."
+- **Android speak-aloud option:** Kurek Remote has a speaker toggle (persisted setting) and an `AudioQueuePlayer`; the daemon can stream synthesized TTS audio (base64) with each sentence to the phone.
+- **File tool aliases:** `file_controller` accepts shell-style action aliases (`ls`, `mkdir`, `rm`, `mv`, `cp`, `cat`, `touch`, `save`, `search`, …) and shortcut sub-paths such as `desktop/notes.txt`.
+- **27 tool modules:** new `codebase` (read-only repo inspection) and `run` (sandboxed, audited command runner) tools, up from 25 in 0.2.1.
+
+### Changed
+- **Longer listen window:** 2.2 s of silence to auto-submit (was 1.2 s), 30 s maximum recording (was 12 s), 6 s initial-silence timeout (was 4.5 s). Tunable via `KUREK_SILENCE_DURATION`, `KUREK_MAX_RECORD_SECONDS`, `KUREK_INITIAL_SILENCE_TIMEOUT`.
+
+### Fixed
+- **mpv:** reap the audio sink instead of leaking an idle mpv per run.
+- **PortAudio:** import PortAudio before numpy to avoid a daemon startup deadlock.
+
+### Security
+- **Gated unrestricted shell:** the `run` tool's unrestricted shell mode is OFF unless `KUREK_REMOTE_ALLOW_EXEC=1`; `KUREK_UNRESTRICTED_SHELL` / `KUREK_ALLOW_SHELL` alone no longer enable it. A loud warning is logged when enabled, and the tool description and prompts only mention arbitrary execution when it is on.
+
+### Removed
+- **tkinter dialog:** `actions/youtube_video.py` no longer opens a tkinter URL dialog (Kurek is headless); it replies asking for the URL instead.
+
 ## [0.2.1] — 2026-10-13
 
 Targeted architectural and stability refactor for Arch Linux / Omarchy Quattro (Hyprland, Ghostty, Herdr, Fish) and Android Remote client over Tailscale.
