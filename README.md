@@ -8,6 +8,8 @@
   <strong>A voice assistant daemon for an Omarchy / Hyprland Linux desktop, with an optional phone remote over Tailscale.</strong>
 </p>
 
+<p align="center"><strong>Headless Linux daemon, summoned via middle-click. No GUI on purpose.</strong></p>
+
 <p align="center">
   <a href="https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.1"><img src="https://img.shields.io/badge/Release-v0.2.1-blue.svg?style=flat-square" alt="Release v0.2.1"></a>
   <img src="https://img.shields.io/badge/Desktop-Arch%20%2F%20Omarchy%20%2F%20Hyprland-1793D1?style=flat-square&logo=arch-linux&logoColor=white" alt="Arch / Omarchy / Hyprland">
