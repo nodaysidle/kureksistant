@@ -79,7 +79,7 @@ def _make_engine(**overrides):
 
     engine.toggle.side_effect = _toggle
 
-    def _handle(user_prompt, callback=None, mute_speaker=False, remote=False):
+    def _handle(user_prompt, callback=None, mute_speaker=False, remote=False, stream_audio=False):
         if callback:
             callback({"type": "sentence", "sentence": "Hello from Kurek."})
             callback({"type": "done", "reply": "Hello from Kurek."})
