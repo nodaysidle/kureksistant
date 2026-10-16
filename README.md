@@ -239,6 +239,16 @@ Full details and how to report issues: **[SECURITY.md](SECURITY.md)**.
 
 ---
 
+## ⚠️ Unrestricted shell (`KUREK_REMOTE_ALLOW_EXEC`) — off by default
+
+The `run` tool is a sandboxed, allowlisted, root-scoped command runner by default. An **unrestricted shell mode** exists that runs *any* command as your user, bypassing the allowlist and root scoping. It is **OFF** unless you explicitly set:
+
+```bash
+KUREK_REMOTE_ALLOW_EXEC=1
+```
+
+The older `KUREK_UNRESTRICTED_SHELL` / `KUREK_ALLOW_SHELL` variables no longer enable it on their own. When enabled, the daemon logs a loud warning and the tool description and system prompt say so. Combined with the phone remote, anyone holding your remote token could run arbitrary commands on your desktop. Only enable it on a machine and tailnet you fully trust.
+
 ## ⚠️ Known limits
 
 - **Not offline:** reasoning (DeepSeek) and voice (xAI) need cloud API keys and internet. Only speech-to-text can fall back to local `faster-whisper`.

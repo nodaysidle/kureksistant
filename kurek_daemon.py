@@ -77,6 +77,26 @@ MAX_RECORD_SECONDS = float(os.environ.get("KUREK_MAX_RECORD_SECONDS", "30.0")) #
 INITIAL_SILENCE_TIMEOUT = float(os.environ.get("KUREK_INITIAL_SILENCE_TIMEOUT", "6.0")) # Seconds before giving up if no speech detected (was 4.5s)
 
 
+def _run_tool_prompt_line() -> str:
+    """System-prompt line for the `run` tool. Never advertises arbitrary
+    command execution unless KUREK_REMOTE_ALLOW_EXEC=1 is set."""
+    try:
+        from actions.run import is_unrestricted_shell
+        unrestricted = is_unrestricted_shell()
+    except Exception:
+        unrestricted = False
+    if unrestricted:
+        return (
+            "• run: ⚠️ UNRESTRICTED SHELL ENABLED (KUREK_REMOTE_ALLOW_EXEC=1). Can execute arbitrary shell "
+            "commands as the user via action='exec' with cmd='...'. Prefer read-only commands and confirm "
+            "before anything destructive. "
+        )
+    return (
+        "• run: sandboxed, auditable runner for allowlisted read-only inspection and build/test commands "
+        "(action='exec' with cmd='...'). Destructive commands are blocked. "
+    )
+
+
 # HTTP remote-access hardening
 HTTP_MAX_BODY_BYTES = 64 * 1024
 REMOTE_TOKEN_MIN_LEN = 32
@@ -827,7 +847,7 @@ class KurekEngine:
             "• draft_to_clipboard: format dictated text into conventional commits, GitHub PR descriptions, issues, docstrings, or markdown notes and copies immediately to the Wayland system clipboard (wl-copy) for instant pasting with Ctrl+V. "
             "• workstation_radar: parallel health scan across repositories in ~/Projects and similar project roots. Use action='actionable' to report dirty working trees, untracked files, and unpushed commits ahead of upstream. "
             "• dream_tool: executes the Muse Memory reflection cycle. Synthesizes today's daily log into an atmospheric dream journal (~/dreams/YYYY-MM-DD.md) and updates standing guidance in ~/ALIGNMENT_SYNTHESIS.md. "
-            "• run: execute workstation shell commands, system management tasks, terminal commands, or build scripts directly on the system. Use action='exec' with cmd='...' to run any command. "
+            + _run_tool_prompt_line() +
             "• vault_knowledge: access the nodaysidle-knowledge llm-wiki and Obsidian vault. Use action='list_projects' when asked about what projects exist in the nodaysidle portfolio, what is done, active projects, or releases. Use action='read' with note_name (e.g. 'x-promo-strategy', 'cascade-v3-overview', 'nodaysrammar-overview', 'kureksistant-overview', 'nodaysidle-sonora-overview') to read architecture specs, project PRDs, roadmaps, or social media promotion plans. Use action='search' with a query to look up anything across all notes in the vault. Use action='add_inbox' to capture quick ideas or tasks directly into the vault inbox. "
             "Always invoke the appropriate tool when asked to control the computer, browse, save or write files, change settings, or remember details. "
             "CONVERSATION & OPINIONS: "

@@ -817,9 +817,27 @@ def _kill_process_group(proc: subprocess.Popen, sig: int) -> None:
             pass
 
 
+_TRUTHY = ("1", "true", "yes", "on")
+_UNRESTRICTED_WARNED = False
+
+
 def is_unrestricted_shell() -> bool:
-    val = (os.environ.get("KUREK_UNRESTRICTED_SHELL") or os.environ.get("KUREK_ALLOW_SHELL") or "").strip().lower()
-    return val in ("1", "true", "yes", "on")
+    """Unrestricted shell is OFF unless KUREK_REMOTE_ALLOW_EXEC=1.
+
+    KUREK_REMOTE_ALLOW_EXEC is required. The legacy KUREK_UNRESTRICTED_SHELL /
+    KUREK_ALLOW_SHELL variables can no longer enable it on their own.
+    """
+    global _UNRESTRICTED_WARNED
+    enabled = (os.environ.get("KUREK_REMOTE_ALLOW_EXEC") or "").strip().lower() in _TRUTHY
+    if enabled and not _UNRESTRICTED_WARNED:
+        _UNRESTRICTED_WARNED = True
+        print(
+            "[run] ⚠️ WARNING: KUREK_REMOTE_ALLOW_EXEC=1 — UNRESTRICTED SHELL IS ENABLED. "
+            "Kurek (and any authenticated remote client) can run ANY command as this user, "
+            "bypassing the allowlist and root scoping.",
+            flush=True,
+        )
+    return enabled
 
 
 def _spawn_unrestricted_shell(run_id: str, cmd_str: str, cwd_path: Path, timeout_arg: Any) -> str:
@@ -1641,20 +1659,35 @@ def run(parameters: dict | None = None, **kwargs) -> str:
         )
 
 
+_SANDBOX_DESCRIPTION = (
+    "Sandboxed, auditable command runner for workstation inspection and build/test tasks. "
+    "Permits allowlisted read-only commands (git status/diff/log, rg, ls, cat, find, stat, --version) "
+    "and declared project build/test tools (cargo check/test/build/clippy, npm test, pnpm, pytest, make); "
+    "build/test commands run repository code and wait for the user's yes/no confirmation. "
+    "Destructive commands (rm, git push, git reset --hard, curl|sh) are strictly disallowed. "
+    "Never interactive. All runs are strictly root-scoped, timeout-bounded, and recorded in an append-only audit log."
+)
+_UNRESTRICTED_DESCRIPTION = (
+    "WARNING: unrestricted shell mode is ENABLED (KUREK_REMOTE_ALLOW_EXEC=1). "
+    "Executes arbitrary commands and shell scripts as the user (e.g. bash, systemctl, pacman, git, cargo), "
+    "captures stdout/stderr, exit code, and duration. Use with care; runs are audit-logged."
+)
+
+
+def tool_description() -> str:
+    return _UNRESTRICTED_DESCRIPTION if is_unrestricted_shell() else _SANDBOX_DESCRIPTION
+
+
 TOOL = {
     "name": "run",
-    "description": (
-        "Workstation command and shell runner. "
-        "Executes commands and shell scripts across the system (e.g. bash, systemctl, pacman, git, cargo, build/test scripts), "
-        "captures stdout/stderr, exit code, and duration."
-    ),
+    "description": tool_description(),
     "parameters": {
         "type": "OBJECT",
         "properties": {
             "action": {
                 "type": "STRING",
                 "description": (
-                    "The run action: 'exec' or 'shell' (execute shell command or script), "
+                    "The run action: 'exec' or 'shell' (execute a command; allowlisted and root-scoped unless unrestricted mode is enabled), "
                     "'read' (inspect output of recent run), 'list' (list recent runs), "
                     "or 'cancel' (terminate running process)."
                 ),
@@ -1662,11 +1695,11 @@ TOOL = {
             },
             "cmd": {
                 "type": "STRING",
-                "description": "Command string or shell script to execute (e.g. 'bash -c', system commands, dev tools).",
+                "description": "Command string to execute (e.g. 'git status', 'cargo check', 'pytest', 'npm test').",
             },
             "cwd": {
                 "type": "STRING",
-                "description": "Working directory path.",
+                "description": "Working directory path within allowed project roots (e.g. '~/dev/nodaysidle/kurekizmo').",
             },
             "timeout": {
                 "type": "INTEGER",
