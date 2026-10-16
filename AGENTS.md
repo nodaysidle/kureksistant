@@ -1,6 +1,6 @@
 # AGENTS.md — Developer & AI Agent Guide for Kurek (Kureksistant)
 
-> **Kurek** is a headless personal AI assistant for **Arch Linux / Omarchy Quattro (Hyprland)** and **macOS** (~450MB peak RAM with faster-whisper loaded, observed). Features Middle Click mouse summon (C trigger; `scripts/bench_trigger.py` is an informational, machine-dependent mock-daemon benchmark, not end-to-end latency), native desktop launcher, DeepSeek-Flash reasoning, xAI Grok speech (**Sol** voice), Hermes bidirectional memory continuity, and 25 tool modules in `actions/`. Release: v0.2.0.
+> **Kurek** is a headless personal AI assistant for **Arch Linux / Omarchy Quattro (Hyprland)** — a headless daemon with no GUI on purpose (~450MB peak RAM with faster-whisper loaded, observed). Features Middle Click mouse summon (C trigger; `scripts/bench_trigger.py` is an informational, machine-dependent mock-daemon benchmark, not end-to-end latency), native desktop launcher, DeepSeek-Flash reasoning, xAI Grok speech (**Sol** voice), Hermes bidirectional memory continuity, and 27 tool modules in `actions/`. Latest release: v0.2.1 (v0.2.2 unreleased).
 
 ---
 
@@ -8,7 +8,7 @@
 
 ```
   ┌──────────────────────────────────────────────┐       ┌──────────────────────────────────────────────┐
-  │     Arch Linux / Omarchy Quattro             │       │       macOS Menu Bar Item (Kurek.app)        │
+  │     Arch Linux / Omarchy Quattro             │       │  (legacy) macOS Menu Bar — unsupported       │
   │  • Middle Click (mouse:274) / Super+Middle   │       │   Swift 6 / AppKit  •  Fn Key Global Monitor │
   │  • Super+Space Launcher (kurek.desktop)      │       │      10 Hz Reactive Polling / State Indicator│
   │  • CLI: kurek [toggle|prompt|status|stop]    │       │                                              │
@@ -25,8 +25,8 @@
 │  │  • Deepgram Nova-2   │   │  • DeepSeek-Flash     │   │  • xAI Grok TTS (Sol/sal) │  │
 │  │  • faster-whisper    │   │    (api.deepseek.com) │   │    (api.x.ai/v1/tts)      │  │
 │  │    (base.en local)   │   │  • Reasoning tokens   │   │  • Linux mpv (PipeWire)   │  │
-│  │  • DC offset removal │   │  • 24 OpenAI Tools    │   │  • macOS afplay           │  │
-│  │  • Peak normalization│   │  • Unrestricted Jarvis│   │  • In-place notifications │  │
+│  │  • DC offset removal │   │  • 27 tool modules    │   │  • macOS afplay           │  │
+│  │  • Peak normalization│   │  • Gated shell opt-in │   │  • In-place notifications │  │
 │  └──────────────────────┘   └───────────┬───────────┘   └───────────────────────────┘  │
 │                                         │                                              │
 │                                         ▼                                              │
@@ -62,11 +62,10 @@
 | **PipeWire Audio Sink** | [`core/mpv_sink.py`](core/mpv_sink.py) | Persistent background `mpv` process bound to PipeWire via `$XDG_RUNTIME_DIR/kurek_mpv.sock`. Zero-disk tmpfs playback & instant barge-in. |
 | **Desktop Entry** | [`desktop/kurek.desktop`](desktop/kurek.desktop) | Standard FreeDesktop `.desktop` entry. Appears in Omarchy launcher (`Super+Space`) under Apps with 1024x1024 retina icon. |
 | **Hyprland Bindings** | `~/.config/hypr/bindings.lua` | Middle Click (`mouse:274`) and `SUPER + mouse:274` calling `kurek-trigger toggle`. |
-| **macOS Menu Bar UI** | [`menubar/KurekBar.swift`](menubar/KurekBar.swift) | Native Swift 6 status item for macOS. Polls `/status` at 10 Hz and monitors global `Fn` modifier flags. |
+| **macOS Menu Bar UI (legacy, unsupported)** | [`menubar/KurekBar.swift`](menubar/KurekBar.swift) | Legacy Swift 6 status item for macOS; not maintained or tested. Polls `/status` at 10 Hz and monitors global `Fn` modifier flags. |
 | **LLM Client** | [`core/llm_client.py`](core/llm_client.py) | Direct `api.deepseek.com` client with sentence-buffered streaming pipeline (`stream_deepseek_sentences`). |
 | **TTS Engine** | [`core/tts.py`](core/tts.py) | Implements `XAITTSEngine` (Grok Cloud TTS, voice: **Sol** / `sal`) with chunk streaming into `MpvPipeWireSink`. |
 | **STT Engine** | [`core/stt.py`](core/stt.py) | Implements `OpenRouterSTT` (multilingual `openai/whisper-large-v3-turbo`), `DeepgramSTT` (Nova-2), and `WhisperSTT` (`faster-whisper`) with DC offset stripping and peak normalization. |
-
 | **Memory Tool** | [`actions/memory_tool.py`](actions/memory_tool.py) | `manage_memory(action='remember'|'recall')`. Bidirectionally syncs with Hermes `USER.md` & `MEMORY.md`. |
 | **External Memory** | `HERMES_PROFILE` / `HERMES_MEMORIES_DIR` / `~/.hermes/memories` | Optional Hermes `USER.md` + `MEMORY.md` continuity. |
 | **Knowledge Vault** | [`actions/vault_knowledge.py`](actions/vault_knowledge.py) | `vault_knowledge(action='list_projects'\|'read'\|'search'\|'add_inbox')`. Accesses nodaysidle-knowledge Obsidian vault notes, PRDs, roadmaps, and social media plans. |
@@ -112,7 +111,7 @@ On Linux, real-time feedback is displayed through in-place desktop notifications
 | **THINKING** | `🟡 Thinking...` | Transcribing audio, querying DeepSeek-Flash, or executing tools. |
 | **SPEAKING** | `🔵 Speaking...` | Streaming speech audio via xAI Grok TTS (**Sol** voice). |
 
-On macOS, the status is rendered by `KurekBar.swift` in the system menu bar.
+The legacy macOS `menubar/KurekBar.swift` client is unsupported.
 
 ---
 

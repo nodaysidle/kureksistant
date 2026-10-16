@@ -17,9 +17,11 @@
 
 ---
 
-Kurek is a headless Python daemon (`kurek_daemon.py`) that runs as a systemd user service on your Linux desktop. You summon it with a mouse middle-click, a hotkey or the `kurek` CLI. It listens, thinks with DeepSeek-Flash, talks back with xAI Grok TTS (voice **Sol**), and can act on your desktop through about two dozen tool modules in [`actions/`](actions/), including windows, apps, the browser, files, the clipboard, screen vision and memory.
+**A headless voice assistant daemon on Linux — no GUI on purpose.**
 
-It is built and tested first on **Arch Linux with Omarchy / Hyprland**. A macOS menu-bar client exists ([`menubar/`](menubar/)) but is less exercised. The old PyQt6 GUI lives in [`legacy/`](legacy/) and is unsupported.
+Kurek is a headless Python daemon (`kurek_daemon.py`) with no GUI that runs as a systemd user service on your Linux desktop. You summon it with a mouse middle-click, a hotkey or the `kurek` CLI. It listens, thinks with DeepSeek-Flash, talks back with xAI Grok TTS (voice **Sol**), and can act on your desktop through 27 tool modules in [`actions/`](actions/), including windows, apps, the browser, files, the clipboard, screen vision and memory.
+
+It is built and tested on **Arch Linux with Omarchy / Hyprland**. The old macOS menu-bar client ([`menubar/`](menubar/)) is legacy and unsupported, and the old PyQt6 GUI in [`legacy/`](legacy/) is dead and unsupported.
 
 **Latest release: [v0.2.1, Omarchy Integration & Stability Refactor](https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.1)** (see also [CHANGELOG.md](CHANGELOG.md)).
 
@@ -126,7 +128,7 @@ nano .env
 | `KUREK_USER_NAME` | Optional | How Kurek addresses you. |
 | `HERMES_PROFILE` / `HERMES_MEMORIES_DIR` | Optional | Hermes memory continuity. |
 | `INPUT_DEVICE` | Optional | Microphone name substring. |
-| `KUREK_PROJECT_DIR` | Optional | Install path for the macOS menu-bar client. |
+| `KUREK_PROJECT_DIR` | Optional | Install path for the legacy, unsupported macOS menu-bar client. |
 | `KUREK_TIMING` | Optional | `1` logs per-query timing deltas. |
 | `KUREK_REMOTE_BIND` | For phone | `tailscale` enables the remote bind (see below). |
 | `KUREK_REMOTE_TOKEN` | For phone | Bearer token, **at least 32 characters** (`openssl rand -hex 32`). |
