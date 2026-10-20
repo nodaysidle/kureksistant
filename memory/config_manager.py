@@ -2,6 +2,8 @@ import json
 import sys
 from pathlib import Path
 
+from memory.atomic_io import atomic_write_text
+
 def get_base_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
@@ -29,13 +31,9 @@ def save_api_keys(gemini_api_key: str) -> None:
 
     data["gemini_api_key"] = gemini_api_key.strip()
 
-    CONFIG_FILE.write_text(
-        json.dumps(data, indent=2),
-        encoding="utf-8"
-    )
+    atomic_write_text(CONFIG_FILE, json.dumps(data, indent=2))
 
 def _load_env_file() -> dict:
-    import os
     env_vars = {}
     env_file = BASE_DIR / ".env"
     if env_file.exists():
@@ -218,7 +216,7 @@ def save_assistant_config(assistant_name: str, user_name: str) -> None:
             data = {}
     data["assistant_name"] = assistant_name.strip() or "Kurek"
     data["user_name"] = user_name.strip()
-    CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+    atomic_write_text(CONFIG_FILE, json.dumps(data, indent=4))
 
 
 # ── Assistant voice ──────────────────────────────────────────────────────────
@@ -247,7 +245,7 @@ def save_voice(voice_name: str) -> None:
             data = {}
     v = (voice_name or "").strip()
     data["voice_name"] = v if v in AVAILABLE_VOICES else DEFAULT_VOICE
-    CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+    atomic_write_text(CONFIG_FILE, json.dumps(data, indent=4))
 
 
 def get_wake_word_enabled() -> bool:
@@ -264,7 +262,7 @@ def save_wake_word_enabled(enabled: bool) -> None:
         except Exception:
             data = {}
     data["wake_word_enabled"] = bool(enabled)
-    CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+    atomic_write_text(CONFIG_FILE, json.dumps(data, indent=4))
 
 
 def get_brief_enabled() -> bool:
@@ -280,7 +278,7 @@ def save_brief_enabled(enabled: bool) -> None:
         except Exception:
             data = {}
     data["morning_brief_enabled"] = enabled
-    CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+    atomic_write_text(CONFIG_FILE, json.dumps(data, indent=4))
 
 
 # ── Audio devices ────────────────────────────────────────────────────────────
@@ -304,7 +302,7 @@ def _patch_config(**fields) -> None:
         except Exception:
             data = {}
     data.update(fields)
-    CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+    atomic_write_text(CONFIG_FILE, json.dumps(data, indent=4))
 
 
 def get_input_device() -> str:
@@ -392,7 +390,7 @@ def save_plugin_config(namespace: str, values: dict) -> None:
     cur.update(values)
     pc[namespace] = cur
     data["plugin_config"] = pc
-    CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+    atomic_write_text(CONFIG_FILE, json.dumps(data, indent=4))
 
 
 def save_plugin_enabled(plugin_name: str, enabled: bool) -> None:
@@ -408,4 +406,4 @@ def save_plugin_enabled(plugin_name: str, enabled: bool) -> None:
         plugins_cfg = {}
     plugins_cfg[plugin_name] = enabled
     data["plugins_enabled"] = plugins_cfg
-    CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+    atomic_write_text(CONFIG_FILE, json.dumps(data, indent=4))

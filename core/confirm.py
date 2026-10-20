@@ -72,11 +72,14 @@ def bind(show, hide, log=None) -> None:
 
 
 def _log(msg: str) -> None:
+    """Send to the bound log callback; fall back to stdout (journald) otherwise."""
     if _log_cb:
         try:
             _log_cb(msg)
+            return
         except Exception:
             pass
+    print(f"[Confirm] {msg}", flush=True)
 
 
 def request(key: str, title: str, detail: str, run: Callable[[], str]) -> str:
@@ -94,8 +97,11 @@ def request(key: str, title: str, detail: str, run: Callable[[], str]) -> str:
                 f"not available, so I have not done it.")
 
     with _lock:
+        replaced = _pending
         _pending = _Pending(key=key, title=title, detail=detail,
                             run=run, at=time.monotonic())
+    if replaced is not None and time.monotonic() - replaced.at <= TIMEOUT_SECONDS:
+        _log(f"SYS: Replaced pending confirmation — {replaced.title} (superseded by {title})")
 
     try:
         _show_cb(title, detail)

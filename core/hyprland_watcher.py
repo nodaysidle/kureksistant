@@ -220,8 +220,16 @@ class HyprlandEventWatcher:
                         break
                     self.apply_event_line(line)
 
+                if self._running:
+                    # EOF: Hyprland exited or restarted (new instance signature).
+                    print("[HyprWatcher] Event socket closed; re-resolving instance", flush=True)
+                    self._sock_path = None
+                    time.sleep(1.0)
+
             except Exception:
-                # Socket disconnected or hyprland reloaded
+                # Connect failed or socket dropped — Hyprland may have restarted under a
+                # new instance signature, so force a fresh _resolve_hyprland_socket2().
+                self._sock_path = None
                 time.sleep(1.0)
             finally:
                 if sock:
@@ -275,11 +283,17 @@ class HyprlandEventWatcher:
 
 
 _GLOBAL_WATCHER: HyprlandEventWatcher | None = None
+_GLOBAL_WATCHER_LOCK = threading.Lock()
 
 
 def get_hyprland_watcher() -> HyprlandEventWatcher:
     global _GLOBAL_WATCHER
-    if _GLOBAL_WATCHER is None:
-        _GLOBAL_WATCHER = HyprlandEventWatcher()
-        _GLOBAL_WATCHER.start()
-    return _GLOBAL_WATCHER
+    watcher = _GLOBAL_WATCHER
+    if watcher is not None:
+        return watcher
+    with _GLOBAL_WATCHER_LOCK:
+        if _GLOBAL_WATCHER is None:
+            watcher = HyprlandEventWatcher()
+            watcher.start()
+            _GLOBAL_WATCHER = watcher
+        return _GLOBAL_WATCHER

@@ -29,7 +29,7 @@ def test_execute_dream_cycle_handles_str_dict_none(monkeypatch, tmp_path: Path) 
     monkeypatch.setattr(dream_cycle, "STATE_FILE", tmp_path / "ALIGNMENT_STATE.yaml")
     monkeypatch.setattr(dream_cycle, "REPAIRS_FILE", tmp_path / "REPAIR_THREADS.yaml")
 
-    # Force today's daily file path used inside execute_dream_cycle.
+    # Pin the target day explicitly (default is yesterday).
     from datetime import datetime
 
     today = datetime.now().strftime("%Y-%m-%d")
@@ -47,7 +47,7 @@ def test_execute_dream_cycle_handles_str_dict_none(monkeypatch, tmp_path: Path) 
 
     monkeypatch.setattr("core.llm_client.query_deepseek", fake_query_deepseek)
 
-    result = dream_cycle.execute_dream_cycle(force=True)
+    result = dream_cycle.execute_dream_cycle(force=True, day=today)
     assert result["status"] == "success"
     dream_text = (dreams / f"{today}.md").read_text(encoding="utf-8")
     assert "Atmospheric dream prose" in dream_text
@@ -80,7 +80,7 @@ def test_execute_dream_cycle_align_none_no_attribute_error(monkeypatch, tmp_path
 
     monkeypatch.setattr("core.llm_client.query_deepseek", fake_query_deepseek)
 
-    result = dream_cycle.execute_dream_cycle(force=True)
+    result = dream_cycle.execute_dream_cycle(force=True, day=today)
     assert result["status"] == "success"
     # None alignment guidance must not write ALIGNMENT_SYNTHESIS.md
     assert not (tmp_path / "ALIGNMENT_SYNTHESIS.md").exists()

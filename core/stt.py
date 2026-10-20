@@ -1,19 +1,83 @@
 """
-Speech-to-Text engines for MARK XL.
+Speech-to-Text engines for Kurek.
 
-Whisper  – offline transcription via faster-whisper (VAD-buffered)
-Vosk     – offline streaming transcription (lighter)
+WhisperSTT     offline transcription via faster-whisper
+DeepgramSTT    cloud STT via Deepgram Nova-2 / Nova-3
+OpenRouterSTT  cloud STT via OpenRouter audio transcriptions
+FallbackSTT    wraps a primary engine and lazily falls back on STTError
+
+Every engine returns "" only when transcription succeeded but heard no speech;
+any failure (missing key, HTTP error, timeout, network, local model error)
+raises STTError.
 """
-import json
+import io
+import threading
+import wave
+from typing import Callable
+
 import numpy as np
+
+
+class STTError(Exception):
+    """Transcription failed (as opposed to succeeding with no speech)."""
+
+
+def _to_wav_bytes(audio_data, sample_rate: int) -> bytes:
+    """Normalize a float/int numpy buffer (or pass through bytes) into WAV bytes."""
+    if isinstance(audio_data, (bytes, bytearray)):
+        return bytes(audio_data)
+    if not isinstance(audio_data, np.ndarray):
+        raise STTError(f"unsupported audio type: {type(audio_data).__name__}")
+
+    clean_audio = audio_data - np.mean(audio_data)
+    peak = float(np.max(np.abs(clean_audio))) if clean_audio.size else 0.0
+    if peak > 1e-4:
+        clean_audio = (clean_audio / peak) * 0.95
+    else:
+        clean_audio = audio_data
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        if clean_audio.dtype in (np.float32, np.float64):
+            scaled = (np.clip(clean_audio, -1.0, 1.0) * 32767).astype(np.int16)
+            wf.writeframes(scaled.tobytes())
+        else:
+            wf.writeframes(clean_audio.astype(np.int16).tobytes())
+    return buf.getvalue()
+
+
+def _post(label: str, url: str, timeout: float, **kwargs):
+    """requests.post that maps every transport/HTTP failure to STTError."""
+    import requests
+
+    try:
+        resp = requests.post(url, timeout=timeout, **kwargs)
+    except requests.Timeout as e:
+        raise STTError(f"{label} timeout: {e}") from e
+    except Exception as e:
+        raise STTError(f"{label} network error: {e}") from e
+    if resp.status_code != 200:
+        detail = (getattr(resp, "text", "") or "")[:200]
+        print(f"[STT] {label} HTTP {resp.status_code}: {detail}", flush=True)
+        raise STTError(f"{label} HTTP {resp.status_code}")
+    try:
+        return resp.json()
+    except Exception as e:
+        raise STTError(f"{label} invalid JSON response: {e}") from e
 
 
 class WhisperSTT:
     """Offline transcription using faster-whisper."""
 
-    def __init__(self, model_name: str = "base", language: str | None = None):
+    def __init__(self, model_name: str = "base.en", language: str | None = None):
         import os
-        from faster_whisper import WhisperModel
+        try:
+            from faster_whisper import WhisperModel
+        except Exception as e:
+            raise STTError(f"faster-whisper is not available: {e}") from e
         print(f"[STT] Loading Whisper '{model_name}'…")
         try:
             import torch
@@ -40,14 +104,14 @@ class WhisperSTT:
                 try:
                     self._model = WhisperModel(model_name, device=device, compute_type=compute)
                 except Exception as _dl_err:
-                    raise RuntimeError(
+                    raise STTError(
                         f"Whisper '{model_name}' model download failed.\n"
                         f"Internet access is required the first time to download the speech model (~75–290 MB).\n"
                         f"After the first download it runs fully offline.\n"
                         f"Details: {_dl_err}"
                     ) from _dl_err
             else:
-                raise
+                raise STTError(f"Whisper '{model_name}' failed to load: {_first_err}") from _first_err
 
         self._language = None if (not language or language.strip().lower() == "auto") else language.strip().lower()
         print(f"[STT] Whisper '{model_name}' ready ({device})")
@@ -72,31 +136,8 @@ class WhisperSTT:
             )
             return " ".join(s.text for s in segments).strip()
         except Exception as e:
-            print(f"[STT] Transcription error: {e}")
-            raise
-
-
-class VoskSTT:
-    """Streaming transcription using Vosk."""
-
-    def __init__(self, model_path: str | None = None, language: str = "en-us"):
-        from vosk import Model, KaldiRecognizer
-        print("[STT] Loading Vosk model…")
-        if model_path:
-            model = Model(model_path)
-        else:
-            lang  = language.strip().lower() if language and language.strip().lower() != "auto" else "en-us"
-            model = Model(lang=lang)
-        self._rec = KaldiRecognizer(model, 16000)
-        print("[STT] Vosk ready.")
-
-    def process_chunk(self, audio_bytes: bytes) -> tuple[str, bool]:
-        """Feed raw int16 LE PCM bytes. Returns (text, is_final)."""
-        if self._rec.AcceptWaveform(audio_bytes):
-            result = json.loads(self._rec.Result())
-            return result.get("text", ""), True
-        partial = json.loads(self._rec.PartialResult())
-        return partial.get("partial", ""), False
+            print(f"[STT] Transcription error: {e}", flush=True)
+            raise STTError(f"Whisper transcription failed: {e}") from e
 
 
 class DeepgramSTT:
@@ -109,57 +150,19 @@ class DeepgramSTT:
         self.model = model
 
     def transcribe(self, audio_data, sample_rate: int = 16000) -> str:
-        """Transcribe PCM int16 or WAV bytes via Deepgram."""
-        import requests
-        import io
-        import wave
-
+        """Transcribe a numpy buffer or WAV bytes via Deepgram. Raises STTError on failure."""
         if not self.api_key:
-            print("[STT] ⚠️ DEEPGRAM_API_KEY is not set.")
-            return ""
-
-        # Convert numpy or raw bytes to WAV in memory
-        if isinstance(audio_data, np.ndarray):
-            clean_audio = audio_data - np.mean(audio_data)
-            peak = float(np.max(np.abs(clean_audio)))
-            if peak > 1e-4:
-                clean_audio = (clean_audio / peak) * 0.95
-            else:
-                clean_audio = audio_data
-
-            buf = io.BytesIO()
-            with wave.open(buf, "wb") as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)
-                wf.setframerate(sample_rate)
-                # Convert float32 to int16 if needed
-                if clean_audio.dtype in (np.float32, np.float64):
-                    scaled = (np.clip(clean_audio, -1.0, 1.0) * 32767).astype(np.int16)
-                    wf.writeframes(scaled.tobytes())
-                else:
-                    wf.writeframes(clean_audio.tobytes())
-            payload = buf.getvalue()
-        elif isinstance(audio_data, bytes):
-            payload = audio_data
-        else:
-            return ""
-
+            raise STTError("Deepgram STT: DEEPGRAM_API_KEY is not set")
+        payload = _to_wav_bytes(audio_data, sample_rate)
         url = f"https://api.deepgram.com/v1/listen?model={self.model}&smart_format=true"
         headers = {
             "Authorization": f"Token {self.api_key}",
             "Content-Type": "audio/wav",
         }
-        try:
-            resp = requests.post(url, headers=headers, data=payload, timeout=8)
-            if resp.status_code == 200:
-                res = resp.json()
-                channels = res.get("results", {}).get("channels", [])
-                if channels and channels[0].get("alternatives"):
-                    return channels[0]["alternatives"][0].get("transcript", "").strip()
-            else:
-                print(f"[Deepgram] HTTP {resp.status_code}: {resp.text}")
-        except Exception as e:
-            print(f"[Deepgram] Error: {e}")
+        res = _post("Deepgram STT", url, 8, headers=headers, data=payload)
+        channels = (res.get("results") or {}).get("channels") or []
+        if channels and channels[0].get("alternatives"):
+            return (channels[0]["alternatives"][0].get("transcript") or "").strip()
         return ""
 
 
@@ -179,42 +182,12 @@ class OpenRouterSTT:
         self.language = language
 
     def transcribe(self, audio_data, sample_rate: int = 16000) -> str:
-        """Transcribe PCM int16 or WAV bytes via OpenRouter /api/v1/audio/transcriptions."""
+        """Transcribe a numpy buffer or WAV bytes via OpenRouter. Raises STTError on failure."""
         import base64
-        import io
-        import wave
-        import requests
 
         if not self.api_key:
-            print("[OpenRouter STT] ⚠️ OPENROUTER_API_KEY is not set.")
-            return ""
-
-        # Convert numpy or raw bytes to WAV in memory
-        if isinstance(audio_data, np.ndarray):
-            clean_audio = audio_data - np.mean(audio_data)
-            peak = float(np.max(np.abs(clean_audio)))
-            if peak > 1e-4:
-                clean_audio = (clean_audio / peak) * 0.95
-            else:
-                clean_audio = audio_data
-
-            buf = io.BytesIO()
-            with wave.open(buf, "wb") as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)
-                wf.setframerate(sample_rate)
-                if clean_audio.dtype in (np.float32, np.float64):
-                    scaled = (np.clip(clean_audio, -1.0, 1.0) * 32767).astype(np.int16)
-                    wf.writeframes(scaled.tobytes())
-                else:
-                    wf.writeframes(clean_audio.tobytes())
-            raw_bytes = buf.getvalue()
-        elif isinstance(audio_data, bytes):
-            raw_bytes = audio_data
-        else:
-            return ""
-
-        b64_audio = base64.b64encode(raw_bytes).decode("utf-8")
+            raise STTError("OpenRouter STT: OPENROUTER_API_KEY is not set")
+        raw_bytes = _to_wav_bytes(audio_data, sample_rate)
         url = "https://openrouter.ai/api/v1/audio/transcriptions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -223,22 +196,52 @@ class OpenRouterSTT:
         payload = {
             "model": self.model,
             "input_audio": {
-                "data": b64_audio,
+                "data": base64.b64encode(raw_bytes).decode("utf-8"),
                 "format": "wav",
             },
         }
         if self.language:
             payload["language"] = self.language
+        res = _post("OpenRouter STT", url, 15, headers=headers, json=payload)
+        return (res.get("text") or "").strip()
 
+
+class FallbackSTT:
+    """Use ``primary``; on STTError switch to a lazily built fallback engine.
+
+    The fallback is constructed at most once (thread-safe) and then reused for
+    every later failure of the primary. A fallback construction or
+    transcription failure is raised as STTError.
+    """
+
+    def __init__(self, primary, fallback_factory: Callable[[], object]):
+        self.primary = primary
+        self._fallback_factory = fallback_factory
+        self._fallback = None
+        self._lock = threading.Lock()
+
+    def _get_fallback(self):
+        if self._fallback is not None:
+            return self._fallback
+        with self._lock:
+            if self._fallback is None:
+                try:
+                    self._fallback = self._fallback_factory()
+                except STTError:
+                    raise
+                except Exception as e:
+                    raise STTError(f"fallback STT init failed: {e}") from e
+            return self._fallback
+
+    def transcribe(self, audio, sample_rate: int = 16000) -> str:
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=15)
-            if resp.status_code == 200:
-                res = resp.json()
-                return res.get("text", "").strip()
-            else:
-                print(f"[OpenRouter STT] HTTP {resp.status_code}: {resp.text}")
+            return self.primary.transcribe(audio, sample_rate=sample_rate)
+        except STTError as e:
+            print(f"[STT] Primary STT failed ({e}); using fallback", flush=True)
+        fallback = self._get_fallback()
+        try:
+            return fallback.transcribe(audio, sample_rate=sample_rate)
+        except STTError:
+            raise
         except Exception as e:
-            print(f"[OpenRouter STT] Error: {e}")
-        return ""
-
-
+            raise STTError(f"fallback STT failed: {e}") from e
