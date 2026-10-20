@@ -1,21 +1,35 @@
-# Headless Kurek daemon dependencies (canonical entrypoint: kurek_daemon.py)
-# For the unsupported PyQt6 GUI stack, see legacy/requirements-gui.txt
+# Kurek headless daemon — runtime dependencies (entrypoint: kurek_daemon.py).
+# Single source of truth for runtime deps. Exact, known-good pins for the whole
+# dependency closure live in requirements.lock; dev/CI tools in requirements-dev.txt.
+#
+# Optional features import their packages lazily and degrade gracefully when the
+# package is missing (not installed by default): pydub, plyer, mss, pdfplumber,
+# PyPDF2, python-docx, python-pptx, pandas, youtube-transcript-api, pynvml.
 
+# Audio capture + local STT (faster-whisper base.en)
 numpy
 sounddevice
-requests
 faster-whisper
-pyautogui
-pyperclip
-duckduckgo-search
-psutil
-playwright
-pillow
-beautifulsoup4
-send2trash
-PyYAML
+
+# HTTP clients for DeepSeek / xAI / OpenRouter / Deepgram
+requests
+
+# LLM-backed tools (Gemini) and Jev triage
 google-genai
 typesafe-sdk
 
-# Dev / CI
-pytest
+# Computer / desktop control tools
+pyautogui
+pyperclip
+pillow
+psutil
+send2trash
+
+# Web search (actions/web_search.py imports ddgs; duckduckgo_search is a legacy fallback)
+ddgs
+
+# Browser automation (actions/browser_control.py); run `playwright install chromium`
+playwright
+
+# Dream cycle config (core/dream_cycle.py)
+PyYAML

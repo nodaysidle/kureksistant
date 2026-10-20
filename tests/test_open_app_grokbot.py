@@ -2,15 +2,13 @@
 tests/test_open_app_grokbot.py — Tests for GrokBot and Linux app launching / focus.
 """
 import json
-import pytest
-from pathlib import Path
 from actions.open_app import (
     _normalize,
     _clean_alphanumeric,
     _find_linux_desktop_file,
     open_app,
 )
-from actions.computer_control import _get_os, _focus_window
+from actions.computer_control import _get_os
 
 
 def test_normalize_grok_variants():

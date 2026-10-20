@@ -24,6 +24,239 @@ if [ ! -x "$TRIGGER_BIN" ] && [ -x "$DIR/bin/kurek-trigger" ]; then
     TRIGGER_BIN="$DIR/bin/kurek-trigger"
 fi
 
+STATE_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/kurek/daemon.log"
+
+usage() {
+    cat <<'USAGE'
+Usage: kurek [toggle|start|stop|status|prompt <text>|logs [-f]|doctor]
+
+  toggle          Start/stop listening (default; Middle Click bind)
+  start | stop    Start or stop the daemon (systemd unit if enabled, else launch_kurek.sh)
+  status          Print daemon state
+  prompt <text>   Send a text prompt without the mic
+  logs [-f]       Show recent daemon logs (journald when kurek.service is active); -f follows
+  doctor          Check daemon, systemd unit, .env keys (presence only), binaries, mic, venv
+USAGE
+}
+
+show_logs() {
+    local follow=0
+    case "${1:-}" in
+        -f|--follow) follow=1 ;;
+        "") ;;
+        *) echo "Usage: kurek logs [-f]" >&2; return 2 ;;
+    esac
+    if systemctl --user is-active --quiet kurek.service 2>/dev/null; then
+        if [ "$follow" -eq 1 ]; then
+            exec journalctl --user -u kurek.service -n 200 -f
+        fi
+        exec journalctl --user -u kurek.service -n 200 --no-pager
+    fi
+    if [ ! -f "$STATE_LOG" ]; then
+        echo "No log found: kurek.service is not active and $STATE_LOG does not exist." >&2
+        return 1
+    fi
+    if [ "$follow" -eq 1 ]; then
+        exec tail -n 200 -F "$STATE_LOG"
+    fi
+    exec tail -n 200 "$STATE_LOG"
+}
+
+# --- doctor -----------------------------------------------------------------
+# Reads .env by parsing lines (never sourced) and never prints secret values.
+
+DOCTOR_FAILS=0
+DOCTOR_WARNS=0
+
+doc_ok()   { printf '  ✔ %s\n' "$1"; }
+doc_fail() { printf '  ✖ %s\n      ↳ %s\n' "$1" "$2"; DOCTOR_FAILS=$((DOCTOR_FAILS + 1)); }
+doc_warn() { printf '  ! %s\n      ↳ %s\n' "$1" "$2"; DOCTOR_WARNS=$((DOCTOR_WARNS + 1)); }
+
+declare -A ENV_VALS=()
+
+load_env_file() {
+    local file="$1" line key val
+    [ -f "$file" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        case "$line" in ''|'#'*) continue ;; esac
+        line="${line#export }"
+        case "$line" in *=*) ;; *) continue ;; esac
+        key="${line%%=*}"
+        key="${key%"${key##*[![:space:]]}"}"
+        val="${line#*=}"
+        val="${val#"${val%%[![:space:]]*}"}"
+        val="${val%"${val##*[![:space:]]}"}"
+        case "$val" in
+            \"*\") val="${val#\"}"; val="${val%\"}" ;;
+            \'*\') val="${val#\'}"; val="${val%\'}" ;;
+            *) val="${val%%[[:space:]]#*}" ;;
+        esac
+        [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] && ENV_VALS["$key"]="$val"
+    done < "$file"
+}
+
+# Prints "yes" if config/api_keys.json has a non-empty value for the key (any case).
+json_key_present() {
+    local key="$1" file="$DIR/config/api_keys.json"
+    [ -f "$file" ] || { echo no; return; }
+    python3 -I -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    print("no"); sys.exit(0)
+k = sys.argv[2]
+print("yes" if isinstance(d, dict) and (d.get(k) or d.get(k.lower())) else "no")
+' "$file" "$key" 2>/dev/null || echo no
+}
+
+check_key() {
+    # check_key NAME required|optional HINT
+    local name="$1" level="$2" hint="$3"
+    if [ -n "${ENV_VALS[$name]:-}" ]; then
+        doc_ok "$name set in .env"
+    elif [ "$(json_key_present "$name")" = yes ]; then
+        doc_ok "$name set in config/api_keys.json"
+    elif [ "$level" = required ]; then
+        doc_fail "$name missing" "$hint"
+    else
+        doc_warn "$name not set (optional)" "$hint"
+    fi
+}
+
+check_bin() {
+    # check_bin CMD required|optional HINT
+    local cmd="$1" level="$2" hint="$3"
+    if command -v "$cmd" >/dev/null 2>&1; then
+        doc_ok "$cmd found"
+    elif [ "$level" = required ]; then
+        doc_fail "$cmd not found" "$hint"
+    else
+        doc_warn "$cmd not found (optional)" "$hint"
+    fi
+}
+
+run_doctor() {
+    local env_file="$DIR/.env" mode status_json src bind token
+    echo "Kurek doctor (install: $DIR)"
+
+    echo "Daemon"
+    if status_json="$(curl -s --max-time 2 "$DAEMON_URL/status" 2>/dev/null)" && [ -n "$status_json" ]; then
+        doc_ok "daemon reachable at $DAEMON_URL ($status_json)"
+    else
+        doc_fail "daemon not reachable at $DAEMON_URL/status" "kurek start, then kurek logs"
+    fi
+    local sock="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/kurek.sock"
+    if [ -S "$sock" ]; then
+        doc_ok "UDS socket present ($sock)"
+    else
+        doc_fail "UDS socket missing ($sock)" "daemon not running or XDG_RUNTIME_DIR differs from the daemon's"
+    fi
+    if systemctl --user is-enabled --quiet kurek.service 2>/dev/null; then
+        doc_ok "kurek.service enabled"
+    else
+        doc_warn "kurek.service not enabled" "systemctl --user enable --now kurek.service (or re-run install_linux.sh)"
+    fi
+    if systemctl --user is-active --quiet kurek.service 2>/dev/null; then
+        doc_ok "kurek.service active"
+    else
+        doc_warn "kurek.service not active" "systemctl --user start kurek.service (fallback: ./launch_kurek.sh)"
+    fi
+    if [ -x "$TRIGGER_BIN" ]; then
+        doc_ok "kurek-trigger found ($TRIGGER_BIN)"
+    else
+        doc_warn "kurek-trigger not built" "re-run install_linux.sh (needs gcc); CLI falls back to HTTP"
+    fi
+
+    echo "Config (.env values are never printed)"
+    if [ -f "$env_file" ]; then
+        mode="$(stat -c %a "$env_file" 2>/dev/null)"
+        if [ "$mode" = 600 ] || [ "$mode" = 400 ]; then
+            doc_ok ".env present (mode $mode)"
+        else
+            doc_warn ".env present but mode $mode" "chmod 600 $env_file"
+        fi
+        load_env_file "$env_file"
+    else
+        doc_fail ".env missing" "cp $DIR/.env.example $env_file && chmod 600 $env_file, then add keys"
+    fi
+    check_key DEEPSEEK_API_KEY required "LLM brain: set DEEPSEEK_API_KEY in .env (platform.deepseek.com)"
+    check_key XAI_API_KEY required "Grok TTS: set XAI_API_KEY in .env (without it Kurek falls back to spd-say)"
+    check_key GEMINI_API_KEY required "Gemini-backed tools (web search, screen vision): set GEMINI_API_KEY"
+    check_key OPENROUTER_API_KEY optional "Decision-1 auto screen-context; also sends prompt text to OpenRouter"
+    check_key DEEPGRAM_API_KEY optional "cloud STT; local faster-whisper is used without it"
+    check_key TYPESAFE_API_KEY optional "Jev memory triage / screen-context fallback"
+
+    bind="${ENV_VALS[KUREK_REMOTE_BIND]:-}"
+    token="${ENV_VALS[KUREK_REMOTE_TOKEN]:-}"
+    if [ -n "$bind" ] || [ -n "${ENV_VALS[KUREK_BIND]:-}" ]; then
+        doc_ok "remote bind: KUREK_REMOTE_BIND=${bind:-<unset>} KUREK_BIND=${ENV_VALS[KUREK_BIND]:-<unset>}"
+        if [ "${#token}" -ge 32 ]; then
+            doc_ok "KUREK_REMOTE_TOKEN set (length >= 32)"
+        elif [ -n "$token" ]; then
+            doc_fail "KUREK_REMOTE_TOKEN too short (< 32 chars)" "KUREK_REMOTE_TOKEN=\$(openssl rand -hex 32)"
+        else
+            doc_fail "KUREK_REMOTE_TOKEN missing but remote bind enabled" "KUREK_REMOTE_TOKEN=\$(openssl rand -hex 32)"
+        fi
+        if [ "${ENV_VALS[KUREK_REMOTE_ALLOW_EXEC]:-}" = 1 ]; then
+            doc_warn "KUREK_REMOTE_ALLOW_EXEC=1" "remote prompts can run exec/shell tools"
+        fi
+    else
+        doc_ok "remote bind: loopback only (KUREK_REMOTE_BIND unset)"
+        if [ -n "$token" ] && [ "${#token}" -lt 32 ]; then
+            doc_warn "KUREK_REMOTE_TOKEN shorter than 32 chars" "KUREK_REMOTE_TOKEN=\$(openssl rand -hex 32)"
+        fi
+    fi
+
+    echo "Binaries"
+    check_bin mpv required "sudo pacman -S mpv (TTS playback)"
+    check_bin notify-send required "sudo pacman -S libnotify (state notifications)"
+    check_bin hyprctl optional "Hyprland window context"
+    check_bin wtype optional "sudo pacman -S wtype (typing on Wayland)"
+    check_bin playerctl optional "sudo pacman -S playerctl (media control)"
+    check_bin brightnessctl optional "sudo pacman -S brightnessctl"
+    check_bin grim optional "sudo pacman -S grim (screenshots / screen vision)"
+    check_bin wl-copy optional "sudo pacman -S wl-clipboard"
+    check_bin spd-say optional "sudo pacman -S speech-dispatcher (fallback voice if xAI TTS fails)"
+    check_bin tailscale optional "only needed for the Android remote"
+
+    echo "Microphone"
+    src=""
+    if command -v pactl >/dev/null 2>&1; then
+        src="$(pactl get-default-source 2>/dev/null)"
+    fi
+    if [ -z "$src" ] && command -v wpctl >/dev/null 2>&1; then
+        src="$(wpctl inspect @DEFAULT_AUDIO_SOURCE@ 2>/dev/null | sed -n 's/.*node\.description = "\(.*\)"/\1/p' | head -n 1)"
+    fi
+    if [ -n "$src" ]; then
+        doc_ok "default source: $src"
+    else
+        doc_fail "no default audio source found" "check pactl get-default-source / wpctl status"
+    fi
+
+    echo "Python"
+    local py="$DIR/.venv/bin/python"
+    if [ -x "$py" ]; then
+        doc_ok "venv python: $("$py" --version 2>&1)"
+        if OPENBLAS_NUM_THREADS=1 timeout 60 "$py" -c "import faster_whisper, sounddevice" >/dev/null 2>&1; then
+            doc_ok "import faster_whisper, sounddevice"
+        else
+            doc_fail "import faster_whisper, sounddevice failed" "$DIR/install_linux.sh (or uv pip install -r requirements.txt)"
+        fi
+    else
+        doc_fail "venv missing ($py)" "run $DIR/install_linux.sh"
+    fi
+
+    echo
+    if [ "$DOCTOR_FAILS" -gt 0 ]; then
+        echo "$DOCTOR_FAILS required check(s) failed, $DOCTOR_WARNS warning(s)."
+        return 1
+    fi
+    echo "All required checks passed ($DOCTOR_WARNS warning(s))."
+    return 0
+}
+
 ensure_daemon() {
     if pgrep -f "kurek_daemon.py" >/dev/null 2>&1; then
         return 0
@@ -38,7 +271,7 @@ ensure_daemon() {
         else
             "$DIR/launch_kurek.sh" >/dev/null 2>&1 &
         fi
-        for i in {1..25}; do
+        for _ in {1..25}; do
             if [ -x "$TRIGGER_BIN" ] && "$TRIGGER_BIN" status >/dev/null 2>&1; then
                 break
             fi
@@ -105,7 +338,18 @@ case "$1" in
         fi
         curl -s --max-time 1 -X POST "$DAEMON_URL/toggle" >/dev/null 2>&1
         ;;
+    logs)
+        shift
+        show_logs "$@"
+        ;;
+    doctor)
+        run_doctor
+        exit $?
+        ;;
+    -h|--help|help)
+        usage
+        ;;
     *)
-        echo "Usage: kurek [toggle|start|stop|status|prompt <text>]"
+        usage
         ;;
 esac

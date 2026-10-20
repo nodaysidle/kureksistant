@@ -1,10 +1,7 @@
 """Unit tests verifying that tools resolve GEMINI_API_KEY from environment without api_keys.json."""
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from unittest.mock import patch
-import pytest
 
 from actions import dev_agent, code_helper, computer_settings, desktop, file_processor, flight_finder, youtube_video, computer_control
 from memory import config_manager

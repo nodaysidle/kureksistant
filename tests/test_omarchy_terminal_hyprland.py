@@ -1,9 +1,6 @@
 """Unit tests verifying terminal and Omarchy/Hyprland fallbacks."""
 from __future__ import annotations
 
-import shutil
-from unittest.mock import patch
-import pytest
 
 from actions import open_app, computer_settings
 

@@ -56,7 +56,7 @@ trap cleanup EXIT
 ORIG_HOME=$HOME
 mkdir -p "$TMP/src" "$TMP/home" "$TMP/run" "$TMP/cfg"; chmod 700 "$TMP/run"
 git -C "$REPO_ROOT" archive "$SHA" | tar -x -C "$TMP/src"
-cd "$TMP/src"
+cd "$TMP/src" || { echo "FAIL: cannot cd to $TMP/src"; exit 2; }
 # some tests call `git ls-files`: give the copy its own throwaway git index
 git init -q . && git add -A && git -c user.name=verify -c user.email=verify@localhost commit -qm "verify $SHA" >/dev/null
 export HOME="$TMP/home" XDG_RUNTIME_DIR="$TMP/run" XDG_CONFIG_HOME="$TMP/cfg" PYTHONDONTWRITEBYTECODE=1

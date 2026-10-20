@@ -23,7 +23,7 @@ memory/*.db
 *.md.tmp
 
 # ── Compiled binaries ─────────────────────────────────────────────────────────
-menubar/kurekbar
+*.o
 bin/kurek-trigger
 
 # ── Python build noise ────────────────────────────────────────────────────────

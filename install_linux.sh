@@ -4,6 +4,30 @@
 
 set -euo pipefail
 
+usage() {
+    cat <<'USAGE'
+Usage: ./install_linux.sh [--no-enable] [--dev] [--locked]
+
+  --no-enable   Install/render the systemd user unit but do not enable or start it.
+  --dev         Also install dev/CI tools from requirements-dev.txt (pytest, ruff, mypy).
+  --locked      Install runtime deps from requirements.lock (exact pins) instead of
+                requirements.txt.
+USAGE
+}
+
+ENABLE_UNIT=1
+INSTALL_DEV=0
+USE_LOCK=0
+for arg in "$@"; do
+    case "$arg" in
+        --no-enable) ENABLE_UNIT=0 ;;
+        --dev) INSTALL_DEV=1 ;;
+        --locked) USE_LOCK=1 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "Unknown option: $arg" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
 
@@ -62,11 +86,29 @@ if [ ! -d "$DIR/.venv" ]; then
     fi
 fi
 
-echo "Installing Python requirements into .venv..."
-if command -v uv >/dev/null 2>&1; then
-    uv pip install --python .venv/bin/python -r requirements.txt
-else
-    .venv/bin/pip install -r requirements.txt
+pip_install() {
+    if command -v uv >/dev/null 2>&1; then
+        uv pip install --python .venv/bin/python "$@"
+    else
+        .venv/bin/pip install "$@"
+    fi
+}
+
+RUNTIME_REQS="requirements.txt"
+if [ "$USE_LOCK" -eq 1 ]; then
+    if [ ! -f "$DIR/requirements.lock" ]; then
+        echo "❌ ERROR: --locked given but requirements.lock is missing." >&2
+        exit 1
+    fi
+    RUNTIME_REQS="requirements.lock"
+fi
+
+echo "Installing runtime Python requirements ($RUNTIME_REQS) into .venv..."
+pip_install -r "$RUNTIME_REQS"
+
+if [ "$INSTALL_DEV" -eq 1 ]; then
+    echo "Installing dev requirements (requirements-dev.txt) into .venv..."
+    pip_install -r requirements-dev.txt
 fi
 
 echo "Installing Playwright Chromium browser..."
@@ -103,16 +145,43 @@ chmod +x "$HOME/.local/bin/kurek"
 echo "Compiling kurek-trigger with -Wall -Wextra..."
 gcc -O3 -Wall -Wextra "$DIR/bin/kurek-trigger.c" -o "$HOME/.local/bin/kurek-trigger"
 chmod +x "$HOME/.local/bin/kurek-trigger"
-# Also keep a copy next to sources for repo-local use.
-cp "$HOME/.local/bin/kurek-trigger" "$DIR/bin/kurek-trigger"
 echo "⚡ Installed kurek-trigger → $HOME/.local/bin/kurek-trigger"
 
 # --- 6. Render + install systemd user unit from template -------------------
 
-mkdir -p "$HOME/.config/systemd/user"
-render_unit "$DIR/desktop/kurek.service" "$HOME/.config/systemd/user/kurek.service" "$DIR"
-systemctl --user daemon-reload 2>/dev/null || true
-echo "📦 Installed kurek.service → ~/.config/systemd/user/kurek.service (KUREK_DIR=$DIR)"
+SYSTEMD_USER_DIR="$CONFIG_HOME/systemd/user"
+mkdir -p "$SYSTEMD_USER_DIR"
+render_unit "$DIR/desktop/kurek.service" "$SYSTEMD_USER_DIR/kurek.service" "$DIR"
+echo "📦 Installed kurek.service → $SYSTEMD_USER_DIR/kurek.service (KUREK_DIR=$DIR)"
+
+if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+    if ! systemctl --user daemon-reload; then
+        echo "⚠️  systemctl --user daemon-reload failed; run it manually."
+    fi
+    if [ "$ENABLE_UNIT" -eq 1 ]; then
+        WAS_ACTIVE=0
+        if systemctl --user is-active --quiet kurek.service; then
+            WAS_ACTIVE=1
+        fi
+        if systemctl --user enable --now kurek.service; then
+            echo "🚀 kurek.service enabled and started (systemctl --user status kurek.service)"
+            if [ "$WAS_ACTIVE" -eq 1 ]; then
+                echo "ℹ️  kurek.service was already running; restart it to pick up changes:"
+                echo "    systemctl --user restart kurek.service"
+            fi
+        else
+            echo "⚠️  Could not enable/start kurek.service. Try manually:"
+            echo "    systemctl --user enable --now kurek.service"
+            echo "    journalctl --user -u kurek.service -n 50"
+        fi
+    else
+        echo "ℹ️  --no-enable: unit installed but not enabled. Enable later with:"
+        echo "    systemctl --user enable --now kurek.service"
+    fi
+else
+    echo "⚠️  systemd user session not available; kurek.service was not enabled."
+    echo "    Start Kurek with: kurek start   (falls back to ./launch_kurek.sh)"
+fi
 
 # --- 7. Install Desktop Entry (overwrite; no duplicate appends) ------------
 
@@ -125,3 +194,4 @@ echo "✅ Kurek installed successfully!"
 echo "👉 Launch via app launcher (Super+Space) -> 'Kurek'"
 echo "👉 Or run from terminal: kurek toggle"
 echo "👉 Hyprland bind should call: ~/.local/bin/kurek-trigger toggle"
+echo "👉 Health check: kurek doctor   ·   Logs: kurek logs -f"

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from actions.codebase import codebase, get_allowed_roots, _is_path_allowed, _is_binary
+from actions.codebase import codebase
 
 
 @pytest.fixture
@@ -614,7 +614,6 @@ def test_r7_2_search_output_capped_and_rg_group_killed(test_workspace: dict[str,
 
 def test_r7_2_rg_capped_kills_process_group(monkeypatch: pytest.MonkeyPatch) -> None:
     import actions.codebase as cb
-    import actions.run as run_mod
     monkeypatch.setattr(cb, "_SEARCH_MAX_BYTES", 4096)
     started: dict[str, object] = {}
     real_popen = cb.subprocess.Popen
