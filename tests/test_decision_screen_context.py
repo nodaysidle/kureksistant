@@ -164,6 +164,21 @@ def _make_lite_engine(monkeypatch):
         def speak_chunk(self, text: str, append: bool = False):
             pass
 
+        def begin_stream(self):
+            pass
+
+        def enqueue(self, text: str, play_local: bool = True, on_audio=None):
+            if play_local:
+                self.speak_chunk(text)
+            if on_audio is not None:
+                on_audio(None)
+
+        def wait_stream(self, timeout: float = 60.0) -> bool:
+            return True
+
+        def synthesize(self, text: str):
+            return None
+
         def stop(self):
             self.is_playing = False
 
@@ -172,6 +187,7 @@ def _make_lite_engine(monkeypatch):
         daemon, "get_mpv_sink", lambda: SimpleNamespace(ensure_running=lambda: None)
     )
     monkeypatch.setattr(daemon, "get_hyprland_watcher", lambda: None)
+    monkeypatch.setattr(daemon.KurekEngine, "_report_startup_problems", lambda self, *_a: None)
     monkeypatch.setattr(
         daemon.KurekEngine, "_hourly_consolidation_loop", lambda self: None
     )
