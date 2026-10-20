@@ -92,7 +92,7 @@ def capture_screen_jpeg(max_width: int = 1440, crop_active_window: bool = True) 
 
         cmd.extend(["-t", "jpeg", "-q", "80", "-"])
         try:
-            res = subprocess.run(cmd, capture_output=True, check=True)
+            res = subprocess.run(cmd, capture_output=True, check=True, timeout=5)
             jpeg_bytes = res.stdout
 
             # Structural diff hash from in-memory buffer
@@ -107,7 +107,7 @@ def capture_screen_jpeg(max_width: int = 1440, crop_active_window: bool = True) 
     # 2. macOS native screencapture fallback
     if sys.platform == "darwin":
         tmp_path = Path("/tmp/kurek_screen_cap.png")
-        subprocess.run(["screencapture", "-x", str(tmp_path)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["screencapture", "-x", str(tmp_path)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
         with Image.open(tmp_path) as img:
             img = img.convert("RGB")
             img.thumbnail((max_width, 810), Image.Resampling.BILINEAR)
@@ -145,7 +145,7 @@ def query_vision(jpeg_bytes: bytes, prompt: str) -> str:
     except ImportError:
         return "google-genai library not installed in Python environment."
 
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(api_key=api_key, http_options={"timeout": 60_000})
 
     # Gather active Hyprland desktop context
     hypr_ctx = get_hyprland_context()

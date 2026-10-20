@@ -69,25 +69,11 @@ def _undo_write(target: Path, previous: str | None):
 def _restore_from_trash(original: Path) -> str:
     """Best-effort undelete.
 
-    delete_file uses send2trash, which is the right call: the file lands in the
-    Recycle Bin / Trash where the person can also find it themselves. Getting it
-    back out again is shell work and only reliable on Windows, where pywin32 is
-    already a dependency. Everywhere else this says where the file is instead of
-    pretending it failed — the file is not lost either way."""
-    if _OS == "Windows":
-        try:
-            import win32com.client
-            shell = win32com.client.Dispatch("Shell.Application")
-            bin_folder = shell.NameSpace(10)      # ssfBITBUCKET
-            for item in bin_folder.Items():
-                if str(bin_folder.GetDetailsOf(item, 1)).strip().lower() == \
-                        str(original.parent).strip().lower():
-                    if str(item.Name).strip().lower() == original.name.strip().lower():
-                        item.InvokeVerb("UNDELETE")
-                        return f"'{original.name}' restored from the Recycle Bin."
-        except Exception as e:
-            print(f"[file] Recycle Bin restore failed: {e}")
-    return (f"'{original.name}' is in the Recycle Bin — I could not pull it back "
+    delete_file uses send2trash, so the file lands in the desktop Trash where
+    the person can also find it themselves. Pulling it back out automatically
+    is not supported here; this says where the file is instead of pretending
+    the restore failed — the file is not lost either way."""
+    return (f"'{original.name}' is in the Trash — I could not pull it back "
             f"automatically, but it is there and can be restored by hand.")
 
 
@@ -409,8 +395,12 @@ def rename_file(path: str, name: str = "", new_name: str = "") -> str:
             return f"Not found: {target.name}"
         if not new_name:
             return "No new name provided."
+        if "/" in new_name or "\\" in new_name or new_name in (".", ".."):
+            return "The new name must be a plain file name, not a path."
 
         new_path = target.parent / new_name
+        if not _is_safe_path(new_path):
+            return f"Access denied: {new_path}"
         if new_path.exists():
             return f"A file named '{new_name}' already exists here."
 

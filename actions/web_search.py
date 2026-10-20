@@ -8,14 +8,12 @@ Automatically resolves locale (Slovenia / CEST) for timing & local inquiries.
 from __future__ import annotations
 
 import html
-import json
 import os
 import re
 import sys
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime
 from pathlib import Path
 
 

@@ -1,7 +1,6 @@
 #desktop.py
 import os
 import sys
-import json
 import shutil
 import subprocess
 import tempfile
@@ -15,7 +14,7 @@ try:
 except ImportError:
     _PYAUTOGUI = False
 
-_OS = platform.system()  # "Windows" | "Darwin" | "Linux"
+_OS = platform.system()  # "Darwin" | "Linux"
 
 
 def _get_base_dir() -> Path:
@@ -62,20 +61,6 @@ def _build_sandbox() -> dict:
     if _PYAUTOGUI:
         sandbox["pyautogui"] = pyautogui
 
-    if _OS == "Windows":
-        try:
-            import ctypes
-            import winreg
-            sandbox["ctypes"] = ctypes
-            sandbox["winreg"] = type("winreg", (), {
-                # Sadece okuma
-                "OpenKey":      winreg.OpenKey,
-                "QueryValueEx": winreg.QueryValueEx,
-                "HKEY_CURRENT_USER": winreg.HKEY_CURRENT_USER,
-            })()
-        except ImportError:
-            pass
-
     return sandbox
 
 
@@ -103,14 +88,12 @@ def _execute_generated_code(code: str, player=None) -> str:
 def _ask_gemini_for_desktop_action(task: str) -> str:
 
     from google import genai as _genai
-    _client = _genai.Client(api_key=_get_api_key())
+    _client = _genai.Client(api_key=_get_api_key(), http_options={"timeout": 60_000})
 
     desktop = str(_get_desktop())
 
     os_specific = ""
-    if _OS == "Windows":
-        os_specific = "- ctypes (Windows API calls, read-only)\n- winreg (registry READ only)"
-    elif _OS == "Darwin":
+    if _OS == "Darwin":
         os_specific = "- subprocess is NOT available; use pyautogui or Path only"
     else:
         os_specific = "- subprocess is NOT available; use pyautogui or Path only"
@@ -150,6 +133,45 @@ Task: {task}"""
     except Exception as e:
         return f"ERROR: {e}"
 
+def _is_wayland() -> bool:
+    return bool(os.environ.get("WAYLAND_DISPLAY") or os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"))
+
+
+_OMARCHY_BG_LINK = Path.home() / ".local" / "state" / "omarchy" / "current" / "background"
+
+
+def _set_wallpaper_wayland(path: Path) -> str:
+    """Hyprland/Wayland: Omarchy's own command first, then hyprpaper, then swaybg."""
+    errors = []
+    if shutil.which("omarchy-theme-bg-set"):
+        res = subprocess.run(["omarchy-theme-bg-set", str(path)],
+                             capture_output=True, text=True, timeout=15)
+        if res.returncode == 0:
+            return f"Wallpaper set: {path.name}"
+        errors.append(f"omarchy-theme-bg-set: {(res.stderr or res.stdout).strip() or res.returncode}")
+
+    if shutil.which("hyprctl") and shutil.which("hyprpaper"):
+        pre = subprocess.run(["hyprctl", "hyprpaper", "preload", str(path)],
+                             capture_output=True, text=True, timeout=10)
+        wal = subprocess.run(["hyprctl", "hyprpaper", "wallpaper", f",{path}"],
+                             capture_output=True, text=True, timeout=10)
+        if pre.returncode == 0 and wal.returncode == 0 and "ok" in (wal.stdout or "").lower():
+            return f"Wallpaper set: {path.name}"
+        errors.append(f"hyprpaper: {(wal.stderr or wal.stdout).strip() or wal.returncode}")
+
+    if shutil.which("swaybg"):
+        subprocess.run(["pkill", "-x", "swaybg"], capture_output=True, timeout=5)
+        subprocess.Popen(["swaybg", "-i", str(path), "-m", "fill"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+        return f"Wallpaper set: {path.name}"
+
+    if errors:
+        return "Could not set wallpaper: " + "; ".join(errors)
+    return ("Could not set wallpaper: no Wayland wallpaper tool found "
+            "(need omarchy-theme-bg-set, hyprpaper or swaybg).")
+
+
 def set_wallpaper(image_path: str) -> str:
     path = Path(image_path).expanduser().resolve()
     if not path.exists():
@@ -158,25 +180,12 @@ def set_wallpaper(image_path: str) -> str:
         return f"Unsupported format: {path.suffix}. Use jpg, png, bmp or webp."
 
     try:
-        if _OS == "Windows":
-            import ctypes
-            if path.suffix.lower() in {".webp", ".png"}:
-                try:
-                    from PIL import Image
-                    bmp_path = Path(tempfile.mktemp(suffix=".bmp"))
-                    Image.open(path).convert("RGB").save(bmp_path, "BMP")
-                    path = bmp_path
-                except ImportError:
-                    pass
-            ctypes.windll.user32.SystemParametersInfoW(20, 0, str(path), 3)
-            return f"Wallpaper set: {path.name}"
-
-        elif _OS == "Darwin":
+        if _OS == "Darwin":
             script = (
                 f'tell application "System Events" to tell every desktop to '
                 f'set picture to POSIX file "{path}"'
             )
-            subprocess.run(["osascript", "-e", script], capture_output=True)
+            subprocess.run(["osascript", "-e", script], capture_output=True, timeout=15)
             return f"Wallpaper set: {path.name}"
 
         else:
@@ -187,11 +196,11 @@ def set_wallpaper(image_path: str) -> str:
                 subprocess.run([
                     "gsettings", "set", "org.gnome.desktop.background",
                     "picture-uri", uri
-                ], capture_output=True)
+                ], capture_output=True, timeout=15)
                 subprocess.run([
                     "gsettings", "set", "org.gnome.desktop.background",
                     "picture-uri-dark", uri
-                ], capture_output=True)
+                ], capture_output=True, timeout=15)
 
             elif "kde" in desktop_env:
                 # KDE Plasma
@@ -207,7 +216,7 @@ for (var i = 0; i < allDesktops.length; i++) {{
                 subprocess.run(
                     ["qdbus", "org.kde.plasmashell", "/PlasmaShell",
                      "org.kde.PlasmaShell.evaluateScript", script],
-                    capture_output=True
+                    capture_output=True, timeout=15
                 )
 
             elif "xfce" in desktop_env:
@@ -215,12 +224,18 @@ for (var i = 0; i < allDesktops.length; i++) {{
                     "xfconf-query", "-c", "xfce4-desktop",
                     "-p", "/backdrop/screen0/monitor0/workspace0/last-image",
                     "-s", str(path)
-                ], capture_output=True)
+                ], capture_output=True, timeout=15)
+
+            elif _is_wayland():
+                return _set_wallpaper_wayland(path)
 
             else:
+                if not shutil.which("feh"):
+                    return (f"Could not set wallpaper automatically on {desktop_env or 'this desktop'}: "
+                            "'feh' is not installed.")
                 result = subprocess.run(
                     ["feh", "--bg-scale", str(path)],
-                    capture_output=True
+                    capture_output=True, timeout=15
                 )
                 if result.returncode != 0:
                     return (
@@ -238,8 +253,20 @@ def set_wallpaper_from_url(url: str) -> str:
     try:
         import urllib.request
         suffix = Path(url.split("?")[0]).suffix or ".jpg"
-        tmp    = Path(tempfile.mktemp(suffix=suffix))
-        urllib.request.urlretrieve(url, str(tmp))
+        with urllib.request.urlopen(url, timeout=20) as resp:
+            data = resp.read()
+        if _OS == "Linux" and _is_wayland():
+            # Wayland setters (Omarchy symlink, hyprpaper, swaybg) keep reading
+            # the file after we return, so it must outlive this call.
+            dest_dir = Path.home() / "Pictures" / "Wallpapers"
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest = dest_dir / f"kurek_{datetime.now():%Y%m%d_%H%M%S}{suffix}"
+            dest.write_bytes(data)
+            return set_wallpaper(str(dest))
+        fd, tmp_name = tempfile.mkstemp(suffix=suffix)
+        tmp = Path(tmp_name)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
         result = set_wallpaper(str(tmp))
         try:
             tmp.unlink()
@@ -252,22 +279,13 @@ def set_wallpaper_from_url(url: str) -> str:
 
 def get_current_wallpaper() -> str:
     try:
-        if _OS == "Windows":
-            import winreg
-            key = winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER, r"Control Panel\Desktop"
-            )
-            val, _ = winreg.QueryValueEx(key, "Wallpaper")
-            winreg.CloseKey(key)
-            return f"Current wallpaper: {val}"
-
-        elif _OS == "Darwin":
+        if _OS == "Darwin":
             script = (
                 'tell application "System Events" to get picture of desktop 1'
             )
             result = subprocess.run(
                 ["osascript", "-e", script],
-                capture_output=True, text=True
+                capture_output=True, text=True, timeout=15
             )
             return f"Current wallpaper: {result.stdout.strip()}"
 
@@ -276,9 +294,11 @@ def get_current_wallpaper() -> str:
             if "gnome" in desktop_env or "unity" in desktop_env:
                 result = subprocess.run(
                     ["gsettings", "get", "org.gnome.desktop.background", "picture-uri"],
-                    capture_output=True, text=True
+                    capture_output=True, text=True, timeout=15
                 )
                 return f"Current wallpaper: {result.stdout.strip()}"
+            if _OMARCHY_BG_LINK.exists():
+                return f"Current wallpaper: {_OMARCHY_BG_LINK.resolve()}"
             return "Wallpaper path retrieval not supported for this desktop environment."
 
     except Exception as e:
@@ -297,7 +317,6 @@ FILE_TYPE_MAP = {
 }
 
 _SKIP_EXTENSIONS = {
-    "Windows": {".lnk", ".url"},
     "Darwin":  {".webloc"},
     "Linux":   {".desktop"},
 }

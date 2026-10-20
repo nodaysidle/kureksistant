@@ -1,6 +1,5 @@
 import subprocess
 import sys
-import json
 import re
 import time
 from pathlib import Path
@@ -24,7 +23,7 @@ def _get_api_key() -> str:
 
 def _get_gemini(model: str = GEMINI_MODEL):
     from google import genai
-    _c = genai.Client(api_key=_get_api_key())
+    _c = genai.Client(api_key=_get_api_key(), http_options={"timeout": 60_000})
 
     class _W:
         def generate_content(self, contents):
@@ -468,7 +467,7 @@ def _screen_debug_action(description, file_path, player, speak=None) -> str:
         from google import genai
         from google.genai import types
 
-        client = genai.Client(api_key=_get_api_key())
+        client = genai.Client(api_key=_get_api_key(), http_options={"timeout": 60_000})
 
         image_bytes  = screenshot_path.read_bytes()
         image_base64 = _image_to_base64(screenshot_path)

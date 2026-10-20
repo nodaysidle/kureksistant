@@ -39,7 +39,7 @@ def _get_api_key() -> str:
 
 def _get_model(model_name: str):
     from google import genai
-    _c = genai.Client(api_key=_get_api_key())
+    _c = genai.Client(api_key=_get_api_key(), http_options={"timeout": 60_000})
 
     class _W:
         def generate_content(self, contents):
@@ -256,7 +256,7 @@ def _install_dependencies(dependencies: list[str], project_dir: Path) -> str:
         pkg_name = re.split(r"[>=<!]", dep)[0].strip()
         result = subprocess.run(
             [sys.executable, "-m", "pip", "show", pkg_name],
-            capture_output=True, text=True
+            capture_output=True, text=True, timeout=20
         )
         if result.returncode != 0:
             to_install.append(dep)

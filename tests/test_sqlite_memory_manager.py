@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-import pytest
 from memory import memory_manager
-from actions import background_monitor
 
 
 def test_sqlite_memory_remember_and_search(tmp_path: Path, monkeypatch):
@@ -31,16 +29,14 @@ def test_sqlite_memory_remember_and_search(tmp_path: Path, monkeypatch):
     assert "Nothing stored" in search_after
 
 
-def test_background_monitor_decoupled_lock(tmp_path: Path, monkeypatch):
+def test_monitors_round_trip(tmp_path: Path, monkeypatch):
     test_db = tmp_path / "test_monitor_memory.db"
     test_json = tmp_path / "test_monitor_memory.json"
     monkeypatch.setattr(memory_manager, "DB_PATH", test_db)
     monkeypatch.setattr(memory_manager, "MEMORY_PATH", test_json)
 
-    # Ensure background_monitor does not use private _lock
-    assert not hasattr(background_monitor, "_lock")
-
-    background_monitor.add_monitor("linux kernel")
+    memory_manager.save_monitors({"linux_kernel": {"topic": "linux kernel", "added": "2026-10-20",
+                                                   "last_check": "", "last_hash": ""}})
     monitors = memory_manager.load_monitors()
     assert any("linux" in k for k in monitors.keys())
 

@@ -35,16 +35,12 @@ def _nvml_gpu() -> float:
             _fields_ = [("gpu", ctypes.c_uint), ("memory", ctypes.c_uint)]
 
         if _nvml_lib is None:
-            if _OS == "Windows":
-                candidates = ("nvml", r"C:\Windows\System32\nvml.dll")
-                _load = ctypes.WinDLL
-            else:
-                candidates = (
-                    "libnvidia-ml.so.1",
-                    "libnvidia-ml.so",
-                    "libnvidia-ml.dylib",
-                )
-                _load = ctypes.CDLL
+            candidates = (
+                "libnvidia-ml.so.1",
+                "libnvidia-ml.so",
+                "libnvidia-ml.dylib",
+            )
+            _load = ctypes.CDLL
             for name in candidates:
                 try:
                     lib = _load(name)
@@ -95,17 +91,6 @@ def _get_cpu_temp() -> float:
                 return entries[0].current
     except Exception:
         pass
-
-    # Windows: wmi module (pure Python COM, zero subprocess)
-    if _OS == "Windows":
-        try:
-            import wmi  # type: ignore
-            w = wmi.WMI(namespace="root/wmi")
-            tz = w.MSAcpi_ThermalZoneTemperature()
-            if tz:
-                return (tz[0].CurrentTemperature / 10.0) - 273.15
-        except Exception:
-            pass
 
     return -1.0
 
@@ -287,7 +272,7 @@ class SustainedResourceWatcher:
     def _notify_desktop(self, title: str, body: str):
         if shutil.which("notify-send"):
             try:
-                subprocess.run(["notify-send", "-u", "critical", "-a", "Kurek", title, body], check=False)
+                subprocess.run(["notify-send", "-u", "critical", "-a", "Kurek", title, body], check=False, timeout=10)
             except Exception:
                 pass
 

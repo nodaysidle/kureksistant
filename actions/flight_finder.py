@@ -6,7 +6,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from config import is_windows, is_mac, is_linux
+from config import is_mac
 
 def _get_base_dir() -> Path:
     if getattr(sys, "frozen", False):
@@ -60,7 +60,7 @@ def _parse_date(raw: str) -> str:
 
     try:
         from google import genai as _genai
-        _client  = _genai.Client(api_key=_get_api_key())
+        _client  = _genai.Client(api_key=_get_api_key(), http_options={"timeout": 60_000})
         response = _client.models.generate_content(
             model="gemini-flash-lite-latest",
             contents=(
@@ -154,7 +154,7 @@ def _parse_flights_with_gemini(
     from google import genai as _genai
     from google.genai import types
 
-    _client = _genai.Client(api_key=_get_api_key())
+    _client = _genai.Client(api_key=_get_api_key(), http_options={"timeout": 60_000})
     prompt  = (
         f"Extract flight options from {origin} to {destination} on {date} "
         f"from this Google Flights page text:\n\n{raw_text[:12000]}\n\n"
@@ -283,9 +283,7 @@ def _save_to_desktop(content: str, origin: str, destination: str) -> str:
     print(f"[FlightFinder] 💾 Saved: {filepath}")
 
     try:
-        if is_windows():
-            subprocess.Popen(["notepad.exe", str(filepath)])
-        elif is_mac():
+        if is_mac():
             subprocess.Popen(["open", "-t", str(filepath)])
         else:
             subprocess.Popen(["xdg-open", str(filepath)])

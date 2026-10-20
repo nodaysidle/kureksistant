@@ -60,6 +60,9 @@ def test_maximize_uses_fullscreen_mode_1_on_hyprland(monkeypatch):
 def test_close_tab_uses_ctrl_w_and_close_window_uses_killactive(monkeypatch):
     run = _Run()
     keys = []
+    # pyautogui path (no Wayland session); the wtype path is covered in
+    # tests/test_actions_hardening.py.
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     monkeypatch.setattr(computer_settings, "_OS", "Linux")
     monkeypatch.setattr(computer_settings, "_is_hyprland", lambda: True)
     monkeypatch.setattr(computer_settings.subprocess, "run", run)

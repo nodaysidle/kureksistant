@@ -8,8 +8,6 @@ Capabilities:
 """
 from __future__ import annotations
 
-import json
-import os
 import re
 import shutil
 import subprocess
@@ -23,7 +21,7 @@ def _copy_to_system_clipboard(text: str) -> bool:
     """Copies text to Wayland wl-copy, X11 xclip, or macOS pbcopy."""
     if shutil.which("wl-copy"):
         try:
-            subprocess.run(["wl-copy", text], check=True, timeout=2)
+            subprocess.run(["wl-copy"], input=text.encode("utf-8"), check=True, timeout=2)
             return True
         except Exception:
             pass

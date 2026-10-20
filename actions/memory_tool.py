@@ -6,7 +6,7 @@ Synchronizes with local memory and optional Hermes memories (see HERMES_* in .en
 from pathlib import Path
 
 from memory.config_manager import resolve_hermes_memory_dirs
-from memory.memory_manager import remember, search_memory, load_memory
+from memory.memory_manager import remember, search_memory
 
 
 def _resolve_hermes_dir() -> Path | None:

@@ -1,16 +1,10 @@
 import json
-import os
 import platform
 import shutil
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-
-_CNW: dict = (
-    {"creationflags": subprocess.CREATE_NO_WINDOW}
-    if platform.system() == "Windows" else {}
-)
 
 def _base_dir() -> Path:
     if getattr(sys, "frozen", False):
@@ -22,9 +16,7 @@ def _get_os() -> str:
     _sys = platform.system()
     if _sys == "Darwin":
         return "mac"
-    if _sys == "Linux":
-        return "linux"
-    return "windows"
+    return "linux"
 
 
 def _scripts_dir() -> Path:
@@ -47,43 +39,7 @@ def _write_notify_script(task_name: str, message: str, os_name: str) -> Path:
     script_path = _scripts_dir() / f"{task_name}.py"
     msg_literal = json.dumps(message)
 
-    if os_name == "windows":
-        notify_block = f"""
-message = {msg_literal}
-notified = False
-
-try:
-    from plyer import notification
-    notification.notify(title="J.A.R.V.I.S Reminder", message=message, timeout=15)
-    notified = True
-except Exception:
-    pass
-
-if not notified:
-    try:
-        from win10toast import ToastNotifier
-        ToastNotifier().show_toast("J.A.R.V.I.S Reminder", message, duration=15, threaded=False)
-        notified = True
-    except Exception:
-        pass
-
-if not notified:
-    try:
-        import subprocess
-        subprocess.run(["msg", "*", "/TIME:30", message], check=False)
-    except Exception:
-        pass
-
-try:
-    import winsound
-    for freq in [800, 1000, 1200]:
-        winsound.Beep(freq, 180)
-        import time; time.sleep(0.08)
-except Exception:
-    pass
-"""
-
-    elif os_name == "mac":
+    if os_name == "mac":
         notify_block = f"""
 message = {msg_literal}
 notified = False
@@ -143,62 +99,6 @@ except Exception:
     script_path.chmod(0o600)   # owner read/write only
     return script_path
 
-def _schedule_windows(target_dt: datetime, task_name: str,
-                      script_path: Path, message: str) -> str:
-    python_exe = Path(sys.executable)
-    pythonw = python_exe.parent / "pythonw.exe"
-    if pythonw.exists():
-        python_exe = pythonw
-
-    xml_path = _scripts_dir() / f"{task_name}.xml"
-    xml_content = (
-        '<?xml version="1.0" encoding="UTF-16"?>\n'
-        '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">\n'
-        '  <RegistrationInfo><Description>J.A.R.V.I.S Reminder</Description></RegistrationInfo>\n'
-        '  <Triggers><TimeTrigger>\n'
-        f'    <StartBoundary>{target_dt.strftime("%Y-%m-%dT%H:%M:%S")}</StartBoundary>\n'
-        '    <Enabled>true</Enabled>\n'
-        '  </TimeTrigger></Triggers>\n'
-        '  <Actions><Exec>\n'
-        f'    <Command>{python_exe}</Command>\n'
-        f'    <Arguments>"{script_path}"</Arguments>\n'
-        '  </Exec></Actions>\n'
-        '  <Settings>\n'
-        '    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\n'
-        '    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\n'
-        '    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\n'
-        '    <StartWhenAvailable>true</StartWhenAvailable>\n'
-        '    <ExecutionTimeLimit>PT5M</ExecutionTimeLimit>\n'
-        '    <Enabled>true</Enabled>\n'
-        '  </Settings>\n'
-        '  <Principals><Principal>\n'
-        '    <LogonType>InteractiveToken</LogonType>\n'
-        '    <RunLevel>LeastPrivilege</RunLevel>\n'
-        '  </Principal></Principals>\n'
-        '</Task>'
-    )
-
-    xml_path.write_text(xml_content, encoding="utf-16")
-
-    result = subprocess.run(
-        ["schtasks", "/Create", "/TN", task_name, "/XML", str(xml_path), "/F"],
-        capture_output=True, text=True, **_CNW,
-    )
-
-    try:
-        xml_path.unlink(missing_ok=True)
-    except Exception:
-        pass
-
-    if result.returncode != 0:
-        script_path.unlink(missing_ok=True)
-        err = (result.stderr or result.stdout).strip()
-        print(f"[Reminder] ❌ schtasks: {err}")
-        return ""
-
-    return task_name
-
-
 def _schedule_mac(target_dt: datetime, task_name: str,
                   script_path: Path) -> str:
     agents_dir = Path.home() / "Library" / "LaunchAgents"
@@ -237,7 +137,7 @@ def _schedule_mac(target_dt: datetime, task_name: str,
 
     result = subprocess.run(
         ["launchctl", "load", str(plist_path)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, timeout=10
     )
 
     if result.returncode != 0:
@@ -263,7 +163,7 @@ def _schedule_linux(target_dt: datetime, task_name: str,
                 "--",
                 sys.executable, str(script_path),
             ],
-            capture_output=True, text=True,
+            capture_output=True, text=True, timeout=10
         )
         if result.returncode == 0:
             return task_name
@@ -274,7 +174,7 @@ def _schedule_linux(target_dt: datetime, task_name: str,
         cmd_str = f"{sys.executable} {script_path}\n"
         result  = subprocess.run(
             ["at", at_time],
-            input=cmd_str, capture_output=True, text=True,
+            input=cmd_str, capture_output=True, text=True, timeout=10
         )
         if result.returncode == 0:
             return task_name
@@ -316,9 +216,7 @@ def reminder(
         return f"Could not prepare the reminder script: {e}"
 
     try:
-        if os_name == "windows":
-            job_id = _schedule_windows(target_dt, task_name, script_path, safe_msg)
-        elif os_name == "mac":
+        if os_name == "mac":
             job_id = _schedule_mac(target_dt, task_name, script_path)
         else:
             job_id = _schedule_linux(target_dt, task_name, script_path)

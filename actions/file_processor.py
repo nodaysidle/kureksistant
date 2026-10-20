@@ -16,14 +16,13 @@ Supported types:
   pptx    → summarize, extract_text, to_pdf
 """
 
-import os
 import re
 import json
 import shutil
+import tarfile
 import subprocess
 import tempfile
 from pathlib import Path
-from datetime import datetime
 
 def _get_api_key() -> str:
     from memory.config_manager import get_gemini_key
@@ -32,7 +31,7 @@ def _get_api_key() -> str:
 
 def _gemini_client():
     from google import genai
-    _c = genai.Client(api_key=_get_api_key())
+    _c = genai.Client(api_key=_get_api_key(), http_options={"timeout": 100_000})
 
     class _W:
         def generate_content(self, contents):
@@ -709,12 +708,24 @@ def _process_video(path: Path, action: str, params: dict, speak=None) -> str:
 
     return f"Unknown video action: '{action}'. Try: info, trim, extract_audio, extract_frame, compress, transcribe, convert"
 
+def _safe_unpack(path: Path, dest: Path) -> None:
+    """Unpack an archive; tar members are run through the 'data' filter so
+    absolute paths, '..' traversal and device files cannot escape dest."""
+    if tarfile.is_tarfile(path):
+        try:
+            shutil.unpack_archive(path, dest, filter="data")
+            return
+        except TypeError:
+            pass  # Python without extraction filters
+    shutil.unpack_archive(path, dest)
+
+
 def _process_archive(path: Path, action: str, params: dict, speak=None) -> str:
     action = action or "list"
 
     if action == "list":
         try:
-            import zipfile, tarfile
+            import zipfile
             ext = path.suffix.lower()
             if ext == ".zip":
                 with zipfile.ZipFile(path) as z:
@@ -734,7 +745,7 @@ def _process_archive(path: Path, action: str, params: dict, speak=None) -> str:
         dest = Path(params.get("destination", str(path.parent / path.stem)))
         dest.mkdir(parents=True, exist_ok=True)
         try:
-            shutil.unpack_archive(path, dest)
+            _safe_unpack(path, dest)
             return f"Extracted to: {dest}"
         except Exception as e:
             return f"Extract failed: {e}"

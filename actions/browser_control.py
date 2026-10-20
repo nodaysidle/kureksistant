@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
-import os
 import platform
 import shutil
 import subprocess
@@ -19,7 +18,7 @@ from playwright.async_api import (
     Playwright,
     TimeoutError as PlaywrightTimeout,
 )
-_OS = platform.system()   # "Windows" | "Darwin" | "Linux"
+_OS = platform.system()   # "Darwin" | "Linux"
 
 def _normalize_url(url: str) -> str:
     """
@@ -39,12 +38,6 @@ def _normalize_url(url: str) -> str:
 
 
 def _user_agent() -> str:
-    if _OS == "Windows":
-        return (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
-        )
     if _OS == "Darwin":
         return (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -60,25 +53,10 @@ def _user_agent() -> str:
 
 def _real_profile_dir(browser: str) -> str:
     home  = Path.home()
-    local = os.environ.get("LOCALAPPDATA", "")
-    roam  = os.environ.get("APPDATA", "")
 
     candidates: list[Path] = []
 
-    if _OS == "Windows":
-        m = {
-            "chrome":   [Path(local) / "Google"          / "Chrome"          / "User Data"],
-            "edge":     [Path(local) / "Microsoft"        / "Edge"            / "User Data"],
-            "brave":    [Path(local) / "BraveSoftware"    / "Brave-Browser"   / "User Data"],
-            "vivaldi":  [Path(local) / "Vivaldi"          / "User Data"],
-            "opera":    [Path(roam)  / "Opera Software"   / "Opera Stable",
-                         Path(local) / "Opera Software"   / "Opera Stable"],
-            "operagx":  [Path(roam)  / "Opera Software"   / "Opera GX Stable",
-                         Path(local) / "Opera Software"   / "Opera GX Stable"],
-        }
-        candidates = m.get(browser, [])
-
-    elif _OS == "Darwin":
+    if _OS == "Darwin":
         lib = home / "Library" / "Application Support"
         m = {
             "chrome":   [lib / "Google"             / "Chrome"],
@@ -115,9 +93,7 @@ def _real_profile_dir(browser: str) -> str:
 def _firefox_profile_dir() -> Optional[str]:
     home = Path.home()
 
-    if _OS == "Windows":
-        base = Path(os.environ.get("APPDATA", "")) / "Mozilla" / "Firefox"
-    elif _OS == "Darwin":
+    if _OS == "Darwin":
         base = home / "Library" / "Application Support" / "Firefox"
     else:
         base = home / ".mozilla" / "firefox"
@@ -151,80 +127,7 @@ def _firefox_profile_dir() -> Optional[str]:
         return default_path
     return None
 
-def _find_opera_windows() -> Optional[str]:
-    local  = os.environ.get("LOCALAPPDATA", "")
-    prog   = os.environ.get("PROGRAMFILES", "")
-    prog86 = os.environ.get("PROGRAMFILES(X86)", "")
-
-    candidates = [
-        Path(local)  / "Programs" / "Opera"    / "opera.exe",
-        Path(local)  / "Programs" / "Opera GX" / "opera.exe",
-        Path(prog)   / "Opera"    / "opera.exe",
-        Path(prog86) / "Opera"    / "opera.exe",
-    ]
-    for p in candidates:
-        if p.exists():
-            print(f"[Browser] Opera found at: {p}")
-            return str(p)
-
-    try:
-        import winreg
-        keys = [
-            r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\opera.exe",
-            r"SOFTWARE\Clients\StartMenuInternet\OperaStable\shell\open\command",
-            r"SOFTWARE\Clients\StartMenuInternet\OperaGXStable\shell\open\command",
-            r"SOFTWARE\Clients\StartMenuInternet\opera\shell\open\command",
-        ]
-        for key_path in keys:
-            for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
-                try:
-                    k   = winreg.OpenKey(hive, key_path)
-                    val = winreg.QueryValue(k, None)
-                    winreg.CloseKey(k)
-                    exe = val.strip().strip('"').split('"')[0].split(" --")[0].strip()
-                    if exe and Path(exe).exists():
-                        print(f"[Browser] Opera found via registry: {exe}")
-                        return exe
-                except Exception:
-                    continue
-    except Exception:
-        pass
-
-    return shutil.which("opera") or None
-
-def _find_exe_windows(prog_name: str) -> Optional[str]:
-    try:
-        import winreg
-        paths_to_try = [
-            rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{prog_name}.exe",
-            rf"SOFTWARE\Clients\StartMenuInternet\{prog_name}\shell\open\command",
-        ]
-        for key_path in paths_to_try:
-            for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
-                try:
-                    k   = winreg.OpenKey(hive, key_path)
-                    val = winreg.QueryValue(k, None)
-                    winreg.CloseKey(k)
-                    exe = val.strip().strip('"').split('"')[0].split(" --")[0].strip()
-                    if exe and Path(exe).exists():
-                        return exe
-                except Exception:
-                    continue
-    except Exception:
-        pass
-    return None
-
 _BROWSER_SPECS: dict[str, dict] = {
-    "Windows": {
-        "chrome":   {"engine": "chromium", "channel": "chrome",  "bins": []},
-        "edge":     {"engine": "chromium", "channel": "msedge",  "bins": []},
-        "firefox":  {"engine": "firefox",  "channel": None,      "bins": ["firefox.exe"]},
-        "opera":    {"engine": "chromium", "channel": None,      "bins": ["opera.exe"],  "special": "opera_windows"},
-        "operagx":  {"engine": "chromium", "channel": None,      "bins": [],             "special": "opera_windows"},
-        "brave":    {"engine": "chromium", "channel": None,      "bins": ["brave.exe"]},
-        "vivaldi":  {"engine": "chromium", "channel": None,      "bins": ["vivaldi.exe"]},
-        "safari":   None,
-    },
     "Darwin": {
         "chrome":   {"engine": "chromium", "channel": "chrome",  "bins": []},
         "edge":     {"engine": "chromium", "channel": "msedge",  "bins": ["microsoft-edge"]},
@@ -273,12 +176,6 @@ def _resolve_browser(name: str) -> dict | None:
     bins    = spec.get("bins", [])
     exe     = None
 
-    if spec.get("special") == "opera_windows":
-        exe = _find_opera_windows()
-        if not exe:
-            print(f"[Browser] ⚠️  Opera executable not found on Windows.")
-        return {"engine": engine, "exe": exe, "channel": channel}
-
     for b in bins:
         found = shutil.which(b)
         if found:
@@ -302,27 +199,12 @@ def _resolve_browser(name: str) -> dict | None:
                     exe = str(found_bins[0])
                     break
 
-    if not exe and _OS == "Windows" and not channel:
-        exe = _find_exe_windows(name)
-
     return {"engine": engine, "exe": exe, "channel": channel}
 
 
 def _detect_default_browser() -> str:
     try:
-        if _OS == "Windows":
-            import winreg
-            k = winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\Shell\Associations"
-                r"\UrlAssociations\http\UserChoice",
-            )
-            prog_id = winreg.QueryValueEx(k, "ProgId")[0].lower()
-            winreg.CloseKey(k)
-            for kw in ("edge", "firefox", "opera", "brave", "vivaldi", "chrome"):
-                if kw in prog_id:
-                    return kw
-        elif _OS == "Darwin":
+        if _OS == "Darwin":
             out = subprocess.run(
                 ["defaults", "read",
                  "com.apple.LaunchServices/com.apple.launchservices.secure",
@@ -363,9 +245,6 @@ _MAC_APP_NAMES: dict[str, str] = {
     "safari":  "Safari",
 }
 
-# Windows registry lookup names for browsers whose spec has no explicit binary
-_WIN_EXE_HINTS: dict[str, str] = {"chrome": "chrome", "edge": "msedge"}
-
 
 def _open_native(url: str, browser_name: Optional[str]) -> str:
     """
@@ -374,7 +253,7 @@ def _open_native(url: str, browser_name: Optional[str]) -> str:
     about:blank tab or a blank profile NEVER shows up.
     If url is empty the browser starts with no URL (its own start page /
     session restore) — exactly as if the user had opened it themselves.
-    Works on all three of Windows / macOS / Linux.
+    Works on macOS and Linux.
     """
     url = _normalize_url(url) if url and url.strip() else ""
     if url == "about:blank":
@@ -401,11 +280,6 @@ def _open_native(url: str, browser_name: Optional[str]) -> str:
 
         spec = _resolve_browser(name)
         exe  = spec.get("exe") if spec else None
-        if not exe and _OS == "Windows":
-            if name in ("opera", "operagx"):
-                exe = _find_opera_windows()
-            else:
-                exe = _find_exe_windows(_WIN_EXE_HINTS.get(name, name))
         if exe:
             try:
                 subprocess.Popen(
@@ -422,9 +296,7 @@ def _open_native(url: str, browser_name: Optional[str]) -> str:
 
     # Default browser via the OS — exactly like the user clicking a link.
     try:
-        if _OS == "Windows":
-            os.startfile(url)                       # ShellExecute → default browser
-        elif _OS == "Darwin":
+        if _OS == "Darwin":
             subprocess.run(["open", url], check=True, timeout=10)
         else:
             subprocess.Popen(

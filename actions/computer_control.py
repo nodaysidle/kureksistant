@@ -6,14 +6,11 @@ import shutil
 import string
 import subprocess
 import sys
-
-if platform.system() == "Windows":
-    _WIN_HIDE: dict = {"creationflags": subprocess.CREATE_NO_WINDOW}
-else:
-    _WIN_HIDE: dict = {}
 import time
 import random
 from pathlib import Path
+
+from actions import _wtype
 
 try:
     import pyautogui
@@ -46,14 +43,14 @@ def _load_config() -> dict:
         return {}
 
 def _platform_os() -> str:
-    return {"Windows": "windows", "Darwin": "mac", "Linux": "linux"}.get(
+    return {"Darwin": "mac", "Linux": "linux"}.get(
         platform.system(), "linux"
     )
 
 def _get_os() -> str:
     real = _platform_os()
     cfg = _load_config().get("os_system", "").lower()
-    if cfg in ("windows", "mac", "linux") and cfg == real:
+    if cfg in ("mac", "linux") and cfg == real:
         return cfg
     return real
 
@@ -160,6 +157,12 @@ def _user_profile() -> dict:
     return {}
 
 def _type(text: str, interval: float = 0.03) -> str:
+    if _wtype.available():
+        time.sleep(0.3)
+        err = _wtype.run(_wtype.text_argv(text))
+        if err:
+            return f"Typing failed (wtype): {err}"
+        return f"Typed: {text[:60]}{'…' if len(text) > 60 else ''}"
     _require_pyautogui()
     time.sleep(0.3)
     pyautogui.typewrite(text, interval=interval)
@@ -167,6 +170,14 @@ def _type(text: str, interval: float = 0.03) -> str:
 
 
 def _smart_type(text: str, clear_first: bool = True) -> str:
+    if _wtype.available():
+        if clear_first:
+            _clear_field()
+            time.sleep(0.1)
+        err = _wtype.run(_wtype.text_argv(text))
+        if err:
+            return f"Typing failed (wtype): {err}"
+        return f"Smart-typed: {text[:60]}{'…' if len(text) > 60 else ''}"
     _require_pyautogui()
     if clear_first:
         _clear_field()
@@ -193,12 +204,22 @@ def _click(x=None, y=None, button: str = "left", clicks: int = 1) -> str:
 
 
 def _hotkey(*keys) -> str:
+    if _wtype.available():
+        err = _wtype.run(_wtype.hotkey_argv(*keys))
+        if err:
+            return f"Hotkey {'+'.join(keys)} failed (wtype): {err}"
+        return f"Hotkey: {'+'.join(keys)}"
     _require_pyautogui()
     pyautogui.hotkey(*keys)
     return f"Hotkey: {'+'.join(keys)}"
 
 
 def _press(key: str) -> str:
+    if _wtype.available():
+        err = _wtype.run(_wtype.key_argv(key))
+        if err:
+            return f"Pressing {key} failed (wtype): {err}"
+        return f"Pressed: {key}"
     _require_pyautogui()
     pyautogui.press(key)
     return f"Pressed: {key}"
@@ -237,6 +258,11 @@ def _clipboard_paste(text: str) -> str:
     if _PYPERCLIP:
         pyperclip.copy(text)
         time.sleep(0.1)
+        if _wtype.available():
+            err = _wtype.run(_wtype.hotkey_argv("ctrl", "v"))
+            if err:
+                return f"Paste failed (wtype): {err}"
+            return f"Pasted: {text[:60]}{'…' if len(text) > 60 else ''}"
         _require_pyautogui()
         paste_key = "command" if _get_os() == "mac" else "ctrl"
         pyautogui.hotkey(paste_key, "v")
@@ -265,6 +291,10 @@ def _screenshot(save_path: str | None = None) -> str:
 
 
 def _clear_field() -> str:
+    if _wtype.available():
+        err = (_wtype.run(_wtype.hotkey_argv("ctrl", "a"))
+               or _wtype.run(_wtype.key_argv("delete")))
+        return f"Clear field failed (wtype): {err}" if err else "Field cleared"
     _require_pyautogui()
     select_key = "command" if _get_os() == "mac" else "ctrl"
     pyautogui.hotkey(select_key, "a")
@@ -274,18 +304,6 @@ def _clear_field() -> str:
 
 def _focus_window(title: str) -> str:
     os_name = _get_os()
-
-    if os_name == "windows":
-        try:
-            script = f'(New-Object -ComObject WScript.Shell).AppActivate("{title}")'
-            subprocess.run(
-                ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-                capture_output=True, timeout=5, **_WIN_HIDE,
-            )
-            time.sleep(0.3)
-            return f"Focused window: {title}"
-        except Exception as e:
-            return f"focus_window (Windows) failed: {e}"
 
     if os_name == "mac":
         script = (
@@ -345,6 +363,8 @@ def _focus_window(title: str) -> str:
                 ["xdotool", "search", "--name", title, "windowactivate"],
                 capture_output=True, timeout=5,
             )
+            if result.returncode != 0:
+                return f"Could not find a window matching '{title}'."
             time.sleep(0.3)
             return f"Focused window: {title}"
         except FileNotFoundError:
@@ -371,7 +391,7 @@ def _screen_find(description: str) -> tuple[int, int] | None:
         img.save(buf, format="PNG")
         image_bytes = buf.getvalue()
 
-        client = genai.Client(api_key=api_key)
+        client = genai.Client(api_key=api_key, http_options={"timeout": 60_000})
         prompt = (
             f"This is a screenshot of a {w}×{h} pixel screen. "
             f"Locate the UI element described as: '{description}'. "
