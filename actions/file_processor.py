@@ -714,9 +714,11 @@ def _safe_unpack(path: Path, dest: Path) -> None:
     if tarfile.is_tarfile(path):
         try:
             shutil.unpack_archive(path, dest, filter="data")
-            return
-        except TypeError:
-            pass  # Python without extraction filters
+        except TypeError as e:
+            # Python without extraction filters (< 3.12): refuse rather than
+            # extract unchecked members.
+            raise RuntimeError("this Python can't extract tar archives safely (needs 3.12+)") from e
+        return
     shutil.unpack_archive(path, dest)
 
 

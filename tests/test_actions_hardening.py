@@ -226,3 +226,28 @@ def test_pyautogui_used_without_wayland(monkeypatch):
     monkeypatch.setattr(computer_control.pyautogui, "hotkey", lambda *k: keys.append(k))
     computer_control._hotkey("ctrl", "c")
     assert keys == [("ctrl", "c")]
+
+
+def test_tar_extract_fails_closed_without_filter_support(tmp_path, monkeypatch):
+    import io
+    import shutil
+    import tarfile
+
+    from actions import file_processor as fp
+
+    archive = tmp_path / "a.tar"
+    with tarfile.open(archive, "w") as tf:
+        data = b"hi"
+        info = tarfile.TarInfo("ok.txt")
+        info.size = len(data)
+        tf.addfile(info, io.BytesIO(data))
+
+    def no_filter(path, dest, **kwargs):
+        if "filter" in kwargs:
+            raise TypeError("unexpected keyword argument 'filter'")
+        raise AssertionError("must not extract without the filter")
+
+    monkeypatch.setattr(shutil, "unpack_archive", no_filter)
+    import pytest
+    with pytest.raises(RuntimeError):
+        fp._safe_unpack(archive, tmp_path / "out")

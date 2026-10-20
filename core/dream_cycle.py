@@ -87,6 +87,24 @@ def text_from_llm_response(resp, default: str = "") -> str:
     return default
 
 
+def sanitize_guidance(text: str) -> str:
+    """Neutralise LLM output so it can't plant permanent boundaries.
+
+    Only the daemon's own Jev path (kurek_daemon._consolidate_with_jev) may
+    write BOUNDARY_MARKER lines. The nightly guidance is regenerated from logs
+    that include web and tool text, so strip the marker and demote any
+    "Persistent Boundaries" heading before it is written to the file.
+    """
+    if not text:
+        return text
+    out = []
+    for line in text.replace(BOUNDARY_MARKER, "[boundary]").splitlines():
+        if line.strip().lstrip("#").strip().lower() == PERSISTENT_SECTION.lstrip("#").strip().lower():
+            line = "### Suggested Boundaries"
+        out.append(line)
+    return "\n".join(out).strip()
+
+
 def execute_dream_cycle(force: bool = False, day: str | None = None) -> dict:
     """Reflect on ``day`` (YYYY-MM-DD; default: yesterday).
 
@@ -168,7 +186,7 @@ Return a concise Markdown block with:
         messages=[{"role": "user", "content": align_prompt}],
         model="deepseek-flash"
     )
-    extracted_guidance = text_from_llm_response(align_resp)
+    extracted_guidance = sanitize_guidance(text_from_llm_response(align_resp))
 
     # Update ALIGNMENT_SYNTHESIS.md, carrying forward boundaries hoisted during the day.
     if extracted_guidance:
