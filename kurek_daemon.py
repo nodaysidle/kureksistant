@@ -1629,7 +1629,9 @@ class KurekHTTPHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
+            # Close after "done": keep-alive would leave the client waiting on an
+            # unterminated body (no Content-Length) after the stream ends.
+            self.send_header("Connection", "close")
             self.end_headers()
 
             stream_lock = threading.Lock()
