@@ -143,11 +143,13 @@ class WhisperSTT:
 class DeepgramSTT:
     """Ultra-low latency cloud STT via Deepgram Nova-2 / Nova-3."""
 
-    def __init__(self, api_key: str | None = None, model: str = "nova-2"):
+    def __init__(self, api_key: str | None = None, model: str = "nova-2", language: str | None = None):
         import os
         from memory.config_manager import get_deepgram_key
         self.api_key = api_key or get_deepgram_key() or os.environ.get("DEEPGRAM_API_KEY", "")
         self.model = model
+        pinned = (language or "").strip().lower()
+        self.language = None if pinned in ("", "auto") else pinned
 
     def transcribe(self, audio_data, sample_rate: int = 16000) -> str:
         """Transcribe a numpy buffer or WAV bytes via Deepgram. Raises STTError on failure."""
@@ -155,6 +157,8 @@ class DeepgramSTT:
             raise STTError("Deepgram STT: DEEPGRAM_API_KEY is not set")
         payload = _to_wav_bytes(audio_data, sample_rate)
         url = f"https://api.deepgram.com/v1/listen?model={self.model}&smart_format=true"
+        if self.language:
+            url += f"&language={self.language}"
         headers = {
             "Authorization": f"Token {self.api_key}",
             "Content-Type": "audio/wav",

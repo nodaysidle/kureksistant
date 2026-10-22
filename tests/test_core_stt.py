@@ -143,3 +143,33 @@ def test_fallback_lazy_init_is_thread_safe() -> None:
     for t in threads:
         t.join()
     assert count == 1
+
+
+def test_deepgram_language_is_pinned_in_the_url(monkeypatch) -> None:
+    seen = {}
+
+    def post(url, *a, **k):
+        seen["url"] = url
+        return _Resp(200, {"results": {"channels": [{"alternatives": [{"transcript": "hi"}]}]}})
+
+    monkeypatch.setattr(requests, "post", post)
+    assert DeepgramSTT(api_key="k", language="en").transcribe(AUDIO) == "hi"
+    assert "language=en" in seen["url"]
+
+    assert DeepgramSTT(api_key="k", language="auto").transcribe(AUDIO) == "hi"
+    assert "language=" not in seen["url"]
+
+
+def test_openrouter_language_is_pinned_in_the_payload(monkeypatch) -> None:
+    seen = {}
+
+    def post(_url, *_a, json=None, **_k):
+        seen["payload"] = json
+        return _Resp(200, {"text": "hi"})
+
+    monkeypatch.setattr(requests, "post", post)
+    assert OpenRouterSTT(api_key="k", language="en").transcribe(AUDIO) == "hi"
+    assert seen["payload"]["language"] == "en"
+
+    OpenRouterSTT(api_key="k").transcribe(AUDIO)
+    assert "language" not in seen["payload"]

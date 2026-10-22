@@ -230,8 +230,8 @@ def test_check_auto_screen_p09_triggers(monkeypatch, capsys) -> None:
     monkeypatch.setattr(daemon, "load_api_keys", lambda: {})
     monkeypatch.setattr(
         daemon,
-        "query_openrouter_needs_screen",
-        lambda *_a, **_k: 0.9,
+        "query_needs_screen",
+        lambda *_a, **_k: (0.9, "Microsoft-Decision-1"),
     )
     captured: list = []
     _stub_screen_capture(monkeypatch, captured)
@@ -257,8 +257,8 @@ def test_check_auto_screen_p02_does_not_trigger(monkeypatch) -> None:
     monkeypatch.setattr(daemon, "load_api_keys", lambda: {})
     monkeypatch.setattr(
         daemon,
-        "query_openrouter_needs_screen",
-        lambda *_a, **_k: 0.2,
+        "query_needs_screen",
+        lambda *_a, **_k: (0.2, "Microsoft-Decision-1"),
     )
     captured: list = []
     _stub_screen_capture(monkeypatch, captured)
@@ -267,34 +267,17 @@ def test_check_auto_screen_p02_does_not_trigger(monkeypatch) -> None:
     assert captured == []
 
 
-def test_malformed_openrouter_falls_back_to_typesafe(monkeypatch, capsys) -> None:
+def test_jev_answer_still_triggers_capture(monkeypatch, capsys) -> None:
+    """Provider fallback lives in core.decision_client; the daemon only gates."""
     import kurek_daemon as daemon
 
     engine = _make_lite_engine(monkeypatch)
     monkeypatch.setattr(daemon, "auto_screen_enabled", lambda: True)
-    monkeypatch.setattr(daemon, "get_openrouter_api_key", lambda: SECRET_KEY)
-    monkeypatch.setattr(daemon, "get_typesafe_key", lambda: "ts-test-key")
     monkeypatch.setattr(daemon, "load_api_keys", lambda: {})
     monkeypatch.setattr(
         daemon,
-        "query_openrouter_needs_screen",
-        lambda *_a, **_k: None,  # malformed / failed Decision-1
-    )
-
-    class _FakeNoul:
-        def __init__(self, instructions: str):
-            self.instructions = instructions
-
-    class _FakeClient:
-        def system_one(self, **_kwargs):
-            return SimpleNamespace(
-                answers={"needs_screen": SimpleNamespace(noul=0.88)}
-            )
-
-    monkeypatch.setitem(
-        sys.modules,
-        "typesafe_sdk",
-        SimpleNamespace(TypeSafeClient=_FakeClient, Noul=_FakeNoul),
+        "query_needs_screen",
+        lambda *_a, **_k: (0.88, "TypeSafe Jev"),
     )
     captured: list = []
     _stub_screen_capture(monkeypatch, captured)
@@ -341,7 +324,7 @@ def test_opt_out_skips_decision_and_capture(monkeypatch) -> None:
 
     monkeypatch.setattr(daemon, "get_openrouter_api_key", lambda: SECRET_KEY)
     monkeypatch.setattr(daemon, "get_typesafe_key", lambda: "ts-key")
-    monkeypatch.setattr(daemon, "query_openrouter_needs_screen", mark_or)
+    monkeypatch.setattr(daemon, "query_needs_screen", mark_or)
     monkeypatch.setattr(daemon, "load_api_keys", lambda: {})
     captured: list = []
     _stub_screen_capture(monkeypatch, captured)
