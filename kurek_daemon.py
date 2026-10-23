@@ -53,7 +53,7 @@ from core.decision_client import (
     auto_screen_enabled,
     query_needs_screen,
 )
-from core.llm_client import stream_deepseek_sentences
+from core.llm_client import brain_name, stream_deepseek_sentences
 from core.tts import create_tts_player
 from core.stt import DeepgramSTT, FallbackSTT, OpenRouterSTT, STTError, WhisperSTT
 from core.action_loader import discover_actions
@@ -977,7 +977,7 @@ class KurekEngine:
         sys_prompt = (
             f"You are Kurek, an ultra-fast, terse, hyper-competent personal AI assistant. "
             f"Current date and time: {now_str}. "
-            f"You are assisting {user_name}. Your voice is powered by xAI Grok (Sol) and your brain is powered directly by DeepSeek-Flash. "
+            f"You are assisting {user_name}. Your voice is powered by xAI Grok (Sol) and your brain is powered directly by {brain_name()}. "
             f"Execute {user_name}'s commands promptly and helpfully. "
             "You are running natively on the user's workstation with local tool access (not a remote sandbox). "
             "You have direct system control access through your built-in tools: "
@@ -1150,10 +1150,10 @@ class KurekEngine:
 
         if stream_error or (not reply_text and not last_tool_output and sentence_count == 0):
             if stream_error:
-                failure_msg = "I couldn't reach DeepSeek right now."
+                failure_msg = f"I couldn't reach {brain_name()} right now."
                 detail = stream_error
             else:
-                failure_msg = "I didn't get a response from DeepSeek."
+                failure_msg = f"I didn't get a response from {brain_name()}."
                 detail = "empty stream"
             print(f"[Kurek] Stream failure ({detail})", flush=True)
             self._notify_failure(failure_msg)
