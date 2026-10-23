@@ -25,7 +25,7 @@ def test_execute_dream_cycle_handles_str_dict_none(monkeypatch, tmp_path: Path) 
     monkeypatch.setattr(dream_cycle, "HOME", tmp_path)
     monkeypatch.setattr(dream_cycle, "DREAMS_DIR", dreams)
     monkeypatch.setattr(dream_cycle, "MEMORY_DIR", memory)
-    monkeypatch.setattr(dream_cycle, "ALIGNMENT_FILE", tmp_path / "ALIGNMENT_SYNTHESIS.md")
+    monkeypatch.setattr("core.proposals.PROPOSALS_PATH", tmp_path / "kurek_proposed_rules.md")
     monkeypatch.setattr(dream_cycle, "STATE_FILE", tmp_path / "ALIGNMENT_STATE.yaml")
     monkeypatch.setattr(dream_cycle, "REPAIRS_FILE", tmp_path / "REPAIR_THREADS.yaml")
 
@@ -51,8 +51,8 @@ def test_execute_dream_cycle_handles_str_dict_none(monkeypatch, tmp_path: Path) 
     assert result["status"] == "success"
     dream_text = (dreams / f"{today}.md").read_text(encoding="utf-8")
     assert "Atmospheric dream prose" in dream_text
-    align_text = (tmp_path / "ALIGNMENT_SYNTHESIS.md").read_text(encoding="utf-8")
-    assert "Prefer concise replies" in align_text
+    proposed = (tmp_path / "kurek_proposed_rules.md").read_text(encoding="utf-8")
+    assert "Prefer concise replies" in proposed
 
 
 def test_execute_dream_cycle_align_none_no_attribute_error(monkeypatch, tmp_path: Path) -> None:
@@ -64,7 +64,7 @@ def test_execute_dream_cycle_align_none_no_attribute_error(monkeypatch, tmp_path
     monkeypatch.setattr(dream_cycle, "HOME", tmp_path)
     monkeypatch.setattr(dream_cycle, "DREAMS_DIR", dreams)
     monkeypatch.setattr(dream_cycle, "MEMORY_DIR", memory)
-    monkeypatch.setattr(dream_cycle, "ALIGNMENT_FILE", tmp_path / "ALIGNMENT_SYNTHESIS.md")
+    monkeypatch.setattr("core.proposals.PROPOSALS_PATH", tmp_path / "kurek_proposed_rules.md")
     monkeypatch.setattr(dream_cycle, "STATE_FILE", tmp_path / "ALIGNMENT_STATE.yaml")
     monkeypatch.setattr(dream_cycle, "REPAIRS_FILE", tmp_path / "REPAIR_THREADS.yaml")
 
@@ -82,5 +82,5 @@ def test_execute_dream_cycle_align_none_no_attribute_error(monkeypatch, tmp_path
 
     result = dream_cycle.execute_dream_cycle(force=True, day=today)
     assert result["status"] == "success"
-    # None alignment guidance must not write ALIGNMENT_SYNTHESIS.md
-    assert not (tmp_path / "ALIGNMENT_SYNTHESIS.md").exists()
+    # None guidance must not create a proposals file
+    assert not (tmp_path / "kurek_proposed_rules.md").exists()

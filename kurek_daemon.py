@@ -61,6 +61,7 @@ from core.hyprland_watcher import get_hyprland_watcher
 from core.mpv_sink import get_mpv_sink
 from core.timing import begin_query, end_query
 from core import confirm
+from core.proposals import propose
 from core.rules import prompt_block as rules_prompt_block
 from memory.atomic_io import atomic_write_text
 from memory.memory_manager import load_memory, format_memory_for_prompt
@@ -1006,7 +1007,7 @@ class KurekEngine:
             "• process_sentinel: watch long-running compile, build, test, or training jobs (cargo, npm, python, rustc, make). Use action='watch' with a process name, command, or PID. When the job finishes, Kurek alerts verbally and sends a notification. "
             "• draft_to_clipboard: format dictated text into conventional commits, GitHub PR descriptions, issues, docstrings, or markdown notes and copies immediately to the Wayland system clipboard (wl-copy) for instant pasting with Ctrl+V. "
             "• workstation_radar: parallel health scan across repositories in ~/Projects and similar project roots. Use action='actionable' to report dirty working trees, untracked files, and unpushed commits ahead of upstream. "
-            "• dream_tool: executes the Muse Memory reflection cycle. Synthesizes today's daily log into an atmospheric dream journal (~/dreams/YYYY-MM-DD.md) and updates standing guidance in ~/ALIGNMENT_SYNTHESIS.md. "
+            "• dream_tool: executes the Muse Memory reflection cycle. Synthesizes today's daily log into an atmospheric dream journal (~/dreams/YYYY-MM-DD.md) and writes rule proposals to ~/kurek_proposed_rules.md for the user to review. "
             + _run_tool_prompt_line() +
             "• vault_knowledge: access the nodaysidle-knowledge llm-wiki and Obsidian vault. Use action='list_projects' when asked about what projects exist in the nodaysidle portfolio, what is done, active projects, or releases. Use action='read' with note_name (e.g. 'x-promo-strategy', 'cascade-v3-overview', 'nodaysrammar-overview', 'kureksistant-overview', 'nodaysidle-sonora-overview') to read architecture specs, project PRDs, roadmaps, or social media promotion plans. Use action='search' with a query to look up anything across all notes in the vault. Use action='add_inbox' to capture quick ideas or tasks directly into the vault inbox. "
             "Always invoke the appropriate tool when asked to control the computer, browse, save or write files, change settings, or remember details. "
@@ -1387,11 +1388,10 @@ class KurekEngine:
                 if muse_core.exists() and self._append_unique(muse_core, f"- [{kind.upper()}] {fact} ", line):
                     print(f"[Muse Jev] 🧠 Consolidated durable {kind} into MEMORY.md: {fact[:60]}...", flush=True)
 
-                if kind == "boundary":
-                    align_file = Path.home() / "ALIGNMENT_SYNTHESIS.md"
-                    boundary = f"- **[BOUNDARY]** {fact}\n"
-                    if align_file.exists() and self._append_unique(align_file, boundary.rstrip("\n"), boundary):
-                        print("[Muse Jev] 🛡️ Hoisted boundary into ALIGNMENT_SYNTHESIS.md", flush=True)
+                if kind == "boundary" and propose(
+                    f"jev (boundary, salience {salience:.1f})", fact, heard=fact, source=f"daily/{today}.md"
+                ):
+                    print("[Muse Jev] 🛡️ Proposed boundary in kurek_proposed_rules.md", flush=True)
         except Exception as e:
             print(f"[Muse Jev Consolidation Notice] {e}", flush=True)
 

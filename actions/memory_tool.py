@@ -5,6 +5,7 @@ Synchronizes with local memory and optional Hermes memories (see HERMES_* in .en
 """
 from pathlib import Path
 
+from core.proposals import propose
 from memory.config_manager import resolve_hermes_memory_dirs
 from memory.memory_manager import remember, search_memory
 
@@ -113,17 +114,10 @@ def manage_memory(parameters: dict, **kwargs) -> str:
     except Exception as e:
         print(f"[Memory Tool] Muse sync notice: {e}")
 
-    # 3. If Jev detected a hard boundary, hoist to ~/ALIGNMENT_SYNTHESIS.md
+    # 3. A hard boundary is only proposed; the user promotes it to rules.toml
     if jev_meta and jev_meta.get("kind") == "boundary":
-        try:
-            align_file = Path.home() / "ALIGNMENT_SYNTHESIS.md"
-            if align_file.exists():
-                boundary_entry = f"- **[BOUNDARY] {key}:** {value}\n"
-                with open(align_file, "a", encoding="utf-8") as f:
-                    f.write(boundary_entry)
-                print(f"[Memory Tool] Boundary hoisted to ALIGNMENT_SYNTHESIS.md by Jev.")
-        except Exception as e:
-            print(f"[Memory Tool] Alignment hoist notice: {e}")
+        if propose("manage_memory (jev boundary)", f"{key}: {value}", source="manage_memory tool call"):
+            print("[Memory Tool] Boundary proposed in kurek_proposed_rules.md.")
 
     return f"{local_res} (synced to Hermes and Muse MEMORY.md{salience_tag})."
 

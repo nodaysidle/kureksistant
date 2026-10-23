@@ -6,8 +6,9 @@ Flow (runs early morning, reflects on the previous day by default):
   2. Uses DeepSeek-Flash to compose an evocative prose "dream" reflecting that day.
   3. Writes dream to ~/dreams/YYYY-MM-DD.md (with <!-- prompt_hoisted: false -->).
      If the LLM call fails nothing is written, so the next hourly sweep retries.
-  4. Distills standing behavioral guidance into ~/ALIGNMENT_SYNTHESIS.md, carrying
-     forward every "**[BOUNDARY]**" line under "## Persistent Boundaries".
+  4. Turns the day's extracted preferences into *proposals* in
+     ~/kurek_proposed_rules.md (core/proposals.py). It never writes a file that
+     reaches the prompt.
   5. Updates ~/ALIGNMENT_STATE.yaml when it exists.
 """
 from __future__ import annotations
@@ -19,16 +20,13 @@ from pathlib import Path
 
 import yaml
 
+from core.proposals import PROPOSALS_PATH, propose
+
 HOME = Path.home()
 DREAMS_DIR = HOME / "dreams"
 MEMORY_DIR = HOME / "memory"
-ALIGNMENT_FILE = HOME / "ALIGNMENT_SYNTHESIS.md"
 STATE_FILE = HOME / "ALIGNMENT_STATE.yaml"
 REPAIRS_FILE = HOME / "REPAIR_THREADS.yaml"
-
-BOUNDARY_MARKER = "**[BOUNDARY]**"
-PERSISTENT_SECTION = "## Persistent Boundaries"
-_NO_BOUNDARIES = "- (none recorded yet)"
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
@@ -54,30 +52,6 @@ def _atomic_write_text(path: Path, text: str) -> None:
         raise
 
 
-def extract_persistent_boundaries(alignment_text: str) -> list[str]:
-    """Collect boundary lines to carry forward: every "**[BOUNDARY]**" line plus
-    every bullet already under "## Persistent Boundaries". Exact-line dedupe, order kept."""
-    out: list[str] = []
-    seen: set[str] = set()
-    in_section = False
-    for raw in alignment_text.splitlines():
-        line = raw.rstrip()
-        stripped = line.strip()
-        if stripped.startswith("#"):
-            in_section = stripped.lower() == PERSISTENT_SECTION.lower()
-            continue
-        if not stripped:
-            continue
-        keep = BOUNDARY_MARKER in stripped or (
-            in_section and stripped.startswith(("-", "*")) and stripped != _NO_BOUNDARIES
-        )
-        if keep:
-            if stripped not in seen:
-                seen.add(stripped)
-                out.append(stripped)
-    return out
-
-
 def text_from_llm_response(resp, default: str = "") -> str:
     """Normalise query_deepseek return values (str | dict | None) to plain text."""
     if isinstance(resp, str):
@@ -87,28 +61,16 @@ def text_from_llm_response(resp, default: str = "") -> str:
     return default
 
 
-def sanitize_guidance(text: str) -> str:
-    """Neutralise LLM output so it can't plant permanent boundaries.
-
-    Only the daemon's own Jev path (kurek_daemon._consolidate_with_jev) may
-    write BOUNDARY_MARKER lines. The nightly guidance is regenerated from logs
-    that include web and tool text, so strip the marker and demote any
-    "Persistent Boundaries" heading before it is written to the file.
-    """
-    if not text:
-        return text
-    out = []
-    for line in text.replace(BOUNDARY_MARKER, "[boundary]").splitlines():
-        if line.strip().lstrip("#").strip().lower() == PERSISTENT_SECTION.lstrip("#").strip().lower():
-            line = "### Suggested Boundaries"
-        out.append(line)
-    return "\n".join(out).strip()
+def guidance_bullets(text: str) -> list[str]:
+    """Bullet lines of an LLM guidance block; headings and prose are dropped."""
+    return [ln.strip().lstrip("-*• ").strip() for ln in text.splitlines()
+            if ln.strip().startswith(("-", "*", "•"))]
 
 
 def execute_dream_cycle(force: bool = False, day: str | None = None) -> dict:
     """Reflect on ``day`` (YYYY-MM-DD; default: yesterday).
 
-    Returns {"status": "success", "date", "dream_file", "alignment_file"},
+    Returns {"status": "success", "date", "dream_file", "proposals_file", "proposed"},
     {"status": "skipped", "date", "message", "dream_file"} or
     {"status": "error", "date", "message"} (nothing written; safe to retry).
     """
@@ -170,7 +132,7 @@ Do not output robotic bullet points. Write 2-3 atmospheric paragraphs.
     _atomic_write_text(dream_file, dream_header)
     print(f"[Muse Dream] 🌙 Wrote dream journal: {dream_file.name}", flush=True)
 
-    # 3. Synthesize Standing Alignment Guidance
+    # 4. Propose rules from the day's guidance
     align_prompt = f"""Review the interactions from {target_day} and extract any new permanent preferences, negative boundaries, or friction points:
 
 {recent_content[-4000:]}
@@ -186,33 +148,14 @@ Return a concise Markdown block with:
         messages=[{"role": "user", "content": align_prompt}],
         model="deepseek-flash"
     )
-    extracted_guidance = sanitize_guidance(text_from_llm_response(align_resp))
+    guidance = text_from_llm_response(align_resp)
+    proposed = sum(
+        propose(f"dream cycle ({target_day})", bullet, source=f"memory/{target_day}.md")
+        for bullet in guidance_bullets(guidance)
+    )
+    print(f"[Muse Dream] 📝 {proposed} rule proposal(s) written to {PROPOSALS_PATH.name}", flush=True)
 
-    # Update ALIGNMENT_SYNTHESIS.md, carrying forward boundaries hoisted during the day.
-    if extracted_guidance:
-        current_align = ALIGNMENT_FILE.read_text(encoding="utf-8") if ALIGNMENT_FILE.exists() else ""
-        boundaries = extract_persistent_boundaries(current_align)
-        boundary_block = "\n".join(boundaries) if boundaries else _NO_BOUNDARIES
-        updated_align = f"""# Standing Alignment & Behavioral Synthesis
-<!-- Last synthesized: {target_day} via Nightly Dream Cycle -->
-
-{PERSISTENT_SECTION}
-{boundary_block}
-
-## 1. Core Posture & Voice Rules
-- **Summon Posture:** Instant high-density response via Middle Click (mouse:274) with zero greeting filler.
-- **Candid Opinions:** Provide definitive, clear stances when asked. Never use 'As an AI' disclaimers.
-- **Spoken Delivery (Sol):** Talk-sing cadence for music requests; describe instruments (mariachi brass, bass) rather than leaving pauses silent.
-
-## 2. Synthesized Working Preferences & Boundaries
-{extracted_guidance}
-"""
-        _atomic_write_text(ALIGNMENT_FILE, updated_align)
-        print(f"[Muse Dream] 🛡️ Refreshed {ALIGNMENT_FILE.name} ({len(boundaries)} persistent boundaries kept)", flush=True)
-    else:
-        print("[Muse Dream] No alignment guidance returned; ALIGNMENT_SYNTHESIS.md left unchanged.", flush=True)
-
-    # 4. Update companion YAML (only if the user created it)
+    # 5. Update companion YAML (only if the user created it)
     if STATE_FILE.exists():
         try:
             state = yaml.safe_load(STATE_FILE.read_text(encoding="utf-8")) or {}
@@ -228,5 +171,6 @@ Return a concise Markdown block with:
         "status": "success",
         "date": target_day,
         "dream_file": str(dream_file),
-        "alignment_file": str(ALIGNMENT_FILE)
+        "proposals_file": str(PROPOSALS_PATH),
+        "proposed": proposed,
     }

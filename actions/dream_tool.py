@@ -4,7 +4,7 @@ Auto-discovered by core/action_loader.py.
 
 Capabilities:
   • 'dream': Triggers the Muse Memory reflection cycle. Writes ~/dreams/YYYY-MM-DD.md
-             and distills standing guidance into ~/ALIGNMENT_SYNTHESIS.md.
+             and writes rule proposals to ~/kurek_proposed_rules.md.
 """
 from __future__ import annotations
 
@@ -22,12 +22,12 @@ def dream_tool(parameters: dict | None = None, **kwargs) -> str:
         return (f"Dream synthesis failed for {res.get('date')}: {res.get('message')}. "
                 "Nothing was written; it is safe to try again.")
 
-    return f"Nightly dream synthesis complete for {res.get('date')}. Journal written to ~/dreams/{res.get('date')}.md and standing guidance updated in ~/ALIGNMENT_SYNTHESIS.md."
+    return f"Nightly dream synthesis complete for {res.get('date')}. Journal written to ~/dreams/{res.get('date')}.md and {res.get('proposed', 0)} rule proposal(s) added to ~/kurek_proposed_rules.md for the user to review."
 
 
 TOOL = {
     "name": "dream_tool",
-    "description": "Executes the Muse Memory nightly dream and reflection cycle. Synthesizes the target day's daily log (yesterday by default) into an atmospheric dream journal (~/dreams/YYYY-MM-DD.md) and updates standing behavioral guidance in ~/ALIGNMENT_SYNTHESIS.md.",
+    "description": "Executes the Muse Memory nightly dream and reflection cycle. Synthesizes the target day's daily log (yesterday by default) into an atmospheric dream journal (~/dreams/YYYY-MM-DD.md) and writes candidate rules to ~/kurek_proposed_rules.md for the user to approve; it never changes the active rules.",
     "parameters": {
         "type": "OBJECT",
         "properties": {
