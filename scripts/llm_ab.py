@@ -77,31 +77,33 @@ def build_engine():
     real_run = engine.actions.run
 
     def guarded_run(name, params, *a, **k):
+        engine.calls.append(f"{name}({json.dumps(params, ensure_ascii=False)})")
         allowed = READ_ONLY.get(name, False)
         if allowed is None or (allowed and (params or {}).get("action") in allowed):
             return real_run(name, params, *a, **k)
         return f"{name} accepted (test mode)."
 
     engine.actions.run = guarded_run
+    engine.calls = []
     return engine
 
 
 def run_one(engine, provider: str, prompt: str) -> dict:
     os.environ["KUREK_LLM"] = provider
     engine.history = []
+    engine.calls = []
     engine._cancel_requested = False
     t0 = time.monotonic()
     rec: dict = {"tools": [], "first_sentence_s": None, "reply": ""}
 
     def cb(ev):
-        if ev.get("type") == "tool":
-            rec["tools"].append(ev.get("description", ""))
-        elif ev.get("type") == "sentence" and rec["first_sentence_s"] is None:
+        if ev.get("type") == "sentence" and rec["first_sentence_s"] is None:
             rec["first_sentence_s"] = round(time.monotonic() - t0, 2)
         elif ev.get("type") == "done":
             rec["reply"] = ev.get("reply", "")
 
     engine._handle_text_query_inner(prompt, callback=cb, mute_speaker=True)
+    rec["tools"] = list(engine.calls)
     rec["total_s"] = round(time.monotonic() - t0, 2)
     return rec
 

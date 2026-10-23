@@ -842,6 +842,10 @@ def browser_control(
     # opens here. The only exception: if an automation flow is already running,
     # navigation continues in that window (so multi-step tasks aren't split).
     if action in ("go_to", "search", "new_tab"):
+        if action == "go_to" and not params.get("url", "").strip():
+            result = "Error: go_to needs a url (for example https://github.com). Nothing was opened."
+            _log(player, result)
+            return result
         if _registry.has(browser):
             sess = _registry.get(browser)
             try:
