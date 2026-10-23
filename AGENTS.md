@@ -120,8 +120,15 @@ By default only Listening and Thinking show a toast (`KUREK_STATE_NOTIFY=minimal
 Kurek uses the **Muse Memory** three-tier markdown memory plane, triaged by TypeSafe Jev. Auto screen-context detection (`KurekEngine._check_auto_screen_context`) tries an optional fast decision model via OpenRouter Decision-1 first (`core/decision_client.py`), then TypeSafe Jev; with neither key—or with `KUREK_AUTO_SCREEN=0`—no screen context is injected.
 
 1. **Daily logs:** `~/memory/YYYY-MM-DD.md`, the day's captured context.
-2. **Durable core:** `~/MEMORY.md`, durable preferences and rules promoted by Jev.
-3. **Standing alignment:** `~/ALIGNMENT_SYNTHESIS.md`, behavioural guidance distilled by the nightly dream cycle (`dream_tool`).
+2. **Reference facts:** `~/MEMORY.md`, hand-written identity, environment and projects. Kurek never appends to it.
+3. **Legacy alignment:** `~/ALIGNMENT_SYNTHESIS.md`, still read if present, never written by Kurek.
+
+Rules and learned memory live outside those files:
+- **User rules:** `~/.config/kurek/rules.toml`, verbatim, injected as `[USER RULES]`; only the user edits it (`core/rules.py`).
+- **Learned memory:** the append-only `ledger` table in `memory/kurek_memory.db`, written by `manage_memory` and Jev (`memory/ledger.py`).
+- **Proposals:** `~/kurek_proposed_rules.md`, where the dream cycle and Jev boundary triage only propose rules (`core/proposals.py`). Nothing reads it into a prompt.
+
+**Before changing anything that reads or writes memory, rules or the prompt, read [docs/ANTI-DRIFT.md](docs/ANTI-DRIFT.md)** and run `scripts/rules_eval.py` before and after.
 
 Supporting stores:
 - `memory/kurek_history.json` keeps the rolling conversation context between turns.
