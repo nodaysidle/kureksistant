@@ -9,7 +9,7 @@ from pathlib import Path
 from core.proposals import propose
 from memory import ledger
 from memory.config_manager import resolve_hermes_memory_dirs
-from memory.memory_manager import remember, search_memory
+from memory.memory_manager import search_memory
 
 
 def _resolve_hermes_dir() -> Path | None:
@@ -105,8 +105,6 @@ def manage_memory(parameters: dict, **kwargs) -> str:
     except ledger.LedgerError as e:
         return f"Nothing was saved: {e}."
 
-    local_res = remember(key=key, value=value, category=category)
-
     # 1. Sync to Hermes MEMORY.md if available
     try:
         if hermes_dir:
@@ -123,7 +121,7 @@ def manage_memory(parameters: dict, **kwargs) -> str:
         if propose("manage_memory (jev boundary)", f"{key}: {value}", source="manage_memory tool call"):
             print("[Memory Tool] Boundary proposed in kurek_proposed_rules.md.")
 
-    return f"{local_res} (saved as memory #{memory_id}{salience_tag})."
+    return f"Remembered: {category}/{key} = {value} (saved as memory #{memory_id}{salience_tag})."
 
 
 def _as_int(value) -> int | None:

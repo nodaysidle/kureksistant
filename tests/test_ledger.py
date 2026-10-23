@@ -14,10 +14,10 @@ def db(tmp_path: Path) -> Path:
 
 
 def test_rows_cannot_be_updated_or_deleted(db: Path) -> None:
-    append("fact", "Alan lives in Koper", "daily/x.md", db_path=db)
+    append("fact", "Sam lives in Oslo", "daily/x.md", db_path=db)
     conn = sqlite3.connect(db)
     with pytest.raises(sqlite3.DatabaseError, match="append-only"):
-        conn.execute("UPDATE ledger SET text = 'Ljubljana'")
+        conn.execute("UPDATE ledger SET text = 'Bergen'")
     with pytest.raises(sqlite3.DatabaseError, match="append-only"):
         conn.execute("DELETE FROM ledger")
 
@@ -30,17 +30,17 @@ def test_text_and_source_are_required(db: Path, text: str, source: str) -> None:
 
 
 def test_superseded_rows_leave_the_prompt_but_stay_in_the_table(db: Path) -> None:
-    allen = append("preference", 'address him as "Master Allen"', "said 2026-10-15", db_path=db)
-    alan = append("preference", 'address him as "Master Alan"', "said 2026-10-15", supersedes=allen, db_path=db)
-    assert [r["id"] for r in ledger.active(db)] == [alan]
+    smyth = append("preference", 'address him as "Mr Smyth"', "said 2026-10-15", db_path=db)
+    smith = append("preference", 'address him as "Mr Smith"', "said 2026-10-15", supersedes=smyth, db_path=db)
+    assert [r["id"] for r in ledger.active(db)] == [smith]
     block = ledger.prompt_block(10_000, db)
-    assert "Master Alan" in block and "Master Allen" not in block
+    assert "Mr Smith" in block and "Mr Smyth" not in block
     assert sqlite3.connect(db).execute("SELECT count(*) FROM ledger").fetchone()[0] == 2
 
 
 def test_same_key_supersedes_the_active_row(db: Path) -> None:
-    first = append("fact", "city: Ljubljana", "s", key="Home City", db_path=db)
-    second = append("fact", "city: Koper", "s", key=" home  city ", db_path=db)
+    first = append("fact", "city: Bergen", "s", key="Home City", db_path=db)
+    second = append("fact", "city: Oslo", "s", key=" home  city ", db_path=db)
     rows = ledger.active(db)
     assert [r["id"] for r in rows] == [second]
     assert sqlite3.connect(db).execute("SELECT supersedes FROM ledger WHERE id=?", (second,)).fetchone()[0] == first
@@ -59,9 +59,9 @@ def test_replacing_a_missing_row_is_refused(db: Path) -> None:
 
 def test_prompt_block_empty_and_search(db: Path) -> None:
     assert ledger.prompt_block(1000, db) == ""
-    append("fact", "Alan lives in Koper", "s", db_path=db)
-    assert [r["text"] for r in ledger.search("KOPER", db)] == ["Alan lives in Koper"]
-    assert ledger.search("zagreb", db) == []
+    append("fact", "Sam lives in Oslo", "s", db_path=db)
+    assert [r["text"] for r in ledger.search("OSLO", db)] == ["Sam lives in Oslo"]
+    assert ledger.search("paris", db) == []
 
 
 def test_prompt_block_over_limit_keeps_newest_and_warns_once(db: Path, capsys) -> None:
@@ -87,17 +87,17 @@ def tool(tmp_path: Path, monkeypatch):
 
 
 def test_remember_writes_the_ledger_and_leaves_memory_md_alone(tool: Path) -> None:
-    out = memory_tool.manage_memory({"action": "remember", "key": "city", "value": "Koper"})
+    out = memory_tool.manage_memory({"action": "remember", "key": "city", "value": "Oslo"})
     assert "saved as memory #1" in out
-    assert [r["text"] for r in ledger.active()] == ["city: Koper"]
+    assert [r["text"] for r in ledger.active()] == ["city: Oslo"]
     assert (tool / "MEMORY.md").read_text(encoding="utf-8") == "# Memory\n"
 
 
 def test_remember_replaces_by_id_and_recall_sees_only_the_new_one(tool: Path) -> None:
-    memory_tool.manage_memory({"action": "remember", "key": "address", "value": "Master Allen"})
-    memory_tool.manage_memory({"action": "remember", "key": "address_final", "value": "Master Alan", "replaces": 1})
-    found = memory_tool.manage_memory({"action": "recall", "query": "Master"})
-    assert "Master Alan" in found and "Learned #2" in found
+    memory_tool.manage_memory({"action": "remember", "key": "address", "value": "Mr Smyth"})
+    memory_tool.manage_memory({"action": "remember", "key": "address_final", "value": "Mr Smith", "replaces": 1})
+    found = memory_tool.manage_memory({"action": "recall", "query": "Mr"})
+    assert "Mr Smith" in found and "Learned #2" in found
     assert "Learned #1" not in found
 
 
