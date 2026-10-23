@@ -160,11 +160,18 @@ def silence_stop_reason(now: float, has_speech: bool, last_sound_time: float, re
     return None
 
 
+_warned_truncated: set[tuple[Path, int]] = set()
+
+
 def read_capped(path: Path, limit: int = MEMORY_FILE_MAX_CHARS) -> str:
     """Read a markdown memory file, keeping its head and newest tail within limit."""
     text = path.read_text(encoding="utf-8").strip()
     if len(text) <= limit:
         return text
+    if (path, len(text)) not in _warned_truncated:
+        _warned_truncated.add((path, len(text)))
+        print(f"[Kurek Memory] WARNING: {path} is {len(text)} chars, over the {limit} cap; "
+              f"the middle is hidden from the model. Raise KUREK_MEMORY_FILE_MAX_CHARS.", flush=True)
     head = limit // 3
     tail = limit - head
     return f"{text[:head]}\n[… older entries omitted …]\n{text[-tail:]}"

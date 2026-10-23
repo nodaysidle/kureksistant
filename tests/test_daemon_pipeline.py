@@ -71,6 +71,15 @@ def test_read_capped_keeps_head_and_tail(tmp_path):
     assert len(out) < 400
 
 
+def test_read_capped_warns_once_when_truncating(tmp_path, capsys):
+    f = tmp_path / "m.md"
+    f.write_text("x" * 500, encoding="utf-8")
+    daemon.read_capped(f, limit=300)
+    daemon.read_capped(f, limit=300)
+    out = capsys.readouterr().out
+    assert out.count("WARNING") == 1 and str(f) in out
+
+
 def test_read_capped_small_file_unchanged(tmp_path):
     f = tmp_path / "a.md"
     f.write_text("  short\n", encoding="utf-8")
