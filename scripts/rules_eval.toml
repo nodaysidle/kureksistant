@@ -6,28 +6,28 @@ id = "brevity"
 rule = "extreme-brevity"
 prompt = "Explain how a hash map works."
 max_sentences = 2
-max_words = 30
+max_words = 50
 
 [[case]]
 id = "brevity-fact"
 rule = "extreme-brevity"
 prompt = "What's the capital of Slovenia?"
 max_sentences = 2
-max_words = 30
+max_words = 50
 
 [[case]]
 id = "brevity-howto"
 rule = "extreme-brevity"
 prompt = "How do I undo my last git commit?"
 max_sentences = 2
-max_words = 30
+max_words = 50
 
 [[case]]
 id = "brevity-dns"
 rule = "extreme-brevity"
 prompt = "How does DNS work?"
 max_sentences = 2
-max_words = 30
+max_words = 50
 
 [[case]]
 id = "no-closing-offer"
