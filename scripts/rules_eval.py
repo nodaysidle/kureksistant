@@ -85,7 +85,8 @@ def main() -> int:
             for _ in range(args.reps):
                 rec = run_one(engine, "haiku", case["prompt"])
                 fails = check(case, rec["reply"], rec["tools"])
-                runs.append({"reply": rec["reply"], "tools": rec["tools"], "failures": fails})
+                runs.append({"reply": rec["reply"], "tools": rec["tools"], "failures": fails,
+                             "first_sentence_s": rec["first_sentence_s"], "total_s": rec["total_s"]})
             row["runs"][label] = runs
             passed = sum(not r["failures"] for r in runs)
             print(f"{case['id']:24} {label:9} {passed}/{len(runs)}  {runs[0]['failures'] or ''}", flush=True)
@@ -105,6 +106,9 @@ def main() -> int:
             cells.append(f"{ok}/{len(runs)}".rjust(9))
         print(f"{row['id']:24} " + "  ".join(cells))
     print(f"{'TOTAL':24} " + "  ".join(f"{totals[l][0]}/{totals[l][1]}".rjust(9) for l, _ in conditions))
+    for label, _ in conditions:
+        times = [r["total_s"] for row in results for r in row["runs"][label]]
+        print(f"mean reply time, {label}: {sum(times) / len(times):.1f}s over {len(times)} runs")
     print(f"wrote {args.out}")
     return 0 if totals["rules on"][0] == totals["rules on"][1] else 1
 

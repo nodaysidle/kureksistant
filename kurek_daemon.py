@@ -63,6 +63,7 @@ from core.mpv_sink import get_mpv_sink
 from core.timing import begin_query, end_query
 from core import confirm
 from core.proposals import propose
+from core.rules import pinned_block as rules_pinned_block
 from core.rules import prompt_block as rules_prompt_block
 from memory import ledger
 from memory.atomic_io import atomic_write_text
@@ -1074,7 +1075,8 @@ class KurekEngine:
         # Include last 10 conversational turns for continuity
         for turn in self.history[-10:]:
             messages.append(turn)
-        messages.append({"role": "user", "content": effective_user_prompt})
+        pinned = rules_pinned_block()
+        messages.append({"role": "user", "content": f"{effective_user_prompt}\n\n{pinned}" if pinned else effective_user_prompt})
 
         reply_text = ""
         last_tool_output = ""

@@ -290,3 +290,36 @@ def test_brain_key_problem_follows_the_active_brain(monkeypatch):
 
     monkeypatch.setattr(daemon, "get_anthropic_key", lambda: "sk-test-not-real")
     assert daemon.brain_key_problem() is None
+
+
+def _ask_and_capture(monkeypatch, tmp_path, rules_toml: str | None):
+    engine = _make_lite_engine(monkeypatch)
+    engine.history_file = tmp_path / "hist.json"
+    rules = tmp_path / "rules.toml"
+    if rules_toml is not None:
+        rules.write_text(rules_toml, encoding="utf-8")
+    monkeypatch.setattr("core.rules.RULES_PATH", rules)
+    calls: list[dict] = []
+
+    def fake_stream(**kwargs):
+        calls.append(kwargs)
+        yield {"type": "sentence", "sentence": "Hi.", "full_content": "Hi."}
+        yield {"type": "done", "full_content": "Hi."}
+
+    monkeypatch.setattr(daemon, "stream_deepseek_sentences", fake_stream)
+    engine.handle_text_query("hello")
+    return engine, calls[0]["messages"]
+
+
+def test_pinned_rule_follows_the_user_message_but_not_the_history(monkeypatch, tmp_path):
+    engine, messages = _ask_and_capture(
+        monkeypatch, tmp_path, '[[rule]]\nid = "brief"\ntext = "Two sentences at most."\npin = true\n')
+    last = messages[-1]
+    assert last["role"] == "user" and last["content"].startswith("hello\n\n[PINNED USER RULES")
+    assert last["content"].endswith("- [brief] Two sentences at most.")
+    assert engine.history[-2] == {"role": "user", "content": "hello"}
+
+
+def test_no_pinned_rules_leaves_the_user_message_unchanged(monkeypatch, tmp_path):
+    _, messages = _ask_and_capture(monkeypatch, tmp_path, '[[rule]]\nid = "a"\ntext = "x"\n')
+    assert messages[-1] == {"role": "user", "content": "hello"}

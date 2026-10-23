@@ -49,6 +49,11 @@ assumed.
 .venv/bin/python scripts/rules_eval.py --only brevity --reps 5
 ```
 
+A rule a model tends to drift from can be **pinned** (`pin = true` in `rules.toml`). Pinned rules are
+also re-sent, verbatim, right after the user's message each turn. The text is never copied into
+code, so it cannot drift, and it is added only to what the model sees, never to the stored history.
+Measure before and after pinning; it helps some rules and not others.
+
 Each case is a prompt that tries to break a rule, scored by plain code on the reply and the tools
 called: word and sentence limits, forbidden phrases, "must have called `web_search`". Nothing is
 judged by a model. The **rules-off** column is the control: a rule that passes the same with and

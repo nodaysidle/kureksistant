@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from core.rules import RULES_UNAVAILABLE, RulesError, load_rules, prompt_block
+from core.rules import RULES_UNAVAILABLE, RulesError, load_rules, pinned_block, prompt_block
 
 
 def _write(tmp_path: Path, body: str) -> Path:
@@ -62,3 +62,26 @@ def test_prompt_block_carries_rule_text(tmp_path: Path) -> None:
 
 def test_prompt_block_flags_unreadable_file(tmp_path: Path) -> None:
     assert prompt_block(_write(tmp_path, "[[rule]\n")) == RULES_UNAVAILABLE
+
+
+def test_pin_defaults_to_false_and_reads_true(tmp_path: Path) -> None:
+    p = _write(tmp_path, '[[rule]]\nid = "a"\ntext = "x"\n[[rule]]\nid = "b"\ntext = "y"\npin = true\n')
+    assert [r.pin for r in load_rules(p).rules] == [False, True]
+
+
+def test_non_boolean_pin_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(RulesError, match="pin"):
+        load_rules(_write(tmp_path, '[[rule]]\nid = "a"\ntext = "x"\npin = "yes"\n'))
+
+
+def test_pinned_block_carries_only_pinned_rules_verbatim(tmp_path: Path) -> None:
+    text = "Keep  replies — short."
+    p = _write(tmp_path, f'[[rule]]\nid = "a"\ntext = "other"\n[[rule]]\nid = "b"\ntext = "{text}"\npin = true\n')
+    block = pinned_block(p)
+    assert block.endswith(f"- [b] {text}") and "other" not in block
+
+
+def test_pinned_block_is_empty_without_pins_or_on_a_bad_file(tmp_path: Path) -> None:
+    assert pinned_block(_write(tmp_path, '[[rule]]\nid = "a"\ntext = "x"\n')) == ""
+    assert pinned_block(_write(tmp_path, "[[rule]\n")) == ""
+    assert pinned_block(tmp_path / "nope.toml") == ""

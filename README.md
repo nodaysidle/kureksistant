@@ -60,6 +60,7 @@ It is built and tested on **Arch Linux with Omarchy / Hyprland**. The old macOS 
   [[rule]]
   id = "never-lie"
   text = "Never lie. If you are not sure, always check the web, then answer."
+  pin = true   # optional: also re-send this rule, verbatim, right after each of your messages
   ```
 - **Learned memory, an append-only ledger:** what Kurek learns through `manage_memory` and Jev triage goes into a `ledger` table in `memory/kurek_memory.db`. The database refuses updates and deletes, and every row needs a source. A correction is a new row that supersedes the old one (the same key does it automatically, or pass `replaces=<#id>`), so history stays and the prompt carries only entries nothing has replaced. The block is capped by `KUREK_MEMORY_FILE_MAX_CHARS`; if the oldest entries have to be left out, a warning is logged.
 - **Proposals, `~/kurek_proposed_rules.md`:** the nightly dream cycle and Jev's boundary triage only *propose* rules here, with a source and your words verbatim. Nothing reads this file back into a prompt. You promote a proposal by copying it into `rules.toml`.
