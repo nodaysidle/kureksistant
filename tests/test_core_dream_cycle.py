@@ -18,6 +18,7 @@ def home(monkeypatch, tmp_path: Path) -> Path:
     monkeypatch.setattr(dream_cycle, "DREAMS_DIR", tmp_path / "dreams")
     monkeypatch.setattr(dream_cycle, "MEMORY_DIR", tmp_path / "memory")
     monkeypatch.setattr(proposals, "PROPOSALS_PATH", tmp_path / "kurek_proposed_rules.md")
+    monkeypatch.setattr("core.rules.RULES_PATH", tmp_path / "rules.toml")
     monkeypatch.setattr(dream_cycle, "STATE_FILE", tmp_path / "ALIGNMENT_STATE.yaml")
     monkeypatch.setattr(dream_cycle, "REPAIRS_FILE", tmp_path / "REPAIR_THREADS.yaml")
     return tmp_path
@@ -99,3 +100,21 @@ def test_rerun_does_not_duplicate_proposals(monkeypatch, home: Path) -> None:
     assert dream_cycle.execute_dream_cycle(force=True)["proposed"] == 0
     assert (home / "kurek_proposed_rules.md").read_text().count("same guidance") == 1
 
+
+
+def test_prompt_shows_existing_rules_and_allows_none(monkeypatch, home: Path) -> None:
+    (home / "rules.toml").write_text('[[rule]]\nid = "a"\ntext = "never push to main"\n', encoding="utf-8")
+    prompts = _fake_llm(monkeypatch, ["Dream.", "NONE"])
+
+    res = dream_cycle.execute_dream_cycle()
+
+    assert res["proposed"] == 0
+    assert "- [a] never push to main" in prompts[1]
+    assert "return exactly: NONE" in prompts[1]
+    assert not (home / "kurek_proposed_rules.md").exists()
+
+
+def test_none_bullets_are_not_proposals() -> None:
+    text = ("## Boundaries\n- NONE\n- (none)\n- None.\n- None new beyond existing rules.\n"
+            "- No explicit negative boundaries were stated.\n- Nothing new.\n- keep replies short\n- Noted names are spelled out")
+    assert dream_cycle.guidance_bullets(text) == ["keep replies short", "Noted names are spelled out"]

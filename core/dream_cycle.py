@@ -14,6 +14,7 @@ Flow (runs early morning, reflects on the previous day by default):
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -21,6 +22,7 @@ from pathlib import Path
 import yaml
 
 from core.proposals import PROPOSALS_PATH, propose
+from core.rules import RulesError, load_rules
 
 HOME = Path.home()
 DREAMS_DIR = HOME / "dreams"
@@ -61,10 +63,21 @@ def text_from_llm_response(resp, default: str = "") -> str:
     return default
 
 
+_NOTHING_NEW = re.compile(r"^\W*(none|nothing|no (new|explicit|standing|additional)\b)", re.IGNORECASE)
+
+
 def guidance_bullets(text: str) -> list[str]:
-    """Bullet lines of an LLM guidance block; headings and prose are dropped."""
-    return [ln.strip().lstrip("-*• ").strip() for ln in text.splitlines()
-            if ln.strip().startswith(("-", "*", "•"))]
+    """Bullet lines of an LLM guidance block; headings, prose and "none" answers are dropped."""
+    bullets = [ln.strip().lstrip("-*• ").strip() for ln in text.splitlines()
+               if ln.strip().startswith(("-", "*", "•"))]
+    return [b for b in bullets if not _NOTHING_NEW.match(b)]
+
+
+def _existing_rules() -> str:
+    try:
+        return load_rules().render()
+    except RulesError:
+        return ""
 
 
 def execute_dream_cycle(force: bool = False, day: str | None = None) -> dict:
@@ -137,12 +150,17 @@ Do not output robotic bullet points. Write 2-3 atmospheric paragraphs.
 
 {recent_content[-4000:]}
 
+Rules the user already has. Do not repeat or rephrase any of them:
+{_existing_rules() or "(none)"}
+
 Return a concise Markdown block with:
 ## Active Preferences & Working Habits
 - (bullet points)
 
 ## Non-Negotiable Boundaries
 - (bullet points)
+
+List only standing rules the user stated or clearly demonstrated, one per bullet. If there is nothing new, return exactly: NONE
 """
     align_resp = query_deepseek(
         messages=[{"role": "user", "content": align_prompt}],
