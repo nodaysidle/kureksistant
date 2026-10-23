@@ -73,7 +73,9 @@ def _real_profile_dir(browser: str) -> str:
         m = {
             "chrome":   [cfg / "google-chrome", cfg / "chromium"],
             "edge":     [cfg / "microsoft-edge"],
-            "brave":    [cfg / "BraveSoftware" / "Brave-Browser"],
+            "brave":    [cfg / "BraveSoftware" / (
+                "Brave-Browser" if shutil.which("brave-browser") or shutil.which("brave") else "Brave-Origin"
+            )],
             "vivaldi":  [cfg / "vivaldi"],
             "opera":    [cfg / "opera"],
             "operagx":  [cfg / "opera-gx"],
@@ -146,7 +148,7 @@ _BROWSER_SPECS: dict[str, dict] = {
         "firefox":  {"engine": "firefox",  "channel": None, "bins": ["firefox"]},
         "opera":    {"engine": "chromium", "channel": None, "bins": ["opera", "opera-stable"]},
         "operagx":  {"engine": "chromium", "channel": None, "bins": ["opera", "opera-stable"]},
-        "brave":    {"engine": "chromium", "channel": None, "bins": ["brave-browser", "brave"]},
+        "brave":    {"engine": "chromium", "channel": None, "bins": ["brave-browser", "brave", "brave-origin"]},
         "vivaldi":  {"engine": "chromium", "channel": None, "bins": ["vivaldi-stable", "vivaldi"]},
         "safari":   None,
     },
@@ -161,6 +163,8 @@ _ALIASES: dict[str, str] = {
     "mozilla firefox": "firefox",
     "opera gx":        "operagx",
     "opera_gx":        "operagx",
+    "brave origin":    "brave",
+    "brave-origin":    "brave",
 }
 
 
@@ -219,6 +223,12 @@ def _detect_default_browser() -> str:
                 ["xdg-settings", "get", "default-web-browser"],
                 capture_output=True, text=True, timeout=5,
             ).stdout.lower()
+            # Omarchy registers a wrapper (omarchy-browser.desktop); ask it for the real one.
+            if shutil.which("omarchy-cmd-default-browser"):
+                out += subprocess.run(
+                    ["omarchy-cmd-default-browser"],
+                    capture_output=True, text=True, timeout=5,
+                ).stdout.lower()
             for kw in ("firefox", "opera", "brave", "vivaldi", "chrome", "edge"):
                 if kw in out:
                     return kw
