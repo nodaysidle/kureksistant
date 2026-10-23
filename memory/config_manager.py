@@ -96,6 +96,12 @@ def get_deepseek_key() -> str | None:
     keys = load_api_keys()
     return keys.get("DEEPSEEK_API_KEY") or keys.get("deepseek_api_key") or os.environ.get("DEEPSEEK_API_KEY")
 
+def get_anthropic_key() -> str | None:
+    import os
+    keys = load_api_keys()
+    return (keys.get("ANTHROPIC_API_KEY") or keys.get("HAIKU_API_KEY")
+            or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("HAIKU_API_KEY"))
+
 def get_deepgram_key() -> str | None:
     import os
     keys = load_api_keys()

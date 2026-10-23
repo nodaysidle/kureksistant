@@ -1,8 +1,8 @@
 """
-DeepSeek LLM client for Kurek.
+LLM client for Kurek.
 
 All chat completions go straight to https://api.deepseek.com/chat/completions
-(never via OpenRouter). Provides:
+(never via OpenRouter), or to Claude Haiku when KUREK_LLM=haiku. Provides:
 
   query_deepseek             blocking completion (text or tool_calls dict)
   stream_deepseek            raw SSE event stream (token / tool_calls / done / error)
@@ -12,6 +12,7 @@ DeepSeek requires ``reasoning_content`` to be passed back on assistant turns
 that carry tool calls, so both entry points surface it alongside tool_calls.
 """
 import json
+import os
 import re
 import time
 from typing import Generator
@@ -22,6 +23,7 @@ from core.timing import mark as timing_mark
 
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 DEFAULT_MODEL = "deepseek-flash"
+HAIKU_MODEL = "claude-haiku-5-5"
 
 # One retry for transient failures that happen before any token is yielded.
 _STREAM_RETRY_BACKOFF_S = 1.0
@@ -141,6 +143,141 @@ def parse_dsml_tool_calls(text: str) -> tuple[list[dict], str]:
     return calls, cleaned.strip()
 
 
+# ---------- Claude Haiku (KUREK_LLM=haiku) ----------
+# Callers keep speaking the OpenAI/DeepSeek message shape; these helpers translate
+# to the Messages API and back, so the daemon's tool loop is provider-agnostic.
+
+def use_haiku() -> bool:
+    return os.environ.get("KUREK_LLM", "").strip().lower() == "haiku"
+
+
+def brain_name() -> str:
+    return "Claude Haiku" if use_haiku() else "DeepSeek-Flash"
+
+
+def _to_anthropic_tools(tools: list) -> list[dict]:
+    out = []
+    for t in tools:
+        fn = t.get("function", t)
+        schema = fn.get("parameters") or {}
+        if schema.get("type") != "object":
+            schema = {"type": "object", "properties": {}}
+        out.append({"name": fn["name"], "description": fn.get("description", ""), "input_schema": schema})
+    return out
+
+
+def _to_anthropic_messages(messages: list) -> tuple[str, list[dict]]:
+    """OpenAI-shaped history -> (system, Messages API turns). Consecutive same-role
+    turns are merged; tool results become user-turn tool_result blocks."""
+    system: list[str] = []
+    out: list[dict] = []
+
+    def add(role: str, blocks: list) -> None:
+        if not blocks:
+            return
+        if out and out[-1]["role"] == role:
+            out[-1]["content"].extend(blocks)
+        else:
+            out.append({"role": role, "content": list(blocks)})
+
+    for m in messages:
+        role = m.get("role")
+        content = m.get("content") or ""
+        if role == "system":
+            if content:
+                system.append(content)
+        elif role == "tool":
+            add("user", [{"type": "tool_result", "tool_use_id": m.get("tool_call_id", ""), "content": str(content) or "(empty)"}])
+        elif role == "assistant":
+            # Haiku turns carry their raw content blocks (thinking + tool_use) in
+            # reasoning_content; they must be sent back unchanged.
+            raw = m.get("reasoning_content")
+            if isinstance(raw, list):
+                add("assistant", raw)
+                continue
+            blocks: list = [{"type": "text", "text": content}] if content else []
+            for tc in m.get("tool_calls") or []:
+                fn = tc.get("function", {})
+                args = fn.get("arguments") or "{}"
+                try:
+                    inp = json.loads(args) if isinstance(args, str) else args
+                except Exception:
+                    inp = {}
+                blocks.append({"type": "tool_use", "id": tc.get("id", ""), "name": fn.get("name", ""), "input": inp or {}})
+            add("assistant", blocks)
+        elif isinstance(content, list):
+            add("user", content)
+        elif content:
+            add("user", [{"type": "text", "text": content}])
+    return "\n\n".join(system), out
+
+
+def stream_haiku(messages: list, tools: list | None = None) -> Generator[dict, None, None]:
+    """Same event contract as stream_deepseek, backed by Claude Haiku.
+
+    Env: KUREK_HAIKU_MODEL (default claude-haiku-5-5), KUREK_HAIKU_EFFORT
+    (default low), KUREK_HAIKU_THINKING=off to turn thinking off (effort <= high).
+    """
+    import anthropic
+    from memory.config_manager import get_anthropic_key
+
+    key = get_anthropic_key()
+    if not key:
+        yield {"type": "error", "error": "No ANTHROPIC_API_KEY configured"}
+        return
+
+    system, msgs = _to_anthropic_messages(messages)
+    kwargs: dict = {
+        "model": os.environ.get("KUREK_HAIKU_MODEL") or HAIKU_MODEL,
+        "max_tokens": 16000,
+        "messages": msgs,
+        "output_config": {"effort": os.environ.get("KUREK_HAIKU_EFFORT") or "low"},
+    }
+    if os.environ.get("KUREK_HAIKU_THINKING", "").strip().lower() == "off":
+        kwargs["thinking"] = {"type": "disabled"}
+    if system:
+        kwargs["system"] = system
+    if tools:
+        kwargs["tools"] = _to_anthropic_tools(tools)
+
+    text = ""
+    try:
+        client = anthropic.Anthropic(api_key=key, timeout=30.0)
+        with client.messages.stream(**kwargs) as stream:
+            for ev in stream:
+                if ev.type == "text" and ev.text:
+                    text += ev.text
+                    yield {"type": "token", "token": ev.text}
+            final = stream.get_final_message()
+    except (anthropic.APIStatusError, anthropic.APIConnectionError) as e:
+        if text:
+            print(f"[Haiku Stream] Stream ended early ({e}); keeping {len(text)} chars", flush=True)
+            yield {"type": "done", "full_content": text.strip(), "reasoning_content": None}
+        else:
+            yield {"type": "error", "error": f"Claude Haiku request failed: {e}"}
+        return
+
+    if final.stop_reason == "refusal":
+        yield {"type": "error", "error": "Claude Haiku declined the request"}
+        return
+    calls = [b for b in final.content if b.type == "tool_use"]
+    if calls and final.stop_reason != "max_tokens":
+        yield {
+            "type": "tool_calls",
+            "tool_calls": [
+                {"id": b.id, "type": "function", "function": {"name": b.name, "arguments": json.dumps(b.input)}}
+                for b in calls
+            ],
+            "content": text.strip(),
+            "reasoning_content": list(final.content),
+        }
+        return
+    if calls:
+        yield {"type": "error", "error": "Claude Haiku hit max_tokens mid tool call"}
+        return
+    yield {"type": "done", "full_content": text.strip(), "reasoning_content": None}
+
+
 def query_deepseek(
     prompt: str = "",
     system_prompt: str = "",
@@ -153,7 +290,7 @@ def query_deepseek(
     try:
         from memory.config_manager import get_deepseek_key
         key = get_deepseek_key()
-        if not key:
+        if not key and not use_haiku():
             print("[DeepSeek] ⚠️ No DEEPSEEK_API_KEY found in .env or environment")
             return None
 
@@ -165,6 +302,20 @@ def query_deepseek(
                 req_messages.append({"role": "system", "content": system_prompt})
             if prompt:
                 req_messages.append({"role": "user", "content": prompt})
+
+        if use_haiku():
+            result = None
+            for ev in stream_haiku(req_messages, tools):
+                if ev["type"] == "error":
+                    print(f"[Haiku] {ev['error']}")
+                    return None
+                if ev["type"] in ("tool_calls", "done"):
+                    result = ev
+            if result is None:
+                return None
+            if result["type"] == "tool_calls":
+                return result
+            return result["full_content"]
 
         payload = {
             "model": model or DEFAULT_MODEL,
@@ -271,7 +422,7 @@ def stream_deepseek(
     """
     from memory.config_manager import get_deepseek_key
     key = get_deepseek_key()
-    if not key:
+    if not key and not use_haiku():
         print("[DeepSeek Stream] ⚠️ No DEEPSEEK_API_KEY found")
         yield {"type": "error", "error": "No DEEPSEEK_API_KEY configured"}
         return
@@ -284,6 +435,10 @@ def stream_deepseek(
             req_messages.append({"role": "system", "content": system_prompt})
         if prompt:
             req_messages.append({"role": "user", "content": prompt})
+
+    if use_haiku():
+        yield from stream_haiku(req_messages, tools)
+        return
 
     payload = {
         "model": model or DEFAULT_MODEL,
