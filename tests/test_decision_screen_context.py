@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import sys
 from types import SimpleNamespace
 from urllib.error import URLError
 
@@ -226,7 +225,6 @@ def test_check_auto_screen_p09_triggers(monkeypatch, capsys) -> None:
     engine = _make_lite_engine(monkeypatch)
     monkeypatch.setattr(daemon, "auto_screen_enabled", lambda: True)
     monkeypatch.setattr(daemon, "get_openrouter_api_key", lambda: SECRET_KEY)
-    monkeypatch.setattr(daemon, "get_typesafe_key", lambda: None)
     monkeypatch.setattr(daemon, "load_api_keys", lambda: {})
     monkeypatch.setattr(
         daemon,
@@ -253,7 +251,6 @@ def test_check_auto_screen_p02_does_not_trigger(monkeypatch) -> None:
     engine = _make_lite_engine(monkeypatch)
     monkeypatch.setattr(daemon, "auto_screen_enabled", lambda: True)
     monkeypatch.setattr(daemon, "get_openrouter_api_key", lambda: SECRET_KEY)
-    monkeypatch.setattr(daemon, "get_typesafe_key", lambda: None)
     monkeypatch.setattr(daemon, "load_api_keys", lambda: {})
     monkeypatch.setattr(
         daemon,
@@ -298,8 +295,12 @@ def test_no_keys_skips_network(monkeypatch) -> None:
     engine = _make_lite_engine(monkeypatch)
     monkeypatch.setattr(daemon, "auto_screen_enabled", lambda: True)
     monkeypatch.setattr(daemon, "get_openrouter_api_key", lambda: None)
-    monkeypatch.setattr(daemon, "get_typesafe_key", lambda: None)
     monkeypatch.setattr(daemon, "load_api_keys", lambda: {})
+    # decision_client reads provider keys from config_manager, not the daemon
+    from memory import config_manager
+
+    for getter in ("get_mouse_key", "get_openrouter_api_key", "get_typesafe_key"):
+        monkeypatch.setattr(config_manager, getter, lambda: None)
 
     def network_forbidden(*_a, **_k):
         raise AssertionError("urlopen must not be called when no keys are set")
@@ -323,7 +324,6 @@ def test_opt_out_skips_decision_and_capture(monkeypatch) -> None:
         return 0.99
 
     monkeypatch.setattr(daemon, "get_openrouter_api_key", lambda: SECRET_KEY)
-    monkeypatch.setattr(daemon, "get_typesafe_key", lambda: "ts-key")
     monkeypatch.setattr(daemon, "query_needs_screen", mark_or)
     monkeypatch.setattr(daemon, "load_api_keys", lambda: {})
     captured: list = []

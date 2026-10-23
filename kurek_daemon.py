@@ -42,7 +42,6 @@ from memory.config_manager import (
     get_deepgram_key,
     get_deepseek_key,
     get_openrouter_api_key,
-    get_typesafe_key,
     get_user_name,
     get_xai_key,
     load_api_keys,
