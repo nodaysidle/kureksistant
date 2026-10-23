@@ -63,6 +63,7 @@ from core.timing import begin_query, end_query
 from core import confirm
 from core.proposals import propose
 from core.rules import prompt_block as rules_prompt_block
+from memory import ledger
 from memory.atomic_io import atomic_write_text
 from memory.memory_manager import load_memory, format_memory_for_prompt
 
@@ -597,7 +598,6 @@ class KurekEngine:
         print("[Kurek Confirm] Headless confirmation notifications bound.")
 
         self._history_lock = threading.Lock()
-        self._memory_file_lock = threading.Lock()
         self._report_startup_problems(xai_key)
 
     def _report_startup_problems(self, xai_key: str | None) -> None:
@@ -979,6 +979,9 @@ class KurekEngine:
             except Exception as e:
                 print(f"[Kurek Muse] Error reading ~/ALIGNMENT_SYNTHESIS.md: {e}")
 
+        if learned := ledger.prompt_block(MEMORY_FILE_MAX_CHARS):
+            muse_parts.append(learned)
+
         if muse_parts:
             mem_block = (mem_block + "\n\n" + "\n\n".join(muse_parts)).strip()
 
@@ -1007,7 +1010,7 @@ class KurekEngine:
             "• desktop_control: minimize, maximize, hide, or arrange windows "
             "• computer_control: simulate typing, clicks, hotkeys, or capture screenshots "
             "• reminder: schedule alarms and notifications "
-            "• manage_memory: store and recall user knowledge, preferences, and notes "
+            "• manage_memory: store and recall user knowledge, preferences, and notes; pass replaces=<#id> to correct an earlier learned memory "
             "• screen_vision: visual perception of the monitor and active Hyprland windows. Use action='inspect' when asked what is on screen, to diagnose compiler errors, review code, or inspect active windows. Use action='start_watch' to continuously watch until told to stop. "
             "• manage_clipboard: persistent Wayland clipboard manager with snippet pinning and recall. Use action='get_latest' when asked what is in the clipboard. Use action='pin' with an optional title to pin a snippet. Use action='list_pinned' to review saved snippets. Use action='copy' to restore a snippet back into the system clipboard. "
             "• system_monitor: hardware diagnostics and 5-minute sustained CPU/RAM watcher. Use action='status' when asked about system resources, CPU, RAM, or temperature. "
@@ -1388,12 +1391,9 @@ class KurekEngine:
             if is_durable and salience >= 1.5 and kind in ("preference", "boundary", "fact"):
                 today = datetime.now().strftime("%Y-%m-%d")
                 fact = " ".join(user_prompt.split())
-                citation = f"source:daily/{today}.md|jev:{salience:.1f}|conf:{conf:.2f}"
-                line = f"- [{kind.upper()}] {fact} <!-- [{citation}] -->\n"
-
-                muse_core = Path.home() / "MEMORY.md"
-                if muse_core.exists() and self._append_unique(muse_core, f"- [{kind.upper()}] {fact} ", line):
-                    print(f"[Muse Jev] 🧠 Consolidated durable {kind} into MEMORY.md: {fact[:60]}...", flush=True)
+                source = f"daily/{today}.md (jev:{salience:.1f}, conf:{conf:.2f})"
+                memory_id = ledger.append(kind, fact, source, heard=fact)
+                print(f"[Muse Jev] 🧠 Learned durable {kind} as memory #{memory_id}: {fact[:60]}...", flush=True)
 
                 if kind == "boundary" and propose(
                     f"jev (boundary, salience {salience:.1f})", fact, heard=fact, source=f"daily/{today}.md"
@@ -1401,18 +1401,6 @@ class KurekEngine:
                     print("[Muse Jev] 🛡️ Proposed boundary in kurek_proposed_rules.md", flush=True)
         except Exception as e:
             print(f"[Muse Jev Consolidation Notice] {e}", flush=True)
-
-    def _append_unique(self, path: Path, marker: str, line: str) -> bool:
-        """Append line unless a line starting with marker is already present."""
-        with self._memory_file_lock:
-            existing = path.read_text(encoding="utf-8")
-            if any(ln.startswith(marker) or ln == marker for ln in existing.splitlines()):
-                return False
-            with open(path, "a", encoding="utf-8") as f:
-                if existing and not existing.endswith("\n"):
-                    f.write("\n")
-                f.write(line)
-            return True
 
     def _check_auto_screen_context(self, user_prompt: str) -> str | None:
         """Detect whether the prompt needs on-screen / terminal visual context.

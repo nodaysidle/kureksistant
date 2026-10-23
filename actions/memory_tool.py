@@ -3,9 +3,11 @@ Memory tool for Kurek.
 Allows storing and recalling long-term user facts, preferences, identity, and notes.
 Synchronizes with local memory and optional Hermes memories (see HERMES_* in .env).
 """
+from datetime import datetime
 from pathlib import Path
 
 from core.proposals import propose
+from memory import ledger
 from memory.config_manager import resolve_hermes_memory_dirs
 from memory.memory_manager import remember, search_memory
 
@@ -64,7 +66,11 @@ def manage_memory(parameters: dict, **kwargs) -> str:
             except Exception:
                 pass
 
-        # 3. Search local memory
+        # 3. Search the learned-memory ledger
+        for row in ledger.search(query):
+            found_lines.append(f"• [Learned #{row['id']}] {row['text']}")
+
+        # 4. Search local memory
         local_results = search_memory(query)
         if local_results and "Nothing stored" not in local_results and "I have not stored" not in local_results:
             found_lines.append(f"• [Local Memory]\n{local_results}")
@@ -91,6 +97,14 @@ def manage_memory(parameters: dict, **kwargs) -> str:
             category = inferred_kind
         salience_tag = f" [salience:{jev_meta['salience']:.1f}|conf:{jev_meta['confidence']:.2f}]"
 
+    try:
+        memory_id = ledger.append(
+            category, f"{key}: {value}", f"manage_memory call {datetime.now():%Y-%m-%d}",
+            key=key, supersedes=_as_int(params.get("replaces")),
+        )
+    except ledger.LedgerError as e:
+        return f"Nothing was saved: {e}."
+
     local_res = remember(key=key, value=value, category=category)
 
     # 1. Sync to Hermes MEMORY.md if available
@@ -104,22 +118,19 @@ def manage_memory(parameters: dict, **kwargs) -> str:
     except Exception as e:
         print(f"[Memory Tool] Hermes sync notice: {e}")
 
-    # 2. Sync to Muse ~/MEMORY.md
-    try:
-        muse_file = Path.home() / "MEMORY.md"
-        if muse_file.exists():
-            entry = f"- [{category.upper()}] {key}: {value}{salience_tag}\n"
-            with open(muse_file, "a", encoding="utf-8") as f:
-                f.write(entry)
-    except Exception as e:
-        print(f"[Memory Tool] Muse sync notice: {e}")
-
-    # 3. A hard boundary is only proposed; the user promotes it to rules.toml
+    # 2. A hard boundary is only proposed; the user promotes it to rules.toml
     if jev_meta and jev_meta.get("kind") == "boundary":
         if propose("manage_memory (jev boundary)", f"{key}: {value}", source="manage_memory tool call"):
             print("[Memory Tool] Boundary proposed in kurek_proposed_rules.md.")
 
-    return f"{local_res} (synced to Hermes and Muse MEMORY.md{salience_tag})."
+    return f"{local_res} (saved as memory #{memory_id}{salience_tag})."
+
+
+def _as_int(value) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _triage_with_jev(key: str, value: str) -> dict | None:
@@ -191,6 +202,10 @@ TOOL = {
             "value": {
                 "type": "STRING",
                 "description": "The fact or detail to remember"
+            },
+            "replaces": {
+                "type": "INTEGER",
+                "description": "For remember: the #id of an earlier learned memory this one corrects or replaces"
             },
             "query": {
                 "type": "STRING",

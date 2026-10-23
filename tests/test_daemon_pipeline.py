@@ -99,17 +99,6 @@ def test_history_save_is_atomic_and_private(monkeypatch, tmp_path):
     assert not list(f.parent.glob(".*.tmp"))
 
 
-def test_append_unique_dedupes(monkeypatch, tmp_path):
-    engine = _make_lite_engine(monkeypatch)
-    mem = tmp_path / "MEMORY.md"
-    mem.write_text("# Memory", encoding="utf-8")
-    line = "- [PREFERENCE] I like tea <!-- [c1] -->\n"
-    assert engine._append_unique(mem, "- [PREFERENCE] I like tea ", line)
-    assert not engine._append_unique(mem, "- [PREFERENCE] I like tea ", line.replace("c1", "c2"))
-    assert mem.read_text().count("I like tea") == 1
-    assert mem.read_text().startswith("# Memory\n- [PREFERENCE]")
-
-
 # --- TTS queue ----------------------------------------------------------------
 
 class _SynthEngine:
