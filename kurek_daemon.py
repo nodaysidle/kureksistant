@@ -61,6 +61,7 @@ from core.hyprland_watcher import get_hyprland_watcher
 from core.mpv_sink import get_mpv_sink
 from core.timing import begin_query, end_query
 from core import confirm
+from core.rules import prompt_block as rules_prompt_block
 from memory.atomic_io import atomic_write_text
 from memory.memory_manager import load_memory, format_memory_for_prompt
 
@@ -1034,6 +1035,8 @@ class KurekEngine:
             "Social Media / X Strategy: wiki/concepts/x-promo-strategy.md, moc-x-promo.md, reel-clip-workflow.md.\n"
             "Whenever asked about portfolio projects, roadmap, what must be done, what is done, or social media strategy, ALWAYS call vault_knowledge(action='read'|'list_projects'|'search') to retrieve ground truth."
         )
+        if rules_block := rules_prompt_block():
+            sys_prompt += f"\n\n{rules_block}"
         sys_prompt += f"\n\n{vault_anchor}"
 
         if mem_block:
