@@ -224,6 +224,27 @@ def _find_linux_desktop_file(app_name: str) -> Path | None:
     return None
 
 
+_GENERIC_TERMINAL_NAMES = ("terminal", "x-terminal-emulator", "shell", "bash", "gnome-terminal")
+
+
+def _launch_default_terminal(command: list[str] | None = None) -> bool:
+    """Open the user's default terminal; xdg-terminal-exec reads ~/.config/xdg-terminals.list."""
+    exe = shutil.which("xdg-terminal-exec")
+    if not exe:
+        return False
+    try:
+        subprocess.Popen(
+            [exe, *(command or [])],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError:
+        return False
+    return True
+
+
 def _launch_linux(app_name: str) -> bool:
     # 1. If already running on Hyprland, switch workspace and focus
     if _focus_hyprland_app(app_name):
@@ -231,6 +252,10 @@ def _launch_linux(app_name: str) -> bool:
 
     # 2. Terminal emulators and shells: try common ones in order
     clean_name = app_name.strip().lower()
+    if clean_name in _GENERIC_TERMINAL_NAMES and _launch_default_terminal():
+        return True
+    if clean_name in ("fish", "ghostty -e fish") and _launch_default_terminal([shutil.which("fish") or "fish"]):
+        return True
     if clean_name in ("terminal", "x-terminal-emulator", "ghostty", "herdr", "shell", "bash", "gnome-terminal"):
         for term in _LINUX_TERMINAL_FALLBACKS:
             if shutil.which(term):
