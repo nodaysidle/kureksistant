@@ -6,7 +6,7 @@ Background service with observed ~450MB peak RAM when faster-whisper is loaded.
 Connects with:
   • Linux UDS trigger (kurek-trigger) / Hyprland Middle Click
   • Android remote app over Tailscale (/remote/prompt, SSE)
-  • DeepSeek API (deepseek-flash, served by DeepSeek-V4.1-Flash)
+  • Brain: DeepSeek API (deepseek-flash), or Claude Haiku when KUREK_LLM=haiku
   • STT: OpenRouter Whisper / Deepgram Nova-2, local faster-whisper fallback
   • xAI Grok TTS (Sol) via persistent mpv PipeWire sink
 """
@@ -39,6 +39,7 @@ sys.path.insert(0, str(BASE_DIR))
 
 import socket
 from memory.config_manager import (
+    get_anthropic_key,
     get_deepgram_key,
     get_deepseek_key,
     get_openrouter_api_key,
@@ -53,7 +54,7 @@ from core.decision_client import (
     auto_screen_enabled,
     query_needs_screen,
 )
-from core.llm_client import brain_name, stream_deepseek_sentences
+from core.llm_client import brain_name, stream_deepseek_sentences, use_haiku
 from core.tts import create_tts_player
 from core.stt import DeepgramSTT, FallbackSTT, OpenRouterSTT, STTError, WhisperSTT
 from core.action_loader import discover_actions
@@ -162,6 +163,16 @@ def silence_stop_reason(now: float, has_speech: bool, last_sound_time: float, re
 
 
 _warned_truncated: set[tuple[Path, int]] = set()
+
+
+def brain_key_problem() -> str | None:
+    """Why the active brain cannot answer, or None when its API key is present."""
+    if use_haiku():
+        if not get_anthropic_key():
+            return "ANTHROPIC_API_KEY (or HAIKU_API_KEY) missing — Kurek cannot answer."
+    elif not get_deepseek_key():
+        return "DEEPSEEK_API_KEY missing — Kurek cannot answer."
+    return None
 
 
 def read_capped(path: Path, limit: int = MEMORY_FILE_MAX_CHARS) -> str:
@@ -480,7 +491,7 @@ class KurekEngine:
                         "parameters": _normalize_json_schema(decl.get("parameters", {})),
                     }
                 })
-        print(f"[Kurek] Configured {len(self.openai_tools)} tools for DeepSeek.")
+        print(f"[Kurek] Configured {len(self.openai_tools)} tools for {brain_name()}.")
 
         # Multi-turn conversational memory & persistence
         self.history_file = BASE_DIR / "memory" / "kurek_history.json"
@@ -603,8 +614,8 @@ class KurekEngine:
     def _report_startup_problems(self, xai_key: str | None) -> None:
         """One notification at startup listing anything that will break usage."""
         problems = []
-        if not get_deepseek_key():
-            problems.append("DEEPSEEK_API_KEY missing — Kurek cannot answer.")
+        if brain_problem := brain_key_problem():
+            problems.append(brain_problem)
         if self.stt is None:
             problems.append("No speech recognition (faster-whisper failed to load, no cloud STT key).")
         if not xai_key and not shutil.which("spd-say"):
@@ -1088,7 +1099,7 @@ class KurekEngine:
 
                 ev_type = ev.get("type")
                 if ev_type == "error":
-                    stream_error = ev.get("error") or "DeepSeek request failed."
+                    stream_error = ev.get("error") or f"{brain_name()} request failed."
                     break
 
                 if ev_type == "tool_calls":

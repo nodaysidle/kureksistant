@@ -276,3 +276,17 @@ def test_remote_stream_audio_emits_sentence_before_done(monkeypatch, tmp_path):
     assert events[0]["sentence"] == "Hi there."
     # Muted remote request: nothing played on the PC speaker.
     assert engine.tts.spoken == []
+
+
+def test_brain_key_problem_follows_the_active_brain(monkeypatch):
+    monkeypatch.setattr(daemon, "get_deepseek_key", lambda: None)
+    monkeypatch.setattr(daemon, "get_anthropic_key", lambda: None)
+
+    monkeypatch.delenv("KUREK_LLM", raising=False)
+    assert "DEEPSEEK_API_KEY" in daemon.brain_key_problem()
+
+    monkeypatch.setenv("KUREK_LLM", "haiku")
+    assert "ANTHROPIC_API_KEY" in daemon.brain_key_problem()
+
+    monkeypatch.setattr(daemon, "get_anthropic_key", lambda: "sk-test-not-real")
+    assert daemon.brain_key_problem() is None
