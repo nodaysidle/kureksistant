@@ -69,3 +69,4 @@ workspace/
 
 # Local rollback snapshots (see RESTORE-DECISION-LISTEN.md)
 .backups/
+HANDOFF.md
