@@ -45,6 +45,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String KEY_HOST = "kurek_host";
     private static final String KEY_PORT = "kurek_port";
     private static final String KEY_TOKEN = "kurek_token";
+    private static final String KEY_ASKED_NOTIFICATIONS = "kurek_asked_notifications";
     private static final String KEY_SPEAK_OUT_LOUD = "kurek_speak_out_loud";
 
     private RecyclerView recyclerChat;
@@ -65,7 +66,6 @@ public class MainActivity extends AppCompatActivity {
     private AudioQueuePlayer audioPlayer;
 
     private final KurekClient client = new KurekClient();
-    private LiveVoiceSession liveSession;
     private TextView chipLive;
     private String host = "";
     private int port = 8790;
@@ -496,14 +496,15 @@ public class MainActivity extends AppCompatActivity {
         boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
         if (requestCode == REQ_RECORD_AUDIO && granted) {
             toggleVoiceRecording();
-        } else if (requestCode == REQ_LIVE_AUDIO && granted) {
+        } else if (requestCode == REQ_LIVE_AUDIO
+                && ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             toggleLive();
         }
     }
 
     private void toggleLive() {
-        if (liveSession != null) {
-            liveSession.stop();
+        if (LiveCallService.getState() != LiveCallService.State.IDLE) {
+            startService(LiveCallService.stopIntent(this));
             return;
         }
         if (!isConfigured()) {
@@ -511,45 +512,77 @@ public class MainActivity extends AppCompatActivity {
             showSettingsDialog();
             return;
         }
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.RECORD_AUDIO}, REQ_LIVE_AUDIO);
+        boolean needMic = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED;
+        SharedPreferences sp = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        // Ask for notifications once; the call works without them, the End control just isn't shown.
+        boolean needNotif = android.os.Build.VERSION.SDK_INT >= 33
+                && !sp.getBoolean(KEY_ASKED_NOTIFICATIONS, false)
+                && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED;
+        if (needNotif) {
+            sp.edit().putBoolean(KEY_ASKED_NOTIFICATIONS, true).apply();
+        }
+        if (needMic || needNotif) {
+            List<String> ask = new ArrayList<>();
+            if (needMic) ask.add(Manifest.permission.RECORD_AUDIO);
+            if (needNotif) ask.add(Manifest.permission.POST_NOTIFICATIONS);
+            ActivityCompat.requestPermissions(this, ask.toArray(new String[0]), REQ_LIVE_AUDIO);
             return;
         }
         stopAudio();
         triggerHaptic(40);
-        chipLive.setText("Connecting…");
-        setStatusState("CONNECTING", getColor(R.color.warn));
-        liveSession = new LiveVoiceSession(this, new LiveVoiceSession.Listener() {
-            @Override
-            public void onLive() {
-                chipLive.setText("End live");
+        ContextCompat.startForegroundService(this, LiveCallService.startIntent(this));
+    }
+
+    private void applyLiveState(LiveCallService.State state) {
+        switch (state) {
+            case CONNECTING:
+                chipLive.setText(R.string.live_connecting);
+                setStatusState("CONNECTING", getColor(R.color.warn));
+                break;
+            case LIVE:
+                chipLive.setText(R.string.live_end_chip);
                 setStatusState("LIVE", getColor(R.color.accent));
-            }
-
-            @Override
-            public void onUserText(String text) {
-                appendLiveMessage(ChatMessage.TYPE_USER, text);
-            }
-
-            @Override
-            public void onKurekText(String text) {
-                appendLiveMessage(ChatMessage.TYPE_KUREK, text);
-            }
-
-            @Override
-            public void onError(String message) {
-                Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
-            }
-
-            @Override
-            public void onClosed() {
-                liveSession = null;
+                break;
+            default:
                 chipLive.setText(R.string.preset_live);
-                pingServer();
-            }
-        });
-        // Live voice listens on the HTTP port + 1 (daemon default 8791).
-        liveSession.start(host, port + 1, token);
+                break;
+        }
+    }
+
+    private final LiveCallService.Listener liveListener = new LiveCallService.Listener() {
+        @Override
+        public void onStateChanged(LiveCallService.State state) {
+            applyLiveState(state);
+            if (state == LiveCallService.State.IDLE) pingServer();
+        }
+
+        @Override
+        public void onUserText(String text) {
+            appendLiveMessage(ChatMessage.TYPE_USER, text);
+        }
+
+        @Override
+        public void onKurekText(String text) {
+            appendLiveMessage(ChatMessage.TYPE_KUREK, text);
+        }
+
+        @Override
+        public void onError(String message) {
+            Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
+        }
+    };
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        LiveCallService.addListener(liveListener);
+        applyLiveState(LiveCallService.getState());
+    }
+
+    @Override
+    protected void onStop() {
+        LiveCallService.removeListener(liveListener);
+        super.onStop();
     }
 
     private void appendLiveMessage(int type, String text) {
@@ -561,9 +594,6 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
-        if (liveSession != null) {
-            liveSession.stop();
-        }
         if (audioPlayer != null) {
             audioPlayer.stop();
         }

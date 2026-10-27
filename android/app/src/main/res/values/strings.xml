@@ -25,4 +25,16 @@
     <string name="settings_speak">Speak out loud</string>
     <string name="settings_speak_sub">Read replies aloud on this phone</string>
     <string name="settings_save">Save and reconnect</string>
+    <string name="live_connecting">Connecting...</string>
+    <string name="live_end">End</string>
+    <string name="live_end_chip">End live</string>
+    <string name="live_channel">Live call</string>
+    <string name="live_notification">Kurek live call</string>
+    <string name="widget_description">Start or end a live voice call with Kurek</string>
+    <string name="widget_ready">ready</string>
+    <string name="widget_live">live</string>
+    <string name="widget_connecting">connecting</string>
+    <string name="widget_desc_talk">Start live call with Kurek</string>
+    <string name="widget_desc_end">End live call with Kurek</string>
+    <string name="widget_label">Kurek live</string>
 </resources>
