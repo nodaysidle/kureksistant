@@ -1080,7 +1080,7 @@ class KurekEngine:
 
         reply_text = ""
         last_tool_output = ""
-        max_tool_turns = 5
+        max_tool_turns = 15
         sentence_count = 0
         stream_error: str | None = None
 
@@ -1093,7 +1093,10 @@ class KurekEngine:
 
             for ev in stream_deepseek_sentences(
                 messages=messages,
-                tools=self.openai_tools if (self.openai_tools and turn_idx < max_tool_turns - 1) else None,
+                # Final round: keep the tool list and forbid calls instead of
+                # dropping tools, or Haiku rejects this round's thinking blocks.
+                tools=self.openai_tools or None,
+                tool_choice="none" if turn_idx == max_tool_turns - 1 else None,
                 model="deepseek-flash",
             ):
                 if self._cancel_requested:
@@ -1200,7 +1203,9 @@ class KurekEngine:
                     "role": "user",
                     "content": "In 1 or 2 concise, spoken sentences, directly tell me what was done or found.",
                 })
-                for ev in stream_deepseek_sentences(messages=summary_msgs, tools=None, model="deepseek-flash"):
+                for ev in stream_deepseek_sentences(
+                    messages=summary_msgs, tools=self.openai_tools or None, tool_choice="none", model="deepseek-flash"
+                ):
                     if ev.get("type") == "sentence":
                         raw_sentence = ev.get("sentence", "")
                         clean_sentence = self.sanitize_text_for_speech(raw_sentence)

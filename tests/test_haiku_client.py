@@ -47,3 +47,41 @@ def test_switch_routes_stream_and_needs_no_deepseek_key(monkeypatch) -> None:
     events = list(llm_client.stream_deepseek(messages=[{"role": "user", "content": "hi"}]))
     assert events == [{"type": "error", "error": "No ANTHROPIC_API_KEY configured"}]
     assert llm_client.brain_name() == "Claude Haiku"
+
+
+def test_final_round_keeps_tools_and_forbids_calls(monkeypatch) -> None:
+    # Thinking blocks are bound to the tools list: dropping tools on the last
+    # round 400s, so the list stays and tool_choice=none turns calls off.
+    import anthropic
+    from memory import config_manager
+
+    sent: dict = {}
+
+    class _Stream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def __iter__(self):
+            return iter(())
+
+        def get_final_message(self):
+            return type("M", (), {"stop_reason": "end_turn", "content": []})()
+
+    class _Client:
+        def __init__(self, **_):
+            self.messages = self
+
+        def stream(self, **kw):
+            sent.update(kw)
+            return _Stream()
+
+    monkeypatch.setenv("KUREK_LLM", "haiku")
+    monkeypatch.setattr(config_manager, "get_anthropic_key", lambda: "k")
+    monkeypatch.setattr(anthropic, "Anthropic", _Client)
+    tools = [{"type": "function", "function": {"name": "a", "parameters": {}}}]
+    list(llm_client.stream_deepseek(messages=[{"role": "user", "content": "hi"}], tools=tools, tool_choice="none"))
+    assert sent["tools"][0]["name"] == "a"
+    assert sent["tool_choice"] == {"type": "none"}

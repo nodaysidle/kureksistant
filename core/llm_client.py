@@ -212,7 +212,9 @@ def _to_anthropic_messages(messages: list) -> tuple[str, list[dict]]:
     return "\n\n".join(system), out
 
 
-def stream_haiku(messages: list, tools: list | None = None) -> Generator[dict, None, None]:
+def stream_haiku(
+    messages: list, tools: list | None = None, tool_choice: str | None = None
+) -> Generator[dict, None, None]:
     """Same event contract as stream_deepseek, backed by Claude Haiku.
 
     Env: KUREK_HAIKU_MODEL (default claude-haiku-5-5), KUREK_HAIKU_EFFORT
@@ -239,6 +241,8 @@ def stream_haiku(messages: list, tools: list | None = None) -> Generator[dict, N
         kwargs["system"] = system
     if tools:
         kwargs["tools"] = _to_anthropic_tools(tools)
+        if tool_choice:
+            kwargs["tool_choice"] = {"type": tool_choice}
 
     text = ""
     try:
@@ -403,6 +407,7 @@ def stream_deepseek(
     model: str = DEFAULT_MODEL,
     temperature: float = 0.4,
     tools: list | None = None,
+    tool_choice: str | None = None,
 ) -> Generator[dict, None, None]:
     """
     Streams response from DeepSeek API directly.
@@ -437,7 +442,7 @@ def stream_deepseek(
             req_messages.append({"role": "user", "content": prompt})
 
     if use_haiku():
-        yield from stream_haiku(req_messages, tools)
+        yield from stream_haiku(req_messages, tools, tool_choice)
         return
 
     payload = {
@@ -446,7 +451,7 @@ def stream_deepseek(
         "temperature": temperature,
         "stream": True,
     }
-    if tools:
+    if tools and tool_choice != "none":
         payload["tools"] = tools
 
     resp, err, retryable = _open_deepseek_stream(key, payload)
@@ -573,6 +578,7 @@ def stream_deepseek_sentences(
     model: str = DEFAULT_MODEL,
     temperature: float = 0.4,
     tools: list | None = None,
+    tool_choice: str | None = None,
 ) -> Generator[dict, None, None]:
     """
     Buffers streaming tokens from DeepSeek and yields complete sentences immediately
@@ -589,6 +595,7 @@ def stream_deepseek_sentences(
         model=model,
         temperature=temperature,
         tools=tools,
+        tool_choice=tool_choice,
     ):
         event_type = event.get("type")
         if event_type == "tool_calls":
