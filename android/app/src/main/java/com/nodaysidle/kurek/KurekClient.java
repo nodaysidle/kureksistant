@@ -123,7 +123,7 @@ public class KurekClient {
                     }
 
                     if ("tool".equals(type)) {
-                        String desc = event.optString("description", "⚙️ Executing action...");
+                        String desc = event.optString("description", "executing action");
                         mainHandler.post(() -> cb.onToolCalled(desc));
                     } else if ("sentence".equals(type)) {
                         String sentence = event.optString("sentence", "");

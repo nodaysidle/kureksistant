@@ -1,247 +1,210 @@
 <?xml version="1.0" encoding="utf-8"?>
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg_main">
+    android:background="@color/background">
 
-    <!-- Top App Header -->
+    <!-- Top bar. Top padding is raised by the status-bar inset in MainActivity so the bar draws behind it. -->
     <LinearLayout
         android:id="@+id/headerLayout"
         android:layout_width="match_parent"
-        android:layout_height="64dp"
+        android:layout_height="wrap_content"
+        android:minHeight="56dp"
         android:orientation="horizontal"
         android:gravity="center_vertical"
         android:paddingStart="16dp"
-        android:paddingEnd="16dp"
-        android:background="#0E1117"
+        android:paddingEnd="4dp"
+        android:paddingTop="4dp"
+        android:paddingBottom="4dp"
+        android:background="@color/surface_low"
         app:layout_constraintTop_toTopOf="parent">
-
-        <ImageView
-            android:id="@+id/imgLogo"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
-            android:src="@mipmap/ic_launcher_round"
-            android:contentDescription="Kurek Logo" />
 
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:orientation="vertical"
-            android:layout_marginStart="12dp">
+            android:orientation="vertical">
 
             <TextView
+                style="@style/TextMono"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Kurek"
+                android:text="@string/title"
                 android:textSize="18sp"
-                android:textStyle="bold"
-                android:textColor="@color/text_primary" />
+                android:importantForAccessibility="no" />
 
-            <TextView
-                android:id="@+id/txtHostLabel"
-                android:layout_width="wrap_content"
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Set host and token in Settings"
-                android:textSize="11sp"
-                android:textColor="@color/text_muted" />
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <View
+                    android:id="@+id/statusDot"
+                    android:layout_width="8dp"
+                    android:layout_height="8dp"
+                    android:background="@drawable/bg_dot"
+                    android:backgroundTint="@color/accent" />
+
+                <TextView
+                    android:id="@+id/txtStatus"
+                    style="@style/TextMeta"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:text="@string/status_default" />
+
+                <TextView
+                    android:id="@+id/txtHostLabel"
+                    style="@style/TextMeta"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="8dp"
+                    android:singleLine="true"
+                    android:ellipsize="end"
+                    android:text="@string/host_unset" />
+            </LinearLayout>
         </LinearLayout>
 
-        <!-- Status Pill -->
-        <LinearLayout
-            android:id="@+id/statusPill"
+        <TextView
+            android:id="@+id/btnTerminal"
+            style="@style/PresetButton"
             android:layout_width="wrap_content"
-            android:layout_height="28dp"
-            android:background="@drawable/bg_pill_status"
-            android:gravity="center"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp">
-
-            <View
-                android:id="@+id/statusDot"
-                android:layout_width="8dp"
-                android:layout_height="8dp"
-                android:background="@drawable/bg_pill_status"
-                android:backgroundTint="@color/status_green" />
-
-            <TextView
-                android:id="@+id/txtStatus"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="6dp"
-                android:text="ONLINE"
-                android:textSize="11sp"
-                android:textStyle="bold"
-                android:textColor="@color/text_secondary" />
-        </LinearLayout>
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:text="@string/terminal"
+            android:contentDescription="@string/terminal_desc" />
 
         <ImageButton
             android:id="@+id/btnSpeaker"
-            android:layout_width="38dp"
-            android:layout_height="38dp"
-            android:layout_marginStart="8dp"
-            android:background="?selectableItemBackgroundBorderless"
+            style="@style/IconButton"
             android:src="@drawable/ic_volume_off"
-            android:contentDescription="Toggle Speak Out Loud" />
+            android:contentDescription="@string/speaker_desc" />
 
         <ImageButton
             android:id="@+id/btnSettings"
-            android:layout_width="38dp"
-            android:layout_height="38dp"
-            android:layout_marginStart="4dp"
-            android:background="?selectableItemBackgroundBorderless"
+            style="@style/IconButton"
             android:src="@drawable/ic_settings"
-            android:contentDescription="Server Settings" />
+            android:contentDescription="@string/settings_desc" />
     </LinearLayout>
 
-    <!-- Quick Action Chips -->
+    <View
+        android:id="@+id/dividerTop"
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/outline"
+        app:layout_constraintTop_toBottomOf="@id/headerLayout" />
+
+    <!-- Preset prompts -->
     <HorizontalScrollView
         android:id="@+id/quickChipsScroll"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:scrollbars="none"
+        android:clipToPadding="false"
         android:paddingStart="12dp"
         android:paddingEnd="12dp"
         android:paddingTop="8dp"
         android:paddingBottom="8dp"
-        app:layout_constraintTop_toBottomOf="@id/headerLayout">
+        app:layout_constraintTop_toBottomOf="@id/dividerTop">
 
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:orientation="horizontal">
+            android:orientation="horizontal"
+            android:showDividers="middle"
+            android:divider="@drawable/space_8">
 
             <TextView
                 android:id="@+id/chipGrokbot"
+                style="@style/PresetButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:background="@drawable/bg_quick_chip"
-                android:paddingStart="12dp"
-                android:paddingEnd="12dp"
-                android:paddingTop="6dp"
-                android:paddingBottom="6dp"
-                android:text="⚡ Open Grokbot"
-                android:textColor="@color/text_secondary"
-                android:textSize="12sp"
-                android:layout_marginEnd="8dp" />
+                android:text="@string/preset_grokbot" />
 
             <TextView
                 android:id="@+id/chipSysStatus"
+                style="@style/PresetButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:background="@drawable/bg_quick_chip"
-                android:paddingStart="12dp"
-                android:paddingEnd="12dp"
-                android:paddingTop="6dp"
-                android:paddingBottom="6dp"
-                android:text="📊 System Load"
-                android:textColor="@color/text_secondary"
-                android:textSize="12sp"
-                android:layout_marginEnd="8dp" />
+                android:text="@string/preset_activity" />
 
             <TextView
                 android:id="@+id/chipProjects"
+                style="@style/PresetButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:background="@drawable/bg_quick_chip"
-                android:paddingStart="12dp"
-                android:paddingEnd="12dp"
-                android:paddingTop="6dp"
-                android:paddingBottom="6dp"
-                android:text="📚 Vault Projects"
-                android:textColor="@color/text_secondary"
-                android:textSize="12sp"
-                android:layout_marginEnd="8dp" />
+                android:text="@string/preset_projects" />
 
             <TextView
                 android:id="@+id/chipScreen"
+                style="@style/PresetButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:background="@drawable/bg_quick_chip"
-                android:paddingStart="12dp"
-                android:paddingEnd="12dp"
-                android:paddingTop="6dp"
-                android:paddingBottom="6dp"
-                android:text="👁️ What is on screen?"
-                android:textColor="@color/text_secondary"
-                android:textSize="12sp" />
+                android:text="@string/preset_screen" />
+
+            <TextView
+                android:id="@+id/chipLive"
+                style="@style/PresetButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/preset_live"
+                android:contentDescription="@string/preset_live_desc" />
         </LinearLayout>
     </HorizontalScrollView>
 
-    <!-- Chat Messages RecyclerView -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/recyclerChat"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:padding="12dp"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp"
         android:clipToPadding="false"
         app:layout_constraintTop_toBottomOf="@id/quickChipsScroll"
         app:layout_constraintBottom_toTopOf="@id/bottomInputLayout" />
 
-    <!-- Bottom Action Bar / Input Area -->
+    <!-- Input bar. Bottom padding is raised by max(gesture-nav, IME) in MainActivity. -->
     <LinearLayout
         android:id="@+id/bottomInputLayout"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:gravity="center_vertical"
+        android:gravity="bottom"
         android:paddingStart="12dp"
-        android:paddingEnd="12dp"
+        android:paddingEnd="4dp"
         android:paddingTop="8dp"
-        android:paddingBottom="14dp"
-        android:background="#0E1117"
+        android:paddingBottom="8dp"
+        android:background="@drawable/bg_input_bar"
         app:layout_constraintBottom_toBottomOf="parent">
 
-        <LinearLayout
+        <EditText
+            android:id="@+id/editPrompt"
+            style="@style/FieldInput"
             android:layout_width="0dp"
-            android:layout_height="48dp"
+            android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:background="@drawable/bg_input_box"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:paddingStart="14dp"
-            android:paddingEnd="8dp">
+            android:hint="@string/prompt_hint"
+            android:maxLines="4"
+            android:inputType="textCapSentences|textMultiLine"
+            android:imeOptions="actionSend" />
 
-            <EditText
-                android:id="@+id/editPrompt"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="1"
-                android:background="@null"
-                android:hint="Tell Kurek to do anything..."
-                android:textColorHint="@color/text_muted"
-                android:textColor="@color/text_primary"
-                android:textSize="14sp"
-                android:maxLines="3"
-                android:inputType="textCapSentences"
-                android:imeOptions="actionSend" />
+        <ImageButton
+            android:id="@+id/btnSend"
+            style="@style/IconButton"
+            android:src="@drawable/ic_send"
+            android:contentDescription="@string/send_desc" />
 
-            <ImageButton
-                android:id="@+id/btnSend"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:background="?selectableItemBackgroundBorderless"
-                android:src="@drawable/ic_send_cyan"
-                android:contentDescription="Send Prompt" />
-        </LinearLayout>
-
-        <!-- Tap-To-Speak Mic Button -->
-        <FrameLayout
-            android:id="@+id/frameMic"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:layout_marginStart="8dp">
-
-            <ImageButton
-                android:id="@+id/btnMic"
-                android:layout_width="48dp"
-                android:layout_height="48dp"
-                android:background="@drawable/bg_mic_button"
-                android:src="@drawable/ic_mic_white"
-                android:contentDescription="Tap or Hold to Speak" />
-        </FrameLayout>
+        <ImageButton
+            android:id="@+id/btnMic"
+            style="@style/IconButton"
+            android:background="@drawable/bg_mic_button"
+            android:src="@drawable/ic_mic"
+            android:contentDescription="@string/mic_desc" />
     </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>

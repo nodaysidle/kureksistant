@@ -1,6 +1,7 @@
 package com.nodaysidle.kurek;
 
 import android.Manifest;
+import android.graphics.Color;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -14,17 +15,21 @@ import android.speech.tts.TextToSpeech;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
-import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.TextView;
 import android.widget.Toast;
 import androidx.annotation.NonNull;
+import androidx.activity.EdgeToEdge;
+import androidx.activity.SystemBarStyle;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.SwitchCompat;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import java.text.SimpleDateFormat;
@@ -35,6 +40,7 @@ import java.util.Locale;
 
 public class MainActivity extends AppCompatActivity {
     private static final int REQ_RECORD_AUDIO = 1001;
+    private static final int REQ_LIVE_AUDIO = 1002;
     private static final String PREFS_NAME = "kurek_prefs";
     private static final String KEY_HOST = "kurek_host";
     private static final String KEY_PORT = "kurek_port";
@@ -59,6 +65,8 @@ public class MainActivity extends AppCompatActivity {
     private AudioQueuePlayer audioPlayer;
 
     private final KurekClient client = new KurekClient();
+    private LiveVoiceSession liveSession;
+    private TextView chipLive;
     private String host = "";
     private int port = 8790;
     private String token = "";
@@ -66,7 +74,14 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // The theme is dark whatever the system setting is, so pin light system-bar icons
+        // (SystemBarStyle.auto would follow the system and draw dark icons on dark bars).
+        EdgeToEdge.enable(this, SystemBarStyle.dark(Color.TRANSPARENT), SystemBarStyle.dark(Color.TRANSPARENT));
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            getWindow().setNavigationBarContrastEnforced(false);
+        }
         setContentView(R.layout.activity_main);
+        applyWindowInsets();
 
         vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
         audioPlayer = new AudioQueuePlayer(this);
@@ -79,6 +94,26 @@ public class MainActivity extends AppCompatActivity {
         setupTts();
 
         refreshConnectionUi();
+    }
+
+    /** Top bar grows under the status bar, input bar sits above the gesture bar or the keyboard. */
+    private void applyWindowInsets() {
+        View root = findViewById(R.id.root);
+        View header = findViewById(R.id.headerLayout);
+        View input = findViewById(R.id.bottomInputLayout);
+        final int headerTop = header.getPaddingTop();
+        final int inputBottom = input.getPaddingBottom();
+        ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
+            Insets bars = insets.getInsets(
+                    WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
+            Insets ime = insets.getInsets(WindowInsetsCompat.Type.ime());
+            v.setPadding(bars.left, 0, bars.right, 0);
+            header.setPadding(header.getPaddingLeft(), headerTop + bars.top,
+                    header.getPaddingRight(), header.getPaddingBottom());
+            input.setPadding(input.getPaddingLeft(), input.getPaddingTop(),
+                    input.getPaddingRight(), inputBottom + Math.max(bars.bottom, ime.bottom));
+            return WindowInsetsCompat.CONSUMED;
+        });
     }
 
     private void loadPreferences() {
@@ -117,8 +152,8 @@ public class MainActivity extends AppCompatActivity {
 
     private void refreshConnectionUi() {
         if (!isConfigured()) {
-            txtHostLabel.setText("Set host and token in Settings");
-            setStatusState("SETUP", getColor(R.color.status_amber));
+            txtHostLabel.setText(R.string.host_unset);
+            setStatusState("SETUP", getColor(R.color.warn));
             return;
         }
         txtHostLabel.setText("Workstation: " + host);
@@ -138,8 +173,11 @@ public class MainActivity extends AppCompatActivity {
 
         updateSpeakerButtonUi();
 
+        chipLive = findViewById(R.id.chipLive);
+        chipLive.setOnClickListener(v -> toggleLive());
+        findViewById(R.id.btnTerminal).setOnClickListener(v -> dispatchUserPrompt("Open herdr on my workstation."));
         findViewById(R.id.chipGrokbot).setOnClickListener(v -> dispatchUserPrompt("Open Grokbot on my workstation"));
-        findViewById(R.id.chipSysStatus).setOnClickListener(v -> dispatchUserPrompt("Check workstation system resources and CPU load"));
+        findViewById(R.id.chipSysStatus).setOnClickListener(v -> dispatchUserPrompt("Tell me my workstation's system activity: CPU load, memory, and temperatures."));
         findViewById(R.id.chipProjects).setOnClickListener(v -> dispatchUserPrompt("List all active projects in my nodaysidle vault"));
         findViewById(R.id.chipScreen).setOnClickListener(v -> dispatchUserPrompt("Inspect what is on the workstation screen right now"));
     }
@@ -311,7 +349,7 @@ public class MainActivity extends AppCompatActivity {
         chatAdapter.notifyItemInserted(kurekPos);
         recyclerChat.smoothScrollToPosition(kurekPos);
 
-        setStatusState("THINKING", getColor(R.color.status_amber));
+        setStatusState("THINKING", getColor(R.color.warn));
 
         final StringBuilder streamedContent = new StringBuilder();
         final int[] streamedSentencesCount = new int[]{0};
@@ -357,7 +395,7 @@ public class MainActivity extends AppCompatActivity {
                 kurekMsg.setPending(false);
                 chatAdapter.notifyItemChanged(kurekPos);
                 recyclerChat.smoothScrollToPosition(kurekPos);
-                setStatusState("ONLINE", getColor(R.color.status_green));
+                setStatusState("ONLINE", getColor(R.color.accent));
 
                 if (speakOutLoud && streamedSentencesCount[0] == 0 && !receivedAudioChunk[0]) {
                     speakText(finalText);
@@ -366,10 +404,10 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onError(String error) {
-                kurekMsg.setText("❌ " + error);
+                kurekMsg.setText("Error: " + error);
                 kurekMsg.setPending(false);
                 chatAdapter.notifyItemChanged(kurekPos);
-                setStatusState("OFFLINE", getColor(R.color.text_muted));
+                setStatusState("OFFLINE", getColor(R.color.error));
                 if (speakOutLoud && !receivedAudioChunk[0]) {
                     speakText("Error: " + error);
                 }
@@ -379,18 +417,18 @@ public class MainActivity extends AppCompatActivity {
 
     private void pingServer() {
         if (!isConfigured()) {
-            setStatusState("SETUP", getColor(R.color.status_amber));
+            setStatusState("SETUP", getColor(R.color.warn));
             return;
         }
         client.checkStatus(host, port, token, new KurekClient.StatusCallback() {
             @Override
             public void onStatus(String state) {
-                setStatusState("ONLINE", getColor(R.color.status_green));
+                setStatusState("ONLINE", getColor(R.color.accent));
             }
 
             @Override
             public void onError() {
-                setStatusState("OFFLINE", getColor(R.color.text_muted));
+                setStatusState("OFFLINE", getColor(R.color.error));
             }
         });
     }
@@ -412,7 +450,7 @@ public class MainActivity extends AppCompatActivity {
         EditText ePort = dialogView.findViewById(R.id.editPort);
         EditText eToken = dialogView.findViewById(R.id.editToken);
         SwitchCompat switchSpeak = dialogView.findViewById(R.id.switchSpeakOutLoud);
-        Button btnSave = dialogView.findViewById(R.id.btnSaveSettings);
+        TextView btnSave = dialogView.findViewById(R.id.btnSaveSettings);
 
         eHost.setText(host);
         ePort.setText(String.valueOf(port));
@@ -424,6 +462,10 @@ public class MainActivity extends AppCompatActivity {
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setView(dialogView)
                 .create();
+
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawableResource(R.drawable.bg_dialog);
+        }
 
         btnSave.setOnClickListener(v -> {
             String newHost = eHost.getText().toString().trim();
@@ -438,7 +480,7 @@ public class MainActivity extends AppCompatActivity {
             }
             savePreferences(newHost, newPort, newToken, newSpeak);
             dialog.dismiss();
-            Toast.makeText(this, "Settings saved!", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Settings saved", Toast.LENGTH_SHORT).show();
         });
 
         dialog.show();
@@ -451,13 +493,77 @@ public class MainActivity extends AppCompatActivity {
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == REQ_RECORD_AUDIO && grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+        boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+        if (requestCode == REQ_RECORD_AUDIO && granted) {
             toggleVoiceRecording();
+        } else if (requestCode == REQ_LIVE_AUDIO && granted) {
+            toggleLive();
         }
+    }
+
+    private void toggleLive() {
+        if (liveSession != null) {
+            liveSession.stop();
+            return;
+        }
+        if (!isConfigured()) {
+            Toast.makeText(this, "Set host and token in Settings first", Toast.LENGTH_LONG).show();
+            showSettingsDialog();
+            return;
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.RECORD_AUDIO}, REQ_LIVE_AUDIO);
+            return;
+        }
+        stopAudio();
+        triggerHaptic(40);
+        chipLive.setText("Connecting…");
+        setStatusState("CONNECTING", getColor(R.color.warn));
+        liveSession = new LiveVoiceSession(this, new LiveVoiceSession.Listener() {
+            @Override
+            public void onLive() {
+                chipLive.setText("End live");
+                setStatusState("LIVE", getColor(R.color.accent));
+            }
+
+            @Override
+            public void onUserText(String text) {
+                appendLiveMessage(ChatMessage.TYPE_USER, text);
+            }
+
+            @Override
+            public void onKurekText(String text) {
+                appendLiveMessage(ChatMessage.TYPE_KUREK, text);
+            }
+
+            @Override
+            public void onError(String message) {
+                Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
+            }
+
+            @Override
+            public void onClosed() {
+                liveSession = null;
+                chipLive.setText(R.string.preset_live);
+                pingServer();
+            }
+        });
+        // Live voice listens on the HTTP port + 1 (daemon default 8791).
+        liveSession.start(host, port + 1, token);
+    }
+
+    private void appendLiveMessage(int type, String text) {
+        messageList.add(new ChatMessage(type, text, getTime()));
+        int pos = messageList.size() - 1;
+        chatAdapter.notifyItemInserted(pos);
+        recyclerChat.smoothScrollToPosition(pos);
     }
 
     @Override
     protected void onDestroy() {
+        if (liveSession != null) {
+            liveSession.stop();
+        }
         if (audioPlayer != null) {
             audioPlayer.stop();
         }
