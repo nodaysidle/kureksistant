@@ -7,187 +7,317 @@
 # Only deviation from the .venv: tenacity 9.1.4 (venv has 9.2.1, which violates
 # google-genai's `tenacity<9.2.0` pin).
 annotated-types==0.8.0
-    # via pydantic
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   pydantic
+anthropic==2.1.0
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   -r requirements.txt
 anyio==4.15.1
     # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   anthropic
     #   google-genai
     #   httpx
     #   httpx2
     #   typesafe-sdk
 av==19.0.0
-    # via faster-whisper
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   faster-whisper
 certifi==2026.7.22
     # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
     #   httpcore
     #   httpx
     #   requests
 cffi==2.1.1
     # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
     #   cryptography
     #   sounddevice
 charset-normalizer==3.5.2
-    # via requests
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   requests
 click==8.5.0
     # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
     #   ddgs
     #   huggingface-hub
 cryptography==50.0.2
-    # via google-auth
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   google-auth
 ctranslate2==4.8.2
-    # via faster-whisper
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   faster-whisper
 ddgs==9.16.0
-    # via -r requirements.txt
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   -r requirements.txt
 distro==1.9.0
-    # via google-genai
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   google-genai
+docstring-parser==0.18.0
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   anthropic
 faster-whisper==1.2.1
-    # via -r requirements.txt
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   -r requirements.txt
 filelock==4.0.9
-    # via huggingface-hub
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   huggingface-hub
 flatbuffers==25.12.19
-    # via onnxruntime
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   onnxruntime
 fsspec==2026.9.0
-    # via huggingface-hub
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   huggingface-hub
 google-auth==2.59.1
-    # via google-genai
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   google-genai
 google-genai==2.27.0
-    # via -r requirements.txt
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   -r requirements.txt
 greenlet==3.5.6
-    # via playwright
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   playwright
 h11==0.16.0
     # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
     #   httpcore
     #   httpcore2
 hf-xet==1.6.0
-    # via huggingface-hub
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   huggingface-hub
 httpcore==1.0.9
-    # via httpx
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   httpx
 httpcore2==2.13.1
-    # via httpx2
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   httpx2
 httpx==0.28.1
     # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
     #   google-genai
     #   huggingface-hub
 httpx2==2.13.1
-    # via typesafe-sdk
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   anthropic
+    #   typesafe-sdk
 huggingface-hub==1.33.0
     # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
     #   faster-whisper
     #   tokenizers
 idna==3.20
     # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
     #   anyio
     #   httpx
     #   httpx2
     #   requests
+jiter==0.17.0
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   anthropic
 lxml==6.1.3
-    # via ddgs
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   ddgs
 mouseinfo==0.1.3
-    # via pyautogui
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   pyautogui
 numpy==2.5.3
     # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
     #   -r requirements.txt
     #   ctranslate2
     #   onnxruntime
 onnxruntime==1.30.0
-    # via faster-whisper
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   faster-whisper
+opentelemetry-api==1.45.1
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   anthropic
 packaging==26.3
     # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
     #   huggingface-hub
     #   onnxruntime
     #   typesafe-sdk
 pillow==12.3.0
-    # via -r requirements.txt
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   -r requirements.txt
 playwright==1.63.0
-    # via -r requirements.txt
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   -r requirements.txt
 primp==2.0.1
-    # via ddgs
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   ddgs
 protobuf==7.36.2
-    # via onnxruntime
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   onnxruntime
 psutil==7.2.2
-    # via -r requirements.txt
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   -r requirements.txt
 pyasn1==0.6.4
-    # via pyasn1-modules
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   pyasn1-modules
 pyasn1-modules==0.4.2
-    # via google-auth
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   google-auth
 pyautogui==0.9.54
-    # via -r requirements.txt
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   -r requirements.txt
 pycparser==3.0
-    # via cffi
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   cffi
 pydantic==2.14.1
     # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   anthropic
     #   google-genai
     #   typesafe-sdk
 pydantic-core==2.50.1
     # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
     #   pydantic
     #   typesafe-sdk
 pyee==13.0.1
-    # via playwright
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   playwright
 pygetwindow==0.0.9
-    # via pyautogui
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   pyautogui
 pymsgbox==2.0.1
-    # via pyautogui
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   pyautogui
 pyperclip==1.11.0
     # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
     #   -r requirements.txt
     #   mouseinfo
 pyrect==0.2.0
-    # via pygetwindow
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   pygetwindow
 pyscreeze==1.0.1
-    # via pyautogui
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   pyautogui
 python3-xlib==0.15
     # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
     #   mouseinfo
     #   pyautogui
 pytweening==1.2.0
-    # via pyautogui
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   pyautogui
 pyyaml==6.0.3
     # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
     #   -r requirements.txt
     #   ctranslate2
     #   huggingface-hub
 requests==2.34.2
     # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
     #   -r requirements.txt
     #   google-auth
     #   google-genai
 send2trash==2.1.0
-    # via -r requirements.txt
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   -r requirements.txt
 sniffio==1.3.1
-    # via google-genai
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   anthropic
+    #   google-genai
 sounddevice==0.5.6
-    # via -r requirements.txt
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   -r requirements.txt
 tenacity==9.1.4
     # via
     #   google-genai
     #   typesafe-sdk
 tokenizers==0.23.2
-    # via faster-whisper
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   faster-whisper
 tqdm==4.70.1
     # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
     #   faster-whisper
     #   huggingface-hub
 truststore==0.10.5
     # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
     #   httpcore2
     #   httpx2
     #   typesafe-sdk
 typesafe-sdk==0.7.5
-    # via -r requirements.txt
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   -r requirements.txt
 typing-extensions==4.16.0
     # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   anthropic
     #   anyio
     #   google-genai
     #   httpx2
     #   huggingface-hub
+    #   opentelemetry-api
     #   pydantic
     #   pydantic-core
     #   pyee
     #   typesafe-sdk
     #   typing-inspection
 typing-inspection==0.4.4
-    # via pydantic
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   pydantic
 urllib3==2.8.0
-    # via requests
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   requests
 websockets==16.1.1
-    # via google-genai
+    # via
+    #   -c /tmp/claude-1000/-home-arch-dev-nodaysidle-kurekizmo/c49bc64e-29e0-4c20-bffc-838983fec4c9/scratchpad/venv.txt
+    #   -r requirements.txt
+    #   google-genai
