@@ -256,6 +256,9 @@ def _launch_linux(app_name: str) -> bool:
         return True
     if clean_name in ("fish", "ghostty -e fish") and _launch_default_terminal([shutil.which("fish") or "fish"]):
         return True
+    # herdr is a TUI: run it inside the default terminal (Foot here), not as a bare window.
+    if clean_name == "herdr" and _launch_default_terminal([shutil.which("herdr") or "herdr"]):
+        return True
     if clean_name in ("terminal", "x-terminal-emulator", "ghostty", "herdr", "shell", "bash", "gnome-terminal"):
         for term in _LINUX_TERMINAL_FALLBACKS:
             if shutil.which(term):

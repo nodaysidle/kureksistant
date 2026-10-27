@@ -55,6 +55,7 @@ from core.decision_client import (
     query_needs_screen,
 )
 from core.llm_client import brain_name, stream_deepseek_sentences, use_haiku
+from core.live_voice import live_voice_enabled, start_live_servers
 from core.tts import create_tts_player
 from core.stt import DeepgramSTT, FallbackSTT, OpenRouterSTT, STTError, WhisperSTT
 from core.action_loader import discover_actions
@@ -1917,6 +1918,13 @@ def _tailscale_rebind_loop(port: int, bound_hosts: set[str], stop_event: threadi
             )
 
 
+def _live_authorized(authorization: str | None) -> bool:
+    # Live voice spends xAI minutes, so it needs the token even on loopback.
+    token = get_remote_token()
+    provided = parse_bearer_token(authorization)
+    return remote_token_is_strong(token) and provided is not None and tokens_match(provided, token)
+
+
 def run_server(engine: KurekEngine, port: int = 8790):
     KurekHTTPHandler.engine = engine
     # Launch UDS listener in background
@@ -1958,6 +1966,9 @@ def run_server(engine: KurekEngine, port: int = 8790):
         primary = ThreadingHTTPServer(("127.0.0.1", port), KurekHTTPHandler)
         bound.add("127.0.0.1")
         print(f"[Kurek Server] 🚀 Listening at http://127.0.0.1:{port}", flush=True)
+
+    if live_voice_enabled():
+        start_live_servers(sorted(bound), _live_authorized)
 
     stop_event = threading.Event()
     if watch_tailscale:
