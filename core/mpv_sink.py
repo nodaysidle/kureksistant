@@ -7,7 +7,6 @@ stop functionality via $XDG_RUNTIME_DIR/kurek_mpv.sock.
 from __future__ import annotations
 
 import atexit
-import glob
 import json
 import os
 import shutil
@@ -159,12 +158,17 @@ class MpvPipeWireSink:
         timing_mark("mpv_loadfile", once=True)
         success = self._send_command(["loadfile", str(chunk_file), mode])
 
-        # Clean old chunks from /dev/shm in background
+        # Clean old chunks from /dev/shm in background. A "replace" starts a new
+        # utterance and flushes mpv's playlist, so every earlier chunk is done
+        # with. While appending, earlier chunks of this reply may still be
+        # queued in mpv, so only reap clearly abandoned ones.
+        max_age = 0 if mode == "replace" else 600
+
         def _cleanup_old_chunks():
             try:
                 now = time.time()
                 for old in shm_dir.glob("kurek_tts_*.mp3"):
-                    if old != chunk_file and (now - old.stat().st_mtime > 30):
+                    if old != chunk_file and (now - old.stat().st_mtime > max_age):
                         old.unlink(missing_ok=True)
             except Exception:
                 pass

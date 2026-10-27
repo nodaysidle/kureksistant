@@ -29,6 +29,7 @@ import os
 import re
 import select
 import shlex
+import shutil
 import signal
 import subprocess
 import threading
@@ -816,12 +817,148 @@ def _kill_process_group(proc: subprocess.Popen, sig: int) -> None:
             pass
 
 
+_TRUTHY = ("1", "true", "yes", "on")
+_UNRESTRICTED_WARNED = False
+
+
+def is_unrestricted_shell() -> bool:
+    """Unrestricted shell is OFF unless KUREK_REMOTE_ALLOW_EXEC=1.
+
+    KUREK_REMOTE_ALLOW_EXEC is required. The legacy KUREK_UNRESTRICTED_SHELL /
+    KUREK_ALLOW_SHELL variables can no longer enable it on their own.
+    """
+    global _UNRESTRICTED_WARNED
+    enabled = (os.environ.get("KUREK_REMOTE_ALLOW_EXEC") or "").strip().lower() in _TRUTHY
+    if enabled and not _UNRESTRICTED_WARNED:
+        _UNRESTRICTED_WARNED = True
+        print(
+            "[run] ⚠️ WARNING: KUREK_REMOTE_ALLOW_EXEC=1 — UNRESTRICTED SHELL IS ENABLED. "
+            "Kurek (and any authenticated remote client) can run ANY command as this user, "
+            "bypassing the allowlist and root scoping.",
+            flush=True,
+        )
+    return enabled
+
+
+def _spawn_unrestricted_shell(run_id: str, cmd_str: str, cwd_path: Path, timeout_arg: Any) -> str:
+    try:
+        timeout = float(timeout_arg) if timeout_arg is not None else 60.0
+    except (ValueError, TypeError):
+        timeout = 60.0
+    timeout = max(1.0, min(timeout, 600.0))
+
+    env = os.environ.copy()
+    env["CI"] = "1"
+    env["TERM"] = "dumb"
+
+    record = RunRecord(
+        run_id=run_id,
+        cmd=cmd_str,
+        cwd=str(cwd_path),
+        status="running",
+    )
+    with _RUN_LOCK:
+        _RUN_HISTORY[run_id] = record
+        _cap_run_history()
+
+    start_time = time.time()
+    try:
+        shell_bin = shutil.which("bash") or "/bin/sh"
+        proc = subprocess.Popen(
+            [shell_bin, "-c", cmd_str],
+            cwd=str(cwd_path),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        record.process = proc
+
+        stdout, stderr, outcome = _stream_output(proc, timeout)
+        duration = time.time() - start_time
+        combined = stdout
+        if stderr:
+            combined = f"{stdout}\n[STDERR]\n{stderr}" if stdout else stderr
+        redacted = _redact_secrets(combined.strip())
+
+        if outcome == "timeout":
+            record.exit_code = -1
+            record.duration = duration
+            if record.status != "cancelled":
+                record.status = "timed_out"
+            capped_out, _ = _cap_output(redacted, duration, -1)
+            record.output = f"TIMED OUT after {timeout}s.\n" + capped_out
+            _audit_log(record, reason="timeout")
+            return (
+                f"TIMED OUT: Command '{cmd_str}' timed out after {timeout:.1f}s and was terminated.\n"
+                f"Output before timeout:\n{record.output}"
+            )
+
+        if outcome == "capped":
+            record.exit_code = -1
+            record.duration = duration
+            if record.status != "cancelled":
+                record.status = "failed"
+            capped_out, total_lines = _cap_output(redacted, duration, -1)
+            record.output = (
+                f"OUTPUT LIMIT: stopped after {_MAX_OUTPUT_BYTES} bytes and killed the process.\n" + capped_out
+            )
+            record.total_lines = total_lines
+            _audit_log(record, reason="output cap")
+            return (
+                f"[{record.run_id}] OUTPUT LIMIT: '{cmd_str}' produced more than {_MAX_OUTPUT_BYTES} bytes "
+                f"and was terminated.\n\n{record.output}"
+            )
+
+        exit_code = proc.returncode
+        capped_output, total_lines = _cap_output(redacted, duration, exit_code)
+        record.exit_code = exit_code
+        record.duration = duration
+        if record.status != "cancelled":
+            record.status = "completed" if exit_code == 0 else "failed"
+        record.output = capped_output
+        record.total_lines = total_lines
+        _audit_log(record)
+        header = (
+            f"[{record.run_id}] Exit: {exit_code} | Duration: {duration:.2f}s | "
+            f"Cwd: {cwd_path.name}\nCommand: {cmd_str}\n\n"
+        )
+        return header + (capped_output or "(No output)")
+
+    except Exception as e:
+        duration = time.time() - start_time
+        record.exit_code = -1
+        record.duration = duration
+        record.status = "failed"
+        record.output = f"Execution error: {e}"
+        _audit_log(record, reason=str(e))
+        return f"Error executing command: {e}"
+
+
 # ---------------------------------------------------------------------------
 # Action 1: Exec
 # ---------------------------------------------------------------------------
 
 def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any) -> str:
     global _RUN_COUNTER
+
+    if is_unrestricted_shell():
+        cmd_clean = (cmd_str or "").strip()
+        if not cmd_clean:
+            return "Refused: Command string is empty."
+        if cwd_arg:
+            cwd_path = Path(os.path.expanduser(cwd_arg)).resolve()
+            if not cwd_path.exists():
+                cwd_path = Path.home()
+        else:
+            cwd_path = Path.home()
+
+        with _RUN_LOCK:
+            _RUN_COUNTER += 1
+            run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{_RUN_COUNTER}"
+
+        return _spawn_unrestricted_shell(run_id, cmd_clean, cwd_path, timeout_arg)
 
     allowed_roots = get_allowed_roots()
 
@@ -1495,7 +1632,7 @@ def run(parameters: dict | None = None, **kwargs) -> str:
     params = parameters or {}
     action = str(params.get("action", "exec")).strip().lower()
 
-    if action == "exec":
+    if action in ("exec", "shell"):
         cmd = str(params.get("cmd", "")).strip()
         cwd = params.get("cwd")
         timeout = params.get("timeout")
@@ -1518,31 +1655,43 @@ def run(parameters: dict | None = None, **kwargs) -> str:
     else:
         return (
             f"Error: Unknown action '{action}'. "
-            "Supported actions: 'exec', 'read', 'list', 'cancel'."
+            "Supported actions: 'exec', 'shell', 'read', 'list', 'cancel'."
         )
+
+
+_SANDBOX_DESCRIPTION = (
+    "Sandboxed, auditable command runner for workstation inspection and build/test tasks. "
+    "Permits allowlisted read-only commands (git status/diff/log, rg, ls, cat, find, stat, --version) "
+    "and declared project build/test tools (cargo check/test/build/clippy, npm test, pnpm, pytest, make); "
+    "build/test commands run repository code and wait for the user's yes/no confirmation. "
+    "Destructive commands (rm, git push, git reset --hard, curl|sh) are strictly disallowed. "
+    "Never interactive. All runs are strictly root-scoped, timeout-bounded, and recorded in an append-only audit log."
+)
+_UNRESTRICTED_DESCRIPTION = (
+    "WARNING: unrestricted shell mode is ENABLED (KUREK_REMOTE_ALLOW_EXEC=1). "
+    "Executes arbitrary commands and shell scripts as the user (e.g. bash, systemctl, pacman, git, cargo), "
+    "captures stdout/stderr, exit code, and duration. Use with care; runs are audit-logged."
+)
+
+
+def tool_description() -> str:
+    return _UNRESTRICTED_DESCRIPTION if is_unrestricted_shell() else _SANDBOX_DESCRIPTION
 
 
 TOOL = {
     "name": "run",
-    "description": (
-        "Sandboxed, auditable command runner for workstation inspection and build/test tasks. "
-        "Permits allowlisted read-only commands (git status/diff/log, rg, ls, cat, find, stat, --version) "
-        "and declared project build/test tools (cargo check/test/build/clippy, npm test, pnpm, pytest, make); "
-        "build/test commands run repository code and wait for the user's yes/no confirmation. "
-        "Destructive commands (rm, git push, git reset --hard, curl|sh) are strictly disallowed. "
-        "Never interactive. All runs are strictly root-scoped, timeout-bounded, and recorded in an append-only audit log."
-    ),
+    "description": tool_description(),
     "parameters": {
         "type": "OBJECT",
         "properties": {
             "action": {
                 "type": "STRING",
                 "description": (
-                    "The run action: 'exec' (execute an allowlisted command), "
+                    "The run action: 'exec' or 'shell' (execute a command; allowlisted and root-scoped unless unrestricted mode is enabled), "
                     "'read' (inspect output of recent run), 'list' (list recent runs), "
                     "or 'cancel' (terminate running process)."
                 ),
-                "enum": ["exec", "read", "list", "cancel"],
+                "enum": ["exec", "shell", "read", "list", "cancel"],
             },
             "cmd": {
                 "type": "STRING",

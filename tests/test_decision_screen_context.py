@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import sys
 from types import SimpleNamespace
 from urllib.error import URLError
 
@@ -164,6 +163,21 @@ def _make_lite_engine(monkeypatch):
         def speak_chunk(self, text: str, append: bool = False):
             pass
 
+        def begin_stream(self):
+            pass
+
+        def enqueue(self, text: str, play_local: bool = True, on_audio=None):
+            if play_local:
+                self.speak_chunk(text)
+            if on_audio is not None:
+                on_audio(None)
+
+        def wait_stream(self, timeout: float = 60.0) -> bool:
+            return True
+
+        def synthesize(self, text: str):
+            return None
+
         def stop(self):
             self.is_playing = False
 
@@ -172,6 +186,7 @@ def _make_lite_engine(monkeypatch):
         daemon, "get_mpv_sink", lambda: SimpleNamespace(ensure_running=lambda: None)
     )
     monkeypatch.setattr(daemon, "get_hyprland_watcher", lambda: None)
+    monkeypatch.setattr(daemon.KurekEngine, "_report_startup_problems", lambda self, *_a: None)
     monkeypatch.setattr(
         daemon.KurekEngine, "_hourly_consolidation_loop", lambda self: None
     )
@@ -210,12 +225,11 @@ def test_check_auto_screen_p09_triggers(monkeypatch, capsys) -> None:
     engine = _make_lite_engine(monkeypatch)
     monkeypatch.setattr(daemon, "auto_screen_enabled", lambda: True)
     monkeypatch.setattr(daemon, "get_openrouter_api_key", lambda: SECRET_KEY)
-    monkeypatch.setattr(daemon, "get_typesafe_key", lambda: None)
     monkeypatch.setattr(daemon, "load_api_keys", lambda: {})
     monkeypatch.setattr(
         daemon,
-        "query_openrouter_needs_screen",
-        lambda *_a, **_k: 0.9,
+        "query_needs_screen",
+        lambda *_a, **_k: (0.9, "Microsoft-Decision-1"),
     )
     captured: list = []
     _stub_screen_capture(monkeypatch, captured)
@@ -237,12 +251,11 @@ def test_check_auto_screen_p02_does_not_trigger(monkeypatch) -> None:
     engine = _make_lite_engine(monkeypatch)
     monkeypatch.setattr(daemon, "auto_screen_enabled", lambda: True)
     monkeypatch.setattr(daemon, "get_openrouter_api_key", lambda: SECRET_KEY)
-    monkeypatch.setattr(daemon, "get_typesafe_key", lambda: None)
     monkeypatch.setattr(daemon, "load_api_keys", lambda: {})
     monkeypatch.setattr(
         daemon,
-        "query_openrouter_needs_screen",
-        lambda *_a, **_k: 0.2,
+        "query_needs_screen",
+        lambda *_a, **_k: (0.2, "Microsoft-Decision-1"),
     )
     captured: list = []
     _stub_screen_capture(monkeypatch, captured)
@@ -251,34 +264,17 @@ def test_check_auto_screen_p02_does_not_trigger(monkeypatch) -> None:
     assert captured == []
 
 
-def test_malformed_openrouter_falls_back_to_typesafe(monkeypatch, capsys) -> None:
+def test_jev_answer_still_triggers_capture(monkeypatch, capsys) -> None:
+    """Provider fallback lives in core.decision_client; the daemon only gates."""
     import kurek_daemon as daemon
 
     engine = _make_lite_engine(monkeypatch)
     monkeypatch.setattr(daemon, "auto_screen_enabled", lambda: True)
-    monkeypatch.setattr(daemon, "get_openrouter_api_key", lambda: SECRET_KEY)
-    monkeypatch.setattr(daemon, "get_typesafe_key", lambda: "ts-test-key")
     monkeypatch.setattr(daemon, "load_api_keys", lambda: {})
     monkeypatch.setattr(
         daemon,
-        "query_openrouter_needs_screen",
-        lambda *_a, **_k: None,  # malformed / failed Decision-1
-    )
-
-    class _FakeNoul:
-        def __init__(self, instructions: str):
-            self.instructions = instructions
-
-    class _FakeClient:
-        def system_one(self, **_kwargs):
-            return SimpleNamespace(
-                answers={"needs_screen": SimpleNamespace(noul=0.88)}
-            )
-
-    monkeypatch.setitem(
-        sys.modules,
-        "typesafe_sdk",
-        SimpleNamespace(TypeSafeClient=_FakeClient, Noul=_FakeNoul),
+        "query_needs_screen",
+        lambda *_a, **_k: (0.88, "TypeSafe Jev"),
     )
     captured: list = []
     _stub_screen_capture(monkeypatch, captured)
@@ -299,8 +295,12 @@ def test_no_keys_skips_network(monkeypatch) -> None:
     engine = _make_lite_engine(monkeypatch)
     monkeypatch.setattr(daemon, "auto_screen_enabled", lambda: True)
     monkeypatch.setattr(daemon, "get_openrouter_api_key", lambda: None)
-    monkeypatch.setattr(daemon, "get_typesafe_key", lambda: None)
     monkeypatch.setattr(daemon, "load_api_keys", lambda: {})
+    # decision_client reads provider keys from config_manager, not the daemon
+    from memory import config_manager
+
+    for getter in ("get_mouse_key", "get_openrouter_api_key", "get_typesafe_key"):
+        monkeypatch.setattr(config_manager, getter, lambda: None)
 
     def network_forbidden(*_a, **_k):
         raise AssertionError("urlopen must not be called when no keys are set")
@@ -324,8 +324,7 @@ def test_opt_out_skips_decision_and_capture(monkeypatch) -> None:
         return 0.99
 
     monkeypatch.setattr(daemon, "get_openrouter_api_key", lambda: SECRET_KEY)
-    monkeypatch.setattr(daemon, "get_typesafe_key", lambda: "ts-key")
-    monkeypatch.setattr(daemon, "query_openrouter_needs_screen", mark_or)
+    monkeypatch.setattr(daemon, "query_needs_screen", mark_or)
     monkeypatch.setattr(daemon, "load_api_keys", lambda: {})
     captured: list = []
     _stub_screen_capture(monkeypatch, captured)

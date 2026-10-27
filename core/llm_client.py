@@ -1,32 +1,33 @@
 """
-Local LLM client for MARK XL.
+LLM client for Kurek.
 
-Supports two backends — selected via  "llm_provider"  in config/api_keys.json:
+All chat completions go straight to https://api.deepseek.com/chat/completions
+(never via OpenRouter), or to Claude Haiku when KUREK_LLM=haiku. Provides:
 
-  "llm_provider": "ollama"   (default)
-        Uses Ollama's native /api/chat endpoint.
-        Download: https://ollama.com
-        Default port: 11434
+  query_deepseek             blocking completion (text or tool_calls dict)
+  stream_deepseek            raw SSE event stream (token / tool_calls / done / error)
+  stream_deepseek_sentences  sentence-buffered stream for low-latency TTS
 
-  "llm_provider": "openai"
-        Uses any OpenAI-compatible server: LM Studio, Jan, LocalAI,
-        llama.cpp server, vLLM, etc.
-        LM Studio download: https://lmstudio.ai   (default port: 1234)
-        Set  "llm_url": "http://localhost:1234"  in config.
-        Note: tool-calling support depends on the model; use a model that
-        supports function/tool calls (e.g. Qwen2.5, Llama-3.1, Mistral).
+DeepSeek requires ``reasoning_content`` to be passed back on assistant turns
+that carry tool calls, so both entry points surface it alongside tool_calls.
 """
 import json
+import os
 import re
-import subprocess
-import sys
 import time
-from pathlib import Path
-from typing import Callable, Generator
+from typing import Generator
 
 import requests
 
 from core.timing import mark as timing_mark
+
+DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
+DEFAULT_MODEL = "deepseek-flash"
+HAIKU_MODEL = "claude-haiku-5-5"
+
+# One retry for transient failures that happen before any token is yielded.
+_STREAM_RETRY_BACKOFF_S = 1.0
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 
 # Matches a sentence boundary: [.!?] followed by whitespace, or a blank line.
 # Avoids splitting on decimals (3.5) because those have no space after the dot.
@@ -93,600 +94,6 @@ def flush_sentence_buffer(buffer: str) -> str | None:
     text = buffer.strip()
     return text or None
 
-def get_base_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent
-
-
-BASE_DIR    = get_base_dir()
-CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
-
-_DEFAULTS = {
-    "llm_url":      "http://localhost:11434",
-    "llm_model":    "llama3.2",
-    "llm_provider": "ollama",   # "ollama" | "openai"
-}
-
-
-def get_llm_provider() -> str:
-    """Returns 'ollama' or 'openai' (covers LM Studio, LocalAI, Jan, etc.)."""
-    raw = _load_config().get("llm_provider", "ollama").strip().lower()
-    return "openai" if raw in ("openai", "lmstudio", "localai", "jan", "llamacpp") else "ollama"
-
-
-def _load_config() -> dict:
-    try:
-        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
-
-def ensure_ollama_running(timeout: int = 15) -> bool:
-    """
-    For Ollama: ping /api/tags; auto-launch 'ollama serve' if not running.
-    For OpenAI-compatible providers: just ping /v1/models (server must be started manually).
-    Returns True if the LLM server is reachable.
-    """
-    url, _   = get_llm_settings()
-    provider = get_llm_provider()
-
-    if provider == "openai":
-        # OpenAI-compatible servers (LM Studio, LocalAI, etc.) must be started
-        # by the user — we just check if they're reachable.
-        health = f"{url}/v1/models"
-        try:
-            ok = requests.get(health, timeout=5).status_code == 200
-            if ok:
-                print(f"[LLM] OpenAI-compatible server reachable at {url}")
-            else:
-                print(f"[LLM] Server at {url} returned non-200.  Is it running?")
-            return ok
-        except Exception as e:
-            print(
-                f"[LLM] Cannot reach OpenAI-compatible server at {url}.\n"
-                "      Make sure LM Studio / LocalAI / Jan is running and the server is started."
-            )
-            return False
-
-    # ── Ollama ──────────────────────────────────────────────────────────────
-    health = f"{url}/api/tags"
-
-    def _is_up() -> bool:
-        try:
-            return requests.get(health, timeout=3).status_code == 200
-        except Exception:
-            return False
-
-    if _is_up():
-        return True
-
-    print("[LLM] Ollama not running — launching 'ollama serve'…")
-    try:
-        kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
-        if sys.platform == "win32":
-            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-        subprocess.Popen(["ollama", "serve"], **kwargs)
-    except FileNotFoundError:
-        print("[LLM] 'ollama' command not found. Install Ollama from https://ollama.com")
-        return False
-    except Exception as e:
-        print(f"[LLM] Could not launch Ollama: {e}")
-        return False
-
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        time.sleep(1.0)
-        if _is_up():
-            print("[LLM] Ollama started successfully.")
-            return True
-
-    print("[LLM] Ollama did not respond within the timeout.")
-    return False
-
-
-def warmup_model(system_prompt: str | None = None) -> bool:
-    """
-    Pre-load the model AND prime Ollama's KV prefix cache.
-
-    Why the system_prompt matters
-    ─────────────────────────────
-    Ollama caches the KV attention state of the prompt prefix across requests.
-    If warmup includes the same system prompt that real requests will use, Ollama
-    evaluates those tokens ONCE at startup.  Every subsequent request only needs
-    to evaluate the small delta (user message ± time context) instead of the full
-    300-500 token system prompt → drops first-token latency from ~17 s to <1 s.
-
-    Pass the *static* part of the system prompt (the JARVIS protocol text, without
-    timestamps or per-minute context) so the prefix stays valid across calls.
-    """
-    url, model = get_llm_settings()
-    provider   = get_llm_provider()
-    print(f"[LLM] Warming up '{model}' ({provider})…")
-
-    messages: list[dict] = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": "hi"})
-
-    if provider == "openai":
-        # OpenAI-compatible: just fire a minimal request to ensure the model is loaded.
-        # No keep_alive or KV-cache priming available — server manages this internally.
-        payload = {
-            "model":      model,
-            "messages":   messages,
-            "stream":     False,
-            "max_tokens": 1,
-        }
-        try:
-            resp = requests.post(f"{url}/v1/chat/completions", json=payload, timeout=180)
-            resp.raise_for_status()
-            print(f"[LLM] '{model}' ready (OpenAI-compatible server).")
-            return True
-        except Exception as e:
-            print(f"[LLM] Warmup failed (non-fatal): {e}")
-            return False
-
-    # ── Ollama ──────────────────────────────────────────────────────────────
-    payload = {
-        "model":      model,
-        "messages":   messages,
-        "stream":     False,
-        "keep_alive": -1,
-        # num_gpu:99 → push ALL transformer layers to GPU (Ollama caps at available)
-        # This is safe even without a GPU — Ollama silently ignores if n_gpu_layers=0
-        "options":    {"num_predict": 1, "num_gpu": 99},
-    }
-    try:
-        resp = requests.post(f"{url}/api/chat", json=payload, timeout=180)
-        resp.raise_for_status()
-        print(f"[LLM] '{model}' loaded and KV cache primed.")
-        return True
-    except Exception as e:
-        print(f"[LLM] Warmup failed (non-fatal): {e}")
-        return False
-
-
-def check_model_available(log: Callable | None = None) -> bool:
-    """
-    Returns True if the configured model is already pulled in Ollama.
-    Logs an actionable warning (to console + optional UI callback) if not.
-    Always returns True for non-Ollama providers (cannot inspect their model list).
-    """
-    if get_llm_provider() != "ollama":
-        return True
-
-    url, model = get_llm_settings()
-    try:
-        resp = requests.get(f"{url}/api/tags", timeout=5)
-        resp.raise_for_status()
-        pulled = [m.get("name", "") for m in resp.json().get("models", [])]
-        model_base = model.split(":")[0]
-        found = any(
-            m == model or m == model_base or m.startswith(model_base + ":")
-            for m in pulled
-        )
-        if not found:
-            available = ", ".join(pulled) if pulled else "none"
-            warn = (
-                f"WRN: Model '{model}' is not pulled in Ollama.\n"
-                f"     Available: {available}\n"
-                f"     Fix: ollama pull {model}"
-            )
-            print(warn)
-            if log:
-                log(f"WRN: '{model}' not found — run: ollama pull {model}")
-        return found
-    except Exception:
-        return True   # Ollama might still be starting up; non-blocking
-
-
-def get_llm_settings() -> tuple[str, str]:
-    """Returns (base_url, model_name)."""
-    cfg   = _load_config()
-    url   = cfg.get("llm_url",   _DEFAULTS["llm_url"]).rstrip("/")
-    model = cfg.get("llm_model", _DEFAULTS["llm_model"])
-    return url, model
-
-
-def call_llm(
-    messages: list,
-    tools:    list | None = None,
-    timeout:  int = 120,
-) -> dict:
-    """
-    Non-streaming chat request.  Routes to Ollama or OpenAI-compatible backend.
-
-    Returns:
-        {"content": str, "tool_calls": list}
-    """
-    url, model = get_llm_settings()
-    provider   = get_llm_provider()
-
-    if provider == "openai":
-        endpoint = f"{url}/v1/chat/completions"
-        payload: dict = {
-            "model":      model,
-            "messages":   messages,
-            "stream":     False,
-            "max_tokens": 150,
-        }
-        if tools:
-            payload["tools"]       = tools
-            payload["tool_choice"] = "auto"
-        try:
-            resp = requests.post(endpoint, json=payload, timeout=timeout)
-            resp.raise_for_status()
-            choice = resp.json().get("choices", [{}])[0]
-            msg    = choice.get("message", {})
-            # OpenAI tool_calls format → normalise to Ollama-style
-            raw_tc  = msg.get("tool_calls") or []
-            tc_list = [
-                {
-                    "id":       t.get("id", ""),
-                    "function": {
-                        "name":      t["function"]["name"],
-                        "arguments": (
-                            json.loads(t["function"]["arguments"])
-                            if isinstance(t["function"].get("arguments"), str)
-                            else t["function"].get("arguments", {})
-                        ),
-                    },
-                }
-                for t in raw_tc
-            ]
-            return {
-                "content":    (msg.get("content") or "").strip(),
-                "tool_calls": tc_list,
-            }
-        except Exception as e:
-            raise RuntimeError(f"OpenAI-compatible LLM call failed: {e}")
-
-    # ── Ollama ──────────────────────────────────────────────────────────────
-    endpoint = f"{url}/api/chat"
-    payload = {
-        "model":      model,
-        "messages":   messages,
-        "stream":     False,
-        "keep_alive": -1,
-        "options":    {"num_predict": 150, "num_gpu": 99},
-    }
-    if tools:
-        payload["tools"] = tools
-
-    try:
-        resp = requests.post(endpoint, json=payload, timeout=timeout)
-        resp.raise_for_status()
-        data = resp.json()
-        msg  = data.get("message", {})
-        return {
-            "content":    (msg.get("content") or "").strip(),
-            "tool_calls": msg.get("tool_calls") or [],
-        }
-    except requests.exceptions.ConnectionError as e:
-        print(f"[LLM] ConnectionError — trying to restart Ollama… ({e})")
-        if ensure_ollama_running():
-            try:
-                resp = requests.post(endpoint, json=payload, timeout=timeout)
-                resp.raise_for_status()
-                data = resp.json()
-                msg  = data.get("message", {})
-                return {
-                    "content":    (msg.get("content") or "").strip(),
-                    "tool_calls": msg.get("tool_calls") or [],
-                }
-            except Exception:
-                pass
-        raise RuntimeError(
-            f"Cannot connect to Ollama at {url}. "
-            "Make sure Ollama is installed and run: ollama serve"
-        )
-    except requests.exceptions.Timeout:
-        raise RuntimeError("Ollama request timed out after 120 s.")
-    except requests.exceptions.HTTPError as e:
-        print(f"[LLM] HTTPError: {e.response.status_code} — {e.response.text[:200]}")
-        raise RuntimeError(f"Ollama HTTP error: {e.response.status_code}")
-    except Exception as e:
-        print(f"[LLM] Unexpected error: {type(e).__name__}: {e}")
-        raise RuntimeError(f"LLM call failed: {e}")
-
-
-def call_llm_text(
-    prompt:  str,
-    system:  str | None = None,
-    model:   str | None = None,
-    timeout: int = 120,
-) -> str:
-    """
-    Simple text-only generation (no tools).
-    Used by planner, executor, error_handler, code_helper, dev_agent.
-    """
-    url, default_model = get_llm_settings()
-    endpoint = f"{url}/api/chat"
-    m        = model or default_model
-
-    messages: list[dict] = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
-
-    payload = {"model": m, "messages": messages, "stream": False, "keep_alive": -1, "options": {"num_predict": 600}}
-
-    try:
-        resp = requests.post(endpoint, json=payload, timeout=timeout)
-        resp.raise_for_status()
-        return (resp.json().get("message", {}).get("content") or "").strip()
-    except requests.exceptions.ConnectionError:
-        if ensure_ollama_running():
-            try:
-                resp = requests.post(endpoint, json=payload, timeout=timeout)
-                resp.raise_for_status()
-                return (resp.json().get("message", {}).get("content") or "").strip()
-            except Exception:
-                pass
-        raise RuntimeError(
-            f"Cannot connect to Ollama at {url}. "
-            "Make sure Ollama is installed and run: ollama serve"
-        )
-    except Exception as e:
-        raise RuntimeError(f"LLM text call failed: {e}")
-
-
-def _stream_openai(
-    messages: list,
-    tools:    list | None,
-    timeout:  int,
-) -> Generator[dict, None, None]:
-    """
-    Streaming backend for OpenAI-compatible servers (LM Studio, LocalAI, Jan…).
-
-    Parses Server-Sent Events (SSE) and accumulates streaming tool-call fragments
-    so the output format is identical to the Ollama backend.
-    """
-    url, model = get_llm_settings()
-    endpoint   = f"{url}/v1/chat/completions"
-
-    payload: dict = {
-        "model":      model,
-        "messages":   messages,
-        "stream":     True,
-        "max_tokens": 150,
-    }
-    if tools:
-        payload["tools"]       = tools
-        payload["tool_choice"] = "auto"
-
-    try:
-        with requests.post(endpoint, json=payload, timeout=timeout, stream=True) as resp:
-            resp.raise_for_status()
-            full_content = ""
-            buf          = ""
-            # tool_call fragments: index → {"id", "function": {"name", "arguments"}}
-            tc_fragments: dict[int, dict] = {}
-
-            for raw in resp.iter_lines():
-                if not raw:
-                    continue
-                # SSE lines look like: b"data: {...}" or b"data: [DONE]"
-                line = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
-                if not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if data == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-
-                choice = chunk.get("choices", [{}])[0]
-                delta  = choice.get("delta", {})
-                text   = delta.get("content") or ""
-
-                full_content += text
-                buf          += text
-
-                # Accumulate sentence boundaries for streaming TTS
-                while True:
-                    m = _SENT_END.search(buf)
-                    if not m:
-                        break
-                    sentence = buf[: m.start() + 1].strip()
-                    buf      = buf[m.end():]
-                    if sentence:
-                        yield {"type": "sentence", "text": sentence}
-
-                # Accumulate streaming tool-call fragments
-                for tc in (delta.get("tool_calls") or []):
-                    idx = tc.get("index", 0)
-                    if idx not in tc_fragments:
-                        tc_fragments[idx] = {"id": "", "function": {"name": "", "arguments": ""}}
-                    frag = tc_fragments[idx]
-                    frag["id"] = frag["id"] or tc.get("id", "")
-                    fn = tc.get("function", {})
-                    frag["function"]["name"]      += fn.get("name") or ""
-                    frag["function"]["arguments"] += fn.get("arguments") or ""
-
-                finish = choice.get("finish_reason")
-                if finish in ("stop", "tool_calls", "length"):
-                    break
-
-            # Flush any trailing content
-            if buf.strip():
-                yield {"type": "sentence", "text": buf.strip()}
-
-            # Parse accumulated tool-call argument strings → dicts
-            tool_calls: list = []
-            for idx in sorted(tc_fragments):
-                frag = tc_fragments[idx]
-                args = frag["function"]["arguments"]
-                try:
-                    args = json.loads(args)
-                except Exception:
-                    pass   # leave as raw string; _execute_tool handles it
-                tool_calls.append({
-                    "id":       frag["id"],
-                    "function": {"name": frag["function"]["name"], "arguments": args},
-                })
-
-            yield {
-                "type":       "done",
-                "content":    full_content.strip(),
-                "tool_calls": tool_calls,
-            }
-
-    except requests.exceptions.ConnectionError:
-        raise RuntimeError(
-            f"Cannot reach OpenAI-compatible server at {url}.\n"
-            "Make sure LM Studio / LocalAI / Jan is running and the server is started."
-        )
-    except requests.exceptions.Timeout:
-        raise RuntimeError("OpenAI-compatible stream timed out.")
-    except requests.exceptions.HTTPError as e:
-        raise RuntimeError(f"OpenAI-compatible HTTP error: {e.response.status_code}")
-    except Exception as e:
-        raise RuntimeError(f"OpenAI-compatible stream failed: {e}")
-
-
-def call_llm_stream(
-    messages: list,
-    tools:    list | None = None,
-    timeout:  int = 120,
-) -> Generator[dict, None, None]:
-    """
-    Streaming chat request.  Routes to Ollama or OpenAI-compatible backend.
-
-    Yields:
-        {"type": "sentence", "text": str}   — each complete sentence as it arrives
-        {"type": "done", "content": str, "tool_calls": list}  — when stream ends
-
-    Sentences are split on [.!?] + whitespace so TTS can start immediately.
-    Tool calls always appear in the final "done" event.
-    """
-    provider = get_llm_provider()
-    if provider == "openai":
-        yield from _stream_openai(messages, tools, timeout)
-        return
-
-    url, model = get_llm_settings()
-    endpoint   = f"{url}/api/chat"
-
-    payload: dict = {
-        "model":      model,
-        "messages":   messages,
-        "stream":     True,
-        "keep_alive": -1,
-        # 150 tokens ≈ 100 words ≈ 3-4 sentences — enough for any voice reply.
-        # num_gpu:99 pushes all layers to GPU; num_thread removed (Ollama auto-tunes).
-        "options":    {"num_predict": 150, "num_gpu": 99},
-    }
-    if tools:
-        payload["tools"] = tools
-
-    def _do_stream() -> Generator[dict, None, None]:
-        with requests.post(endpoint, json=payload, timeout=timeout, stream=True) as resp:
-            resp.raise_for_status()
-            full_content = ""
-            tool_calls:  list = []
-            buf          = ""
-
-            for raw in resp.iter_lines():
-                if not raw:
-                    continue
-                try:
-                    chunk = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-
-                msg   = chunk.get("message", {})
-                delta = msg.get("content") or ""
-
-                full_content += delta
-                buf          += delta
-
-                # Yield complete sentences as they accumulate
-                while True:
-                    m = _SENT_END.search(buf)
-                    if not m:
-                        break
-                    sentence = buf[: m.start() + 1].strip()
-                    buf      = buf[m.end() :]
-                    if sentence:
-                        yield {"type": "sentence", "text": sentence}
-
-                tc = msg.get("tool_calls")
-                if tc:
-                    tool_calls.extend(tc)
-
-                if chunk.get("done"):
-                    if buf.strip():
-                        yield {"type": "sentence", "text": buf.strip()}
-
-                    yield {
-                        "type":       "done",
-                        "content":    full_content.strip(),
-                        "tool_calls": tool_calls,
-                    }
-                    return
-
-    try:
-        yield from _do_stream()
-    except requests.exceptions.ConnectionError as e:
-        print(f"[LLM] Stream ConnectionError — trying to restart Ollama… ({e})")
-        if ensure_ollama_running():
-            yield from _do_stream()
-            return
-        raise RuntimeError(
-            f"Cannot connect to Ollama at {url}. "
-            "Make sure Ollama is installed and run: ollama serve"
-        )
-    except requests.exceptions.Timeout:
-        raise RuntimeError("Ollama stream timed out.")
-    except requests.exceptions.HTTPError as e:
-        raise RuntimeError(f"Ollama HTTP error: {e.response.status_code}")
-    except Exception as e:
-        print(f"[LLM] Stream error: {type(e).__name__}: {e}")
-        raise RuntimeError(f"LLM stream failed: {e}")
-
-
-def query_openrouter(prompt: str, system_prompt: str = "", model: str = "") -> str | None:
-    """Query OpenRouter API (DeepSeek, Claude, GPT, etc.) if key is configured."""
-    try:
-        from memory.config_manager import get_openrouter_key, get_openrouter_model
-        key = get_openrouter_key()
-        if not key:
-            return None
-        target_model = model or get_openrouter_model() or "deepseek/deepseek-chat"
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
-
-        resp = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://github.com/FatihMakes/Mark-LIII",
-                "X-Title": "JARVIS"
-            },
-            json={
-                "model": target_model,
-                "messages": messages,
-                "temperature": 0.4
-            },
-            timeout=25
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            return data["choices"][0]["message"]["content"].strip()
-        else:
-            print(f"[OpenRouter] HTTP {resp.status_code}: {resp.text}")
-            return None
-    except Exception as e:
-        print(f"[OpenRouter] Error: {e}")
-        return None
-
 
 def parse_dsml_tool_calls(text: str) -> tuple[list[dict], str]:
     """
@@ -736,11 +143,150 @@ def parse_dsml_tool_calls(text: str) -> tuple[list[dict], str]:
     return calls, cleaned.strip()
 
 
+# ---------- Claude Haiku (KUREK_LLM=haiku) ----------
+# Callers keep speaking the OpenAI/DeepSeek message shape; these helpers translate
+# to the Messages API and back, so the daemon's tool loop is provider-agnostic.
+
+def use_haiku() -> bool:
+    return os.environ.get("KUREK_LLM", "").strip().lower() == "haiku"
+
+
+def brain_name() -> str:
+    return "Claude Haiku" if use_haiku() else "DeepSeek-Flash"
+
+
+def _to_anthropic_tools(tools: list) -> list[dict]:
+    out = []
+    for t in tools:
+        fn = t.get("function", t)
+        schema = fn.get("parameters") or {}
+        if schema.get("type") != "object":
+            schema = {"type": "object", "properties": {}}
+        out.append({"name": fn["name"], "description": fn.get("description", ""), "input_schema": schema})
+    return out
+
+
+def _to_anthropic_messages(messages: list) -> tuple[str, list[dict]]:
+    """OpenAI-shaped history -> (system, Messages API turns). Consecutive same-role
+    turns are merged; tool results become user-turn tool_result blocks."""
+    system: list[str] = []
+    out: list[dict] = []
+
+    def add(role: str, blocks: list) -> None:
+        if not blocks:
+            return
+        if out and out[-1]["role"] == role:
+            out[-1]["content"].extend(blocks)
+        else:
+            out.append({"role": role, "content": list(blocks)})
+
+    for m in messages:
+        role = m.get("role")
+        content = m.get("content") or ""
+        if role == "system":
+            if content:
+                system.append(content)
+        elif role == "tool":
+            add("user", [{"type": "tool_result", "tool_use_id": m.get("tool_call_id", ""), "content": str(content) or "(empty)"}])
+        elif role == "assistant":
+            # Haiku turns carry their raw content blocks (thinking + tool_use) in
+            # reasoning_content; they must be sent back unchanged.
+            raw = m.get("reasoning_content")
+            if isinstance(raw, list):
+                add("assistant", raw)
+                continue
+            blocks: list = [{"type": "text", "text": content}] if content else []
+            for tc in m.get("tool_calls") or []:
+                fn = tc.get("function", {})
+                args = fn.get("arguments") or "{}"
+                try:
+                    inp = json.loads(args) if isinstance(args, str) else args
+                except Exception:
+                    inp = {}
+                blocks.append({"type": "tool_use", "id": tc.get("id", ""), "name": fn.get("name", ""), "input": inp or {}})
+            add("assistant", blocks)
+        elif isinstance(content, list):
+            add("user", content)
+        elif content:
+            add("user", [{"type": "text", "text": content}])
+    return "\n\n".join(system), out
+
+
+def stream_haiku(
+    messages: list, tools: list | None = None, tool_choice: str | None = None
+) -> Generator[dict, None, None]:
+    """Same event contract as stream_deepseek, backed by Claude Haiku.
+
+    Env: KUREK_HAIKU_MODEL (default claude-haiku-5-5), KUREK_HAIKU_EFFORT
+    (default low), KUREK_HAIKU_THINKING=off to turn thinking off (effort <= high).
+    """
+    import anthropic
+    from memory.config_manager import get_anthropic_key
+
+    key = get_anthropic_key()
+    if not key:
+        yield {"type": "error", "error": "No ANTHROPIC_API_KEY configured"}
+        return
+
+    system, msgs = _to_anthropic_messages(messages)
+    kwargs: dict = {
+        "model": os.environ.get("KUREK_HAIKU_MODEL") or HAIKU_MODEL,
+        "max_tokens": 16000,
+        "messages": msgs,
+        "output_config": {"effort": os.environ.get("KUREK_HAIKU_EFFORT") or "low"},
+    }
+    if os.environ.get("KUREK_HAIKU_THINKING", "").strip().lower() == "off":
+        kwargs["thinking"] = {"type": "disabled"}
+    if system:
+        kwargs["system"] = system
+    if tools:
+        kwargs["tools"] = _to_anthropic_tools(tools)
+        if tool_choice:
+            kwargs["tool_choice"] = {"type": tool_choice}
+
+    text = ""
+    try:
+        client = anthropic.Anthropic(api_key=key, timeout=30.0)
+        with client.messages.stream(**kwargs) as stream:
+            for ev in stream:
+                if ev.type == "text" and ev.text:
+                    text += ev.text
+                    yield {"type": "token", "token": ev.text}
+            final = stream.get_final_message()
+    except (anthropic.APIStatusError, anthropic.APIConnectionError) as e:
+        if text:
+            print(f"[Haiku Stream] Stream ended early ({e}); keeping {len(text)} chars", flush=True)
+            yield {"type": "done", "full_content": text.strip(), "reasoning_content": None}
+        else:
+            yield {"type": "error", "error": f"Claude Haiku request failed: {e}"}
+        return
+
+    if final.stop_reason == "refusal":
+        yield {"type": "error", "error": "Claude Haiku declined the request"}
+        return
+    calls = [b for b in final.content if b.type == "tool_use"]
+    if calls and final.stop_reason != "max_tokens":
+        yield {
+            "type": "tool_calls",
+            "tool_calls": [
+                {"id": b.id, "type": "function", "function": {"name": b.name, "arguments": json.dumps(b.input)}}
+                for b in calls
+            ],
+            "content": text.strip(),
+            "reasoning_content": list(final.content),
+        }
+        return
+    if calls:
+        yield {"type": "error", "error": "Claude Haiku hit max_tokens mid tool call"}
+        return
+    yield {"type": "done", "full_content": text.strip(), "reasoning_content": None}
+
+
 def query_deepseek(
     prompt: str = "",
     system_prompt: str = "",
     messages: list | None = None,
-    model: str = "deepseek-flash",
+    model: str = DEFAULT_MODEL,
     temperature: float = 0.4,
     tools: list | None = None,
 ) -> dict | str | None:
@@ -748,7 +294,7 @@ def query_deepseek(
     try:
         from memory.config_manager import get_deepseek_key
         key = get_deepseek_key()
-        if not key:
+        if not key and not use_haiku():
             print("[DeepSeek] ⚠️ No DEEPSEEK_API_KEY found in .env or environment")
             return None
 
@@ -761,8 +307,22 @@ def query_deepseek(
             if prompt:
                 req_messages.append({"role": "user", "content": prompt})
 
+        if use_haiku():
+            result = None
+            for ev in stream_haiku(req_messages, tools):
+                if ev["type"] == "error":
+                    print(f"[Haiku] {ev['error']}")
+                    return None
+                if ev["type"] in ("tool_calls", "done"):
+                    result = ev
+            if result is None:
+                return None
+            if result["type"] == "tool_calls":
+                return result
+            return result["full_content"]
+
         payload = {
-            "model": model or "deepseek-chat",
+            "model": model or DEFAULT_MODEL,
             "messages": req_messages,
             "temperature": temperature,
             "stream": False,
@@ -771,7 +331,7 @@ def query_deepseek(
             payload["tools"] = tools
 
         resp = requests.post(
-            "https://api.deepseek.com/chat/completions",
+            DEEPSEEK_URL,
             headers={
                 "Authorization": f"Bearer {key}",
                 "Content-Type": "application/json",
@@ -807,24 +367,67 @@ def query_deepseek(
         return None
 
 
+def _open_deepseek_stream(key: str, payload: dict):
+    """POST a streaming request. Returns (resp, error, retryable)."""
+    try:
+        resp = requests.post(
+            DEEPSEEK_URL,
+            headers={
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            stream=True,
+            timeout=30,
+        )
+    except Exception as e:
+        return None, str(e), True
+    if resp.status_code != 200:
+        err_msg = f"HTTP {resp.status_code}: {resp.text}"
+        retryable = resp.status_code in _RETRYABLE_STATUS
+        _close_quietly(resp)
+        return None, err_msg, retryable
+    return resp, None, False
+
+
+def _close_quietly(resp) -> None:
+    close = getattr(resp, "close", None)
+    if close is None:
+        return
+    try:
+        close()
+    except Exception:
+        pass
+
+
 def stream_deepseek(
     prompt: str = "",
     system_prompt: str = "",
     messages: list | None = None,
-    model: str = "deepseek-flash",
+    model: str = DEFAULT_MODEL,
     temperature: float = 0.4,
     tools: list | None = None,
+    tool_choice: str | None = None,
 ) -> Generator[dict, None, None]:
     """
     Streams response from DeepSeek API directly.
     Yields:
       {"type": "token", "token": "..."}
-      {"type": "tool_calls", "tool_calls": [...], "content": "..."}
-      {"type": "done", "full_content": "..."}
+      {"type": "tool_calls", "tool_calls": [...], "content": "...", "reasoning_content": ...}
+      {"type": "done", "full_content": "...", "reasoning_content": ...}
+      {"type": "error", "error": "..."}
+
+    Connection errors and HTTP 429/5xx are retried once (before any output).
+    The HTTP response is always closed, including when the consumer stops
+    iterating early. If the stream is cut off before ``[DONE]``/finish_reason:
+    with no output (or with tool calls, whose arguments may be truncated) an
+    error is yielded; if text was already streamed, a ``done`` with the partial
+    text is yielded and the truncation is logged, so a partially spoken answer
+    is not reported as a failure.
     """
     from memory.config_manager import get_deepseek_key
     key = get_deepseek_key()
-    if not key:
+    if not key and not use_haiku():
         print("[DeepSeek Stream] ⚠️ No DEEPSEEK_API_KEY found")
         yield {"type": "error", "error": "No DEEPSEEK_API_KEY configured"}
         return
@@ -838,116 +441,144 @@ def stream_deepseek(
         if prompt:
             req_messages.append({"role": "user", "content": prompt})
 
+    if use_haiku():
+        yield from stream_haiku(req_messages, tools, tool_choice)
+        return
+
     payload = {
-        "model": model or "deepseek-chat",
+        "model": model or DEFAULT_MODEL,
         "messages": req_messages,
         "temperature": temperature,
         "stream": True,
     }
-    if tools:
+    if tools and tool_choice != "none":
         payload["tools"] = tools
 
-    try:
-        resp = requests.post(
-            "https://api.deepseek.com/chat/completions",
-            headers={
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            stream=True,
-            timeout=30,
-        )
-    except Exception as e:
-        print(f"[DeepSeek Stream] Request error: {e}")
-        yield {"type": "error", "error": str(e)}
-        return
-
-    if resp.status_code != 200:
-        err_msg = f"HTTP {resp.status_code}: {resp.text}"
-        print(f"[DeepSeek Stream] {err_msg}")
-        yield {"type": "error", "error": err_msg}
+    resp, err, retryable = _open_deepseek_stream(key, payload)
+    if resp is None and retryable:
+        print(f"[DeepSeek Stream] {err} — retrying once in {_STREAM_RETRY_BACKOFF_S:g}s", flush=True)
+        time.sleep(_STREAM_RETRY_BACKOFF_S)
+        resp, err, _ = _open_deepseek_stream(key, payload)
+    if resp is None:
+        print(f"[DeepSeek Stream] {err}")
+        yield {"type": "error", "error": err}
         return
 
     full_text = ""
+    full_reasoning = ""
     tool_calls_map: dict[int, dict] = {}
     has_tool_calls = False
+    finished = False
+    read_error: str | None = None
 
     try:
-        for line in resp.iter_lines():
-            if not line:
-                continue
-            line_str = line.decode("utf-8") if isinstance(line, bytes) else line
-            if not line_str.startswith("data: "):
-                continue
-            raw_data = line_str[6:].strip()
-            if raw_data == "[DONE]":
-                break
+        try:
+            for line in resp.iter_lines():
+                if not line:
+                    continue
+                line_str = line.decode("utf-8") if isinstance(line, bytes) else line
+                if not line_str.startswith("data: "):
+                    continue
+                raw_data = line_str[6:].strip()
+                if raw_data == "[DONE]":
+                    finished = True
+                    break
 
-            try:
-                chunk = json.loads(raw_data)
-            except Exception:
-                continue
+                try:
+                    chunk = json.loads(raw_data)
+                except Exception:
+                    continue
 
-            choices = chunk.get("choices", [])
-            if not choices:
-                continue
-            delta = choices[0].get("delta", {})
+                choices = chunk.get("choices", [])
+                if not choices:
+                    continue
+                if choices[0].get("finish_reason"):
+                    finished = True
+                delta = choices[0].get("delta") or {}
 
-            # Check for tool call stream chunks
-            if delta.get("tool_calls"):
-                has_tool_calls = True
-                for tc in delta["tool_calls"]:
-                    idx = tc.get("index", 0)
-                    if idx not in tool_calls_map:
-                        tool_calls_map[idx] = {
-                            "id": tc.get("id", f"call_{idx}_{int(time.time())}"),
-                            "type": "function",
-                            "function": {"name": "", "arguments": ""},
-                        }
-                    fn = tc.get("function", {})
-                    if fn.get("name"):
-                        tool_calls_map[idx]["function"]["name"] += fn["name"]
-                    if fn.get("arguments"):
-                        tool_calls_map[idx]["function"]["arguments"] += fn["arguments"]
+                # Accumulate DeepSeek reasoning tokens if present
+                reasoning = delta.get("reasoning_content", "")
+                if reasoning:
+                    full_reasoning += reasoning
 
-            # Text content
-            content = delta.get("content", "")
-            if content:
-                full_text += content
-                yield {"type": "token", "token": content}
-    except Exception as e:
-        print(f"[DeepSeek Stream] Stream read error: {e}")
-        yield {"type": "error", "error": str(e)}
-        return
+                # Check for tool call stream chunks
+                if delta.get("tool_calls"):
+                    has_tool_calls = True
+                    for tc in delta["tool_calls"]:
+                        idx = tc.get("index", 0)
+                        if idx not in tool_calls_map:
+                            tool_calls_map[idx] = {
+                                "id": tc.get("id", f"call_{idx}_{int(time.time())}"),
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""},
+                            }
+                        fn = tc.get("function", {})
+                        if fn.get("name"):
+                            tool_calls_map[idx]["function"]["name"] += fn["name"]
+                        if fn.get("arguments"):
+                            tool_calls_map[idx]["function"]["arguments"] += fn["arguments"]
 
+                # Text content
+                content = delta.get("content", "")
+                if content:
+                    full_text += content
+                    yield {"type": "token", "token": content}
+        except Exception as e:
+            read_error = str(e)
+            print(f"[DeepSeek Stream] Stream read error: {e}", flush=True)
+    finally:
+        _close_quietly(resp)
+
+    if not finished:
+        if full_text and not has_tool_calls:
+            reason = read_error or "no [DONE] marker"
+            print(
+                f"[DeepSeek Stream] Stream ended early ({reason}); "
+                f"keeping {len(full_text)} chars already streamed",
+                flush=True,
+            )
+        else:
+            yield {
+                "type": "error",
+                "error": read_error or "DeepSeek stream ended unexpectedly",
+            }
+            return
+
+    reasoning_out = full_reasoning.strip() if full_reasoning else None
     if has_tool_calls:
-        compiled_calls = list(tool_calls_map.values())
         yield {
             "type": "tool_calls",
-            "tool_calls": compiled_calls,
+            "tool_calls": list(tool_calls_map.values()),
             "content": full_text.strip(),
+            "reasoning_content": reasoning_out,
+        }
+        return
+
+    # Check for DSML markup if formatted in content
+    dsml_calls, clean_text = parse_dsml_tool_calls(full_text)
+    if dsml_calls:
+        yield {
+            "type": "tool_calls",
+            "tool_calls": dsml_calls,
+            "content": clean_text,
+            "reasoning_content": reasoning_out,
         }
     else:
-        # Check for DSML markup if formatted in content
-        dsml_calls, clean_text = parse_dsml_tool_calls(full_text)
-        if dsml_calls:
-            yield {
-                "type": "tool_calls",
-                "tool_calls": dsml_calls,
-                "content": clean_text,
-            }
-        else:
-            yield {"type": "done", "full_content": full_text.strip()}
+        yield {
+            "type": "done",
+            "full_content": full_text.strip(),
+            "reasoning_content": reasoning_out,
+        }
 
 
 def stream_deepseek_sentences(
     prompt: str = "",
     system_prompt: str = "",
     messages: list | None = None,
-    model: str = "deepseek-flash",
+    model: str = DEFAULT_MODEL,
     temperature: float = 0.4,
     tools: list | None = None,
+    tool_choice: str | None = None,
 ) -> Generator[dict, None, None]:
     """
     Buffers streaming tokens from DeepSeek and yields complete sentences immediately
@@ -964,6 +595,7 @@ def stream_deepseek_sentences(
         model=model,
         temperature=temperature,
         tools=tools,
+        tool_choice=tool_choice,
     ):
         event_type = event.get("type")
         if event_type == "tool_calls":
@@ -1001,6 +633,3 @@ def stream_deepseek_sentences(
         }
 
     yield {"type": "done", "full_content": full_response.strip()}
-
-
-

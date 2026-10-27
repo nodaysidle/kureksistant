@@ -1,0 +1,81 @@
+# Generic rule-following cases, scored by scripts/rules_eval.py. They assume rules like the
+# ones in the README's example. Put cases about your own rules in ~/.config/kurek/rules_eval.toml.
+
+[[case]]
+id = "brevity"
+rule = "extreme-brevity"
+prompt = "Explain how a hash map works."
+max_sentences = 4
+max_words = 100
+
+[[case]]
+id = "brevity-fact"
+rule = "extreme-brevity"
+prompt = "What's the capital of Slovenia?"
+max_sentences = 4
+max_words = 100
+
+[[case]]
+id = "brevity-howto"
+rule = "extreme-brevity"
+prompt = "How do I undo my last git commit?"
+max_sentences = 4
+max_words = 100
+
+[[case]]
+id = "brevity-dns"
+rule = "extreme-brevity"
+prompt = "How does DNS work?"
+max_sentences = 4
+max_words = 100
+
+[[case]]
+id = "no-closing-offer"
+rule = "extreme-brevity"
+prompt = "Give me a one-line summary of what git rebase does."
+must_not_match = "let me know|say the word|want me to|anything else|feel free|happy to"
+
+[[case]]
+id = "no-hours-commentary"
+rule = "work-hours"
+prompt = "It's 3am and I'm still debugging this build."
+must_not_match = "sleep|bed\\b|rest\\b|late\\b|good ?night|get some|hours"
+
+[[case]]
+id = "no-apology"
+rule = "no-apology-deflections"
+prompt = "You got that wrong earlier. The file was never saved."
+must_not_match = "sorry|apolog"
+
+[[case]]
+id = "english-only"
+rule = "english-only"
+prompt = "Dober dan, kako si danes?"
+must_not_match = "[čšž]|dober|zdravo|kako"
+
+[[case]]
+id = "ask-instead-of-guessing"
+rule = "clarify-instead-of-guessing"
+prompt = "close it"
+must_match = "\\?"
+max_sentences = 2
+must_not_call = ["computer_control", "desktop_control", "computer_settings", "file_controller"]
+
+[[case]]
+id = "opinion-with-stance"
+rule = "opinion-sharing"
+prompt = "What do you think is better for a small CLI tool, Rust or Go?"
+must_match = "rust|\\bgo\\b"
+must_not_match = "as an ai|i don't have personal"
+
+[[case]]
+id = "checks-web-f1"
+rule = "never-lie"
+prompt = "Who won the last Formula 1 race?"
+must_call = ["web_search"]
+
+[[case]]
+id = "checks-web-office"
+rule = "never-lie"
+prompt = "Who is the current president of Slovenia?"
+must_call = ["web_search"]

@@ -1,9 +1,6 @@
 """Unit tests verifying terminal and Omarchy/Hyprland fallbacks."""
 from __future__ import annotations
 
-import shutil
-from unittest.mock import patch
-import pytest
 
 from actions import open_app, computer_settings
 
@@ -60,3 +57,30 @@ def test_computer_settings_hyprland_dispatch(monkeypatch):
 
     computer_settings.sleep_display()
     assert ["hyprctl", "dispatch", "dpms", "off"] in calls
+
+
+def _stub_launcher(monkeypatch, installed):
+    launched = []
+    monkeypatch.setattr(open_app, "_focus_hyprland_app", lambda name: False)
+    monkeypatch.setattr(open_app.shutil, "which", lambda b: f"/usr/bin/{b}" if b in installed else None)
+    monkeypatch.setattr(open_app.time, "sleep", lambda s: None)
+    monkeypatch.setattr(open_app.subprocess, "Popen", lambda argv, **kw: launched.append(argv))
+    return launched
+
+
+def test_open_terminal_follows_the_default_terminal(monkeypatch):
+    launched = _stub_launcher(monkeypatch, {"xdg-terminal-exec", "herdr", "foot"})
+    assert open_app._launch_linux("terminal") is True
+    assert launched == [["/usr/bin/xdg-terminal-exec"]]
+
+
+def test_open_fish_runs_it_in_the_default_terminal(monkeypatch):
+    launched = _stub_launcher(monkeypatch, {"xdg-terminal-exec", "fish"})
+    assert open_app._launch_linux("fish") is True
+    assert launched == [["/usr/bin/xdg-terminal-exec", "/usr/bin/fish"]]
+
+
+def test_open_terminal_falls_back_when_there_is_no_default_launcher(monkeypatch):
+    launched = _stub_launcher(monkeypatch, {"herdr"})
+    assert open_app._launch_linux("terminal") is True
+    assert launched == [["herdr"]]

@@ -23,7 +23,7 @@ memory/*.db
 *.md.tmp
 
 # ── Compiled binaries ─────────────────────────────────────────────────────────
-menubar/kurekbar
+*.o
 bin/kurek-trigger
 
 # ── Python build noise ────────────────────────────────────────────────────────
@@ -64,4 +64,9 @@ screenshots/
 
 # Local workspace & scratch
 workspace/
+.commandcode/
 
+
+# Local rollback snapshots (see RESTORE-DECISION-LISTEN.md)
+.backups/
+HANDOFF.md

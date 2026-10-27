@@ -1,12 +1,13 @@
 import json
 import logging
-import os
 import re
 import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
+
+from memory.atomic_io import atomic_write_text, chmod_private
 
 
 def get_base_dir() -> Path:
@@ -53,6 +54,7 @@ def _get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DB_PATH), timeout=10.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
+    chmod_private(DB_PATH, f"{DB_PATH}-wal", f"{DB_PATH}-shm")
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute(
         """
@@ -199,13 +201,9 @@ def _sync_to_legacy_json(memory_dict: dict) -> None:
         _log.warning("Skipping long_term.json mirror: migration not complete")
         return
     try:
-        MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-        MEMORY_PATH.write_text(
-            json.dumps(memory_dict, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        atomic_write_text(MEMORY_PATH, json.dumps(memory_dict, indent=2, ensure_ascii=False))
     except Exception:
-        pass
+        _log.exception("Failed to mirror memory to %s", MEMORY_PATH)
 
 
 def load_memory() -> dict:

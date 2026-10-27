@@ -751,7 +751,7 @@ def test_g_full_daemon_flow_yes_reply_runs_command(run_workspace: Path, hud) -> 
     engine = daemon.KurekEngine.__new__(daemon.KurekEngine)
     engine._cancel_requested = False
     reply = engine._handle_text_query_inner("yes", callback=None, mute_speaker=True)
-    assert reply == "Confirmed and executed."
+    assert reply == "Confirmed, doing it now."
     deadline = time.time() + 10
     while not marker.exists() and time.time() < deadline:
         time.sleep(0.05)

@@ -1,29 +1,27 @@
 #!/usr/bin/env python3
 """
-KUREK DAEMON — Lean headless personal AI assistant for Arch Linux / Hyprland
-(and macOS menu-bar companion). Background service with observed ~450MB peak
-RAM when faster-whisper is loaded.
+KUREK DAEMON — Lean headless personal AI assistant for Arch Linux / Hyprland.
+Background service with observed ~450MB peak RAM when faster-whisper is loaded.
 
 Connects with:
   • Linux UDS trigger (kurek-trigger) / Hyprland Middle Click
-  • Swift Menu Bar Indicator (KurekBar) & Fn key push-to-talk on macOS
-  • DeepSeek API (deepseek-flash)
-  • Deepgram STT (nova-2) & faster-whisper fallback
+  • Android remote app over Tailscale (/remote/prompt, SSE)
+  • Brain: DeepSeek API (deepseek-flash), or Claude Haiku when KUREK_LLM=haiku
+  • STT: OpenRouter Whisper / Deepgram Nova-2, local faster-whisper fallback
   • xAI Grok TTS (Sol) via persistent mpv PipeWire sink
 """
-import asyncio
+import base64
 import hmac
-import io
 import ipaddress
 import json
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
 import threading
 import time
-import wave
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -41,9 +39,10 @@ sys.path.insert(0, str(BASE_DIR))
 
 import socket
 from memory.config_manager import (
+    get_anthropic_key,
     get_deepgram_key,
+    get_deepseek_key,
     get_openrouter_api_key,
-    get_typesafe_key,
     get_user_name,
     get_xai_key,
     load_api_keys,
@@ -51,28 +50,167 @@ from memory.config_manager import (
     resolve_hermes_memory_dirs,
 )
 from core.decision_client import (
-    NEEDS_SCREEN_INSTRUCTIONS,
     SCREEN_CONTEXT_THRESHOLD,
     auto_screen_enabled,
-    decision_timeout_s,
-    query_openrouter_needs_screen,
+    query_needs_screen,
 )
-from core.llm_client import query_deepseek, stream_deepseek_sentences
+from core.llm_client import brain_name, stream_deepseek_sentences, use_haiku
+from core.live_voice import live_voice_enabled, start_live_servers
 from core.tts import create_tts_player
-from core.stt import DeepgramSTT, WhisperSTT
+from core.stt import DeepgramSTT, FallbackSTT, OpenRouterSTT, STTError, WhisperSTT
 from core.action_loader import discover_actions
 from core.hyprland_watcher import get_hyprland_watcher
 from core.mpv_sink import get_mpv_sink
 from core.timing import begin_query, end_query
 from core import confirm
+from core.proposals import propose
+from core.rules import pinned_block as rules_pinned_block
+from core.rules import prompt_block as rules_prompt_block
+from memory import ledger
+from memory.atomic_io import atomic_write_text
 from memory.memory_manager import load_memory, format_memory_for_prompt
 
 # Audio recording configuration
 SAMPLE_RATE = 16000
 CHANNELS = 1
 SILENCE_THRESHOLD = 0.003  # Sensitive threshold for USB/desk mics
-SILENCE_DURATION = 1.2   # Seconds of silence after speech to auto-submit
-MAX_RECORD_SECONDS = 12.0 # Maximum listen window
+VAD_WARMUP_S = float(os.environ.get("KUREK_VAD_WARMUP_S", "0.3"))  # fast room calibration at the start
+SILENCE_DURATION = float(os.environ.get("KUREK_SILENCE_DURATION", "4.0"))   # Base pause after speech before auto-submit
+SILENCE_GROWTH = float(os.environ.get("KUREK_SILENCE_GROWTH", "0.6"))       # Extra pause granted per second already spoken
+SILENCE_MAX_EXTRA = float(os.environ.get("KUREK_SILENCE_MAX_EXTRA", "10.0")) # Cap on that adaptive extra pause
+MAX_RECORD_SECONDS = float(os.environ.get("KUREK_MAX_RECORD_SECONDS", "180.0")) # Hard ceiling for one dictation
+INITIAL_SILENCE_TIMEOUT = float(os.environ.get("KUREK_INITIAL_SILENCE_TIMEOUT", "30.0")) # Give up if no speech at all
+
+# Upper bound on each memory markdown file injected into the system prompt.
+MEMORY_FILE_MAX_CHARS = int(os.environ.get("KUREK_MEMORY_FILE_MAX_CHARS", "6000"))
+
+
+def vad_update(
+    noise_floor: float,
+    speech_chunks: int,
+    has_speech: bool,
+    rms: float,
+    *,
+    warmup: bool = False,
+) -> tuple[float, int, bool, bool]:
+    """One step of the mic voice-activity detector.
+
+    Returns (noise_floor, speech_chunks, has_speech, sound_now). The ambient
+    noise floor adapts until speech starts; two loud chunks confirm speech;
+    after that, anything above the softer silence threshold counts as sound.
+
+    Both gates are relative to the measured room, not to a fixed level: a quiet
+    desk mic (ambient RMS ~0.001) sits far below the old 0.045 floor, so its
+    owner was never detected as speaking at all.
+    """
+    if not has_speech:
+        # During the first fraction of a second the floor learns the room fast,
+        # so a loud fan is not mistaken for the speaker and a silent desk mic is
+        # not held to a level it can never reach.
+        alpha = 0.5 if warmup else 0.15
+        noise_floor = (1.0 - alpha) * noise_floor + alpha * rms
+    speech_threshold = max(0.006, noise_floor * 2.0)
+    silence_threshold = max(0.0025, noise_floor * 1.3)
+    sound_now = False
+    if rms > speech_threshold:
+        speech_chunks += 1
+        if speech_chunks >= 2:
+            has_speech = True
+            sound_now = True
+    elif has_speech and rms > silence_threshold:
+        sound_now = True
+    return noise_floor, speech_chunks, has_speech, sound_now
+
+
+def auto_submit_enabled() -> bool:
+    """False when ``KUREK_AUTO_SUBMIT=off``: only a click (or the ceiling) stops.
+
+    Long questions are the common failure: the speaker pauses to compose, the
+    watchdog decides the thought ended, and the answer lands mid-sentence. With
+    auto-submit off, the second middle-click is the only "done" signal and the
+    ceiling stays as the last-resort bound.
+    """
+    flag = (os.environ.get("KUREK_AUTO_SUBMIT") or "adaptive").strip().lower()
+    return flag not in ("0", "false", "no", "off", "disabled", "manual")
+
+
+def effective_silence_window(last_sound_time: float, record_start_time: float) -> float:
+    """How long a pause the speaker gets before auto-submit.
+
+    Mid-thought pauses grow with how much has already been said: a two-second
+    answer keeps the base window, while a long question earns up to
+    ``SILENCE_MAX_EXTRA`` more. The second middle-click still stops immediately,
+    so this only widens the safety net (and ``KUREK_AUTO_SUBMIT=off`` removes it).
+    """
+    spoken_span = max(0.0, last_sound_time - record_start_time)
+    extra = min(SILENCE_MAX_EXTRA, spoken_span * SILENCE_GROWTH)
+    return SILENCE_DURATION + extra
+
+
+def silence_stop_reason(now: float, has_speech: bool, last_sound_time: float, record_start_time: float) -> str | None:
+    """Why the watchdog should stop recording now, or None to keep listening.
+
+    ``KUREK_AUTO_SUBMIT=off`` means the second click is the only "done" signal:
+    neither the pause rule nor the no-speech rule may end a session. The ceiling
+    still bounds a forgotten microphone.
+    """
+    if auto_submit_enabled():
+        if has_speech and now - last_sound_time > effective_silence_window(last_sound_time, record_start_time):
+            return "silence"
+        if not has_speech and now - record_start_time > INITIAL_SILENCE_TIMEOUT:
+            return "no_speech"
+    if record_start_time > 0 and now - record_start_time > MAX_RECORD_SECONDS:
+        return "max_duration"
+    return None
+
+
+_warned_truncated: set[tuple[Path, int]] = set()
+
+
+def brain_key_problem() -> str | None:
+    """Why the active brain cannot answer, or None when its API key is present."""
+    if use_haiku():
+        if not get_anthropic_key():
+            return "ANTHROPIC_API_KEY (or HAIKU_API_KEY) missing — Kurek cannot answer."
+    elif not get_deepseek_key():
+        return "DEEPSEEK_API_KEY missing — Kurek cannot answer."
+    return None
+
+
+def read_capped(path: Path, limit: int = MEMORY_FILE_MAX_CHARS) -> str:
+    """Read a markdown memory file, keeping its head and newest tail within limit."""
+    text = path.read_text(encoding="utf-8").strip()
+    if len(text) <= limit:
+        return text
+    if (path, len(text)) not in _warned_truncated:
+        _warned_truncated.add((path, len(text)))
+        print(f"[Kurek Memory] WARNING: {path} is {len(text)} chars, over the {limit} cap; "
+              f"the middle is hidden from the model. Raise KUREK_MEMORY_FILE_MAX_CHARS.", flush=True)
+    head = limit // 3
+    tail = limit - head
+    return f"{text[:head]}\n[… older entries omitted …]\n{text[-tail:]}"
+
+
+
+def _run_tool_prompt_line() -> str:
+    """System-prompt line for the `run` tool. Never advertises arbitrary
+    command execution unless KUREK_REMOTE_ALLOW_EXEC=1 is set."""
+    try:
+        from actions.run import is_unrestricted_shell
+        unrestricted = is_unrestricted_shell()
+    except Exception:
+        unrestricted = False
+    if unrestricted:
+        return (
+            "• run: ⚠️ UNRESTRICTED SHELL ENABLED (KUREK_REMOTE_ALLOW_EXEC=1). Can execute arbitrary shell "
+            "commands as the user via action='exec' with cmd='...'. Prefer read-only commands and confirm "
+            "before anything destructive. "
+        )
+    return (
+        "• run: sandboxed, auditable runner for allowlisted read-only inspection and build/test commands "
+        "(action='exec' with cmd='...'). Destructive commands are blocked. "
+    )
+
 
 # HTTP remote-access hardening
 HTTP_MAX_BODY_BYTES = 64 * 1024
@@ -355,33 +493,61 @@ class KurekEngine:
                         "parameters": _normalize_json_schema(decl.get("parameters", {})),
                     }
                 })
-        print(f"[Kurek] Configured {len(self.openai_tools)} tools for DeepSeek.")
+        print(f"[Kurek] Configured {len(self.openai_tools)} tools for {brain_name()}.")
 
         # Multi-turn conversational memory & persistence
         self.history_file = BASE_DIR / "memory" / "kurek_history.json"
         self.history = self._load_history()
         print(f"[Kurek Memory] Loaded {len(self.history)} prior conversation turns.")
 
-        # STT Engine
+        # STT engine: cloud (OpenRouter multilingual Whisper, then Deepgram) when a
+        # key is set, with local faster-whisper as the runtime fallback when the
+        # cloud call fails. Without cloud keys, local faster-whisper only.
+        stt_provider = (os.environ.get("KUREK_STT_PROVIDER") or "openrouter").strip().lower()
+        or_key = get_openrouter_api_key()
         dg_key = get_deepgram_key()
-        if dg_key:
+        or_model = os.environ.get("OPENROUTER_STT_MODEL", "openai/whisper-large-v3-turbo")
+        whisper_model = (os.environ.get("KUREK_WHISPER_MODEL") or "base.en").strip()
+        # Pin the recogniser when auto-detect guesses wrong (a deep voice in a
+        # Slavic country is not automatically Russian). Empty = auto-detect.
+        stt_language = (os.environ.get("KUREK_STT_LANGUAGE") or "").strip().lower() or None
+        if stt_language == "auto":
+            stt_language = None
+        if stt_language:
+            print(f"[Kurek] STT language pinned to '{stt_language}' (KUREK_STT_LANGUAGE)")
+
+        cloud_stt = None
+        if stt_provider == "openrouter" and or_key:
+            print(f"[Kurek] Using OpenRouter STT ({or_model}) for multilingual speech recognition")
+            cloud_stt = OpenRouterSTT(api_key=or_key, model=or_model, language=stt_language)
+        elif dg_key:
             print("[Kurek] Using Deepgram Nova-2 for ultra-fast STT")
-            self.stt = DeepgramSTT(api_key=dg_key)
+            cloud_stt = DeepgramSTT(api_key=dg_key, language=stt_language)
+        elif or_key:
+            print(f"[Kurek] Using OpenRouter STT ({or_model}) for multilingual speech recognition")
+            cloud_stt = OpenRouterSTT(api_key=or_key, model=or_model, language=stt_language)
+
+        if cloud_stt is not None:
+            print(f"[Kurek] Local faster-whisper ({whisper_model}) is the fallback if cloud STT fails")
+            self.stt = FallbackSTT(
+                cloud_stt, lambda: WhisperSTT(model_name=whisper_model, language=stt_language)
+            )
         else:
-            print("[Kurek] Using local faster-whisper (base.en) STT…")
+            print(f"[Kurek] Using local faster-whisper ({whisper_model}) STT…")
             try:
-                self.stt = WhisperSTT(model_name="base.en")
+                self.stt = WhisperSTT(model_name=whisper_model, language=stt_language)
             except Exception as e:
                 print(f"[Kurek] Whisper load error: {e}")
                 self.stt = None
 
-        # TTS Engine: Use xAI Grok Cloud TTS (voice: Sol / sal) or fallback
+        # TTS engine: xAI Grok Cloud TTS (voice: Sol / sal); spd-say fallback
         xai_key = get_xai_key()
         if xai_key:
             print("[Kurek] Using xAI Grok Cloud TTS (voice: Sol/sal)…")
             self.tts = create_tts_player({"tts_engine": "xai", "tts_voice": "sal", "xai_api_key": xai_key})
         else:
-            self.tts = create_tts_player({"tts_engine": "mac_say"})
+            print("[Kurek] No XAI_API_KEY — using local spd-say voice")
+            self.tts = create_tts_player({"tts_engine": "system"})
 
         # Wire sustained resource watcher (300-second CPU/RAM) alert callback
         try:
@@ -415,9 +581,9 @@ class KurekEngine:
         except Exception as e:
             print(f"[Kurek Hyprland Notice] {e}")
 
-        # Start background hourly Muse Memory consolidation thread
+        # Start the background dream-cycle worker (hourly check)
         threading.Thread(target=self._hourly_consolidation_loop, daemon=True).start()
-        print("[Kurek Memory] Hourly Muse consolidation worker initialized.")
+        print("[Kurek Memory] Dream cycle worker initialized.")
 
         # Wire headless notification callback to confirm system
         def _confirm_show(title: str, detail: str) -> None:
@@ -436,8 +602,36 @@ class KurekEngine:
         def _confirm_hide() -> None:
             pass
 
-        confirm.bind(_confirm_show, _confirm_hide)
+        def _confirm_log(msg: str) -> None:
+            print(f"[Kurek Confirm] {msg}", flush=True)
+            if msg.startswith("ERR:"):
+                self._notify_failure(msg[4:].strip())
+
+        confirm.bind(_confirm_show, _confirm_hide, _confirm_log)
         print("[Kurek Confirm] Headless confirmation notifications bound.")
+
+        self._history_lock = threading.Lock()
+        self._report_startup_problems(xai_key)
+
+    def _report_startup_problems(self, xai_key: str | None) -> None:
+        """One notification at startup listing anything that will break usage."""
+        problems = []
+        if brain_problem := brain_key_problem():
+            problems.append(brain_problem)
+        if self.stt is None:
+            problems.append("No speech recognition (faster-whisper failed to load, no cloud STT key).")
+        if not xai_key and not shutil.which("spd-say"):
+            problems.append("No voice: set XAI_API_KEY or install speech-dispatcher (spd-say).")
+        elif not xai_key:
+            problems.append("XAI_API_KEY missing — using the robotic spd-say voice.")
+        if not shutil.which("mpv"):
+            problems.append("mpv not installed — cloud speech cannot play.")
+        if self.input_device is None:
+            problems.append("No microphone input device found.")
+        for p in problems:
+            print(f"[Kurek Startup] ⚠️ {p}", flush=True)
+        if problems:
+            self._notify_failure("Setup issues: " + " ".join(problems) + " Run `kurek doctor`.")
 
     def _load_history(self) -> list[dict]:
         try:
@@ -451,11 +645,11 @@ class KurekEngine:
 
     def _save_history(self):
         try:
-            self.history_file.parent.mkdir(parents=True, exist_ok=True)
-            self.history_file.write_text(
-                json.dumps(self.history[-30:], indent=2, ensure_ascii=False),
-                encoding="utf-8"
-            )
+            with self._history_lock:
+                atomic_write_text(
+                    self.history_file,
+                    json.dumps(self.history[-30:], indent=2, ensure_ascii=False),
+                )
         except Exception as e:
             print(f"[Kurek Memory] Error saving history: {e}")
 
@@ -483,6 +677,13 @@ class KurekEngine:
                     pass
 
     def _notify_state(self, state: str):
+        # KUREK_STATE_NOTIFY: "minimal" (default: Listening + Thinking only, the
+        # states you can't hear), "all", or "off".
+        mode = (os.environ.get("KUREK_STATE_NOTIFY") or "minimal").strip().lower()
+        if mode in ("off", "0", "false", "no", "none"):
+            return
+        if mode != "all" and state not in (KurekState.LISTENING, KurekState.THINKING):
+            return
         icon = os.path.expanduser("~/.local/share/icons/kurek.png")
         if not os.path.exists(icon):
             icon = os.path.join(os.path.dirname(os.path.abspath(__file__)), "desktop", "kurek.png")
@@ -523,7 +724,8 @@ class KurekEngine:
         self.audio_buffer = []
         self.has_speech = False
         self.speech_chunks = 0
-        self.noise_floor = 0.022
+        self.noise_floor = 0.004
+        self.peak_rms = 0.0
         self.record_start_time = time.time()
         self.last_sound_time = time.time()
         self.is_recording = True
@@ -537,22 +739,13 @@ class KurekEngine:
             # Remove DC offset to calculate true AC speech RMS
             ac_chunk = audio_chunk - np.mean(audio_chunk)
             rms = float(np.sqrt(np.mean(ac_chunk ** 2)))
-
-            # Track ambient noise floor adaptively before sustained speech begins
-            if not self.has_speech:
-                self.noise_floor = 0.85 * self.noise_floor + 0.15 * rms
-
-            speech_threshold = max(0.045, self.noise_floor * 2.0)
-            silence_threshold = max(0.035, self.noise_floor * 1.5)
-
-            if rms > speech_threshold:
-                self.speech_chunks += 1
-                if self.speech_chunks >= 2:
-                    self.has_speech = True
-                    self.last_sound_time = time.time()
-            elif self.has_speech:
-                if rms > silence_threshold:
-                    self.last_sound_time = time.time()
+            self.peak_rms = max(self.peak_rms, rms)
+            warmup = (time.time() - self.record_start_time) < VAD_WARMUP_S
+            self.noise_floor, self.speech_chunks, self.has_speech, sound_now = vad_update(
+                self.noise_floor, self.speech_chunks, self.has_speech, rms, warmup=warmup
+            )
+            if sound_now:
+                self.last_sound_time = time.time()
 
         try:
             self.record_stream = sd.InputStream(
@@ -592,13 +785,30 @@ class KurekEngine:
 
         # Transcribe
         transcript = ""
-        if self.stt:
+        stt_failure = None
+        if self.stt is None:
+            stt_failure = "Speech recognition isn't available. Run kurek doctor."
+        else:
             try:
                 transcript = self.stt.transcribe(full_audio, sample_rate=SAMPLE_RATE)
+            except STTError as e:
+                print(f"[Kurek] STT failed: {e}", flush=True)
+                stt_failure = "My speech recognition failed, so I couldn't understand that."
             except Exception as e:
                 import traceback
                 print(f"[Kurek] STT error: {e}", flush=True)
                 traceback.print_exc()
+                stt_failure = "My speech recognition failed, so I couldn't understand that."
+
+        if stt_failure:
+            self._notify_failure(stt_failure)
+            self.set_state(KurekState.SPEAKING)
+            try:
+                self.tts.speak(stt_failure)
+            except Exception as e:
+                print(f"[Kurek] TTS error: {e}")
+            self.set_state(KurekState.IDLE)
+            return
 
         print(f"[User Voice] 🎙️ \"{transcript}\"", flush=True)
         if not transcript.strip():
@@ -638,8 +848,10 @@ class KurekEngine:
         callback=None,
         mute_speaker: bool = False,
         remote: bool = False,
+        stream_audio: bool = False,
     ):
         begin_query()
+        self.tts.begin_stream()
         self.set_state(KurekState.THINKING)
         try:
             return self._handle_text_query_inner(
@@ -647,6 +859,7 @@ class KurekEngine:
                 callback=callback,
                 mute_speaker=mute_speaker,
                 remote=remote,
+                stream_audio=stream_audio,
             )
         except Exception as e:
             print(f"[Kurek] Unhandled query error: {e}", flush=True)
@@ -664,8 +877,10 @@ class KurekEngine:
                     pass
         finally:
             # Always return to a resting state — never leave the daemon stuck in THINKING.
+            # Sentences are spoken from the TTS queue, so wait for it to drain
+            # (barge-in via toggle() cancels immediately).
             try:
-                deadline = time.time() + 30.0
+                deadline = time.time() + 180.0
                 while getattr(self.tts, "is_playing", False) and time.time() < deadline:
                     if self._cancel_requested:
                         break
@@ -695,6 +910,7 @@ class KurekEngine:
         callback=None,
         mute_speaker: bool = False,
         remote: bool = False,
+        stream_audio: bool = False,
     ):
         # Pending-confirmation shortcut. A short reply that is ONLY a yes/no
         # word or phrase resolves the waiting confirmation; anything else
@@ -707,10 +923,20 @@ class KurekEngine:
             verdict = classify_confirmation_reply(user_prompt)
             if verdict is not None:
                 confirm.resolve(verdict)
-                reply = "Confirmed and executed." if verdict else "Action cancelled."
+                # resolve() runs the action on a worker thread; failures are
+                # reported through the confirm log callback, so don't claim done.
+                reply = "Confirmed, doing it now." if verdict else "Action cancelled."
                 if callback:
                     try:
-                        callback({"type": "sentence", "sentence": reply})
+                        audio_b64 = None
+                        if stream_audio:
+                            audio_bytes = self.synthesize_speech_bytes(reply)
+                            if audio_bytes:
+                                audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+                        ev_payload = {"type": "sentence", "sentence": reply}
+                        if audio_b64:
+                            ev_payload["audio"] = audio_b64
+                        callback(ev_payload)
                         callback({"type": "done", "reply": reply})
                     except Exception:
                         pass
@@ -740,7 +966,7 @@ class KurekEngine:
                 fpath = hermes_dir / fname
                 if fpath.exists():
                     try:
-                        raw = fpath.read_text(encoding="utf-8")
+                        raw = read_capped(fpath)
                         clean = "\n".join(b.strip() for b in raw.split("§") if b.strip())
                         if clean:
                             hermes_snippets.append(f"[{fname.replace('.md', '')}]\n{clean}")
@@ -755,25 +981,28 @@ class KurekEngine:
         muse_core = Path.home() / "MEMORY.md"
         if muse_core.exists():
             try:
-                muse_parts.append(f"[MUSE_CORE_MEMORY]\n{muse_core.read_text(encoding='utf-8').strip()}")
+                muse_parts.append(f"[MUSE_CORE_MEMORY]\n{read_capped(muse_core)}")
             except Exception as e:
                 print(f"[Kurek Muse] Error reading ~/MEMORY.md: {e}")
 
         muse_align = Path.home() / "ALIGNMENT_SYNTHESIS.md"
         if muse_align.exists():
             try:
-                muse_parts.append(f"[MUSE_ALIGNMENT_SYNTHESIS]\n{muse_align.read_text(encoding='utf-8').strip()}")
+                muse_parts.append(f"[MUSE_ALIGNMENT_SYNTHESIS]\n{read_capped(muse_align)}")
             except Exception as e:
                 print(f"[Kurek Muse] Error reading ~/ALIGNMENT_SYNTHESIS.md: {e}")
+
+        if learned := ledger.prompt_block(MEMORY_FILE_MAX_CHARS):
+            muse_parts.append(learned)
 
         if muse_parts:
             mem_block = (mem_block + "\n\n" + "\n\n".join(muse_parts)).strip()
 
         user_name = (get_user_name() or "the user").strip()
         sys_prompt = (
-            f"You are Kurek, an ultra-fast, witty, hyper-competent personal AI assistant. "
+            f"You are Kurek, an ultra-fast, terse, hyper-competent personal AI assistant. "
             f"Current date and time: {now_str}. "
-            f"You are assisting {user_name}. Your voice is powered by xAI Grok (Sol) and your brain is powered directly by DeepSeek-Flash. "
+            f"You are assisting {user_name}. Your voice is powered by xAI Grok (Sol) and your brain is powered directly by {brain_name()}. "
             f"Execute {user_name}'s commands promptly and helpfully. "
             "You are running natively on the user's workstation with local tool access (not a remote sandbox). "
             "You have direct system control access through your built-in tools: "
@@ -784,7 +1013,7 @@ class KurekEngine:
             "  2. Call web_search (running multiple targeted queries if needed) to gather real-time ground truth. "
             "  3. Structure your findings into clean, comprehensive markdown (summary, sections, dates, sources). "
             "  4. Immediately call file_controller with action='create_file', path='<requested_file>.md', and content=... to write it to disk. "
-            "  5. In your spoken response, give a punchy 1-2 sentence summary of what you found and confirm the file is saved. "
+            "  5. In your spoken response, give a punchy 1-2 sentence summary of what you found. State that the file was saved ONLY after file_controller succeeded, specifying the exact path. Never claim a file was written if the write was not executed. "
             "• file_controller: full filesystem management to create, write, append, read, list, and move files anywhere (e.g. ~/Downloads, ~/Desktop, ~/Documents). "
             "  - FILE CREATION PERMISSION: You may create or write files when asked. If asked to make a file, IMMEDIATELY call file_controller with action='create_file' without asking for permission. "
             f"  - FILE DELETION CONFIRMATION: When asked to delete a specific file, call file_controller with action='delete', path=..., confirmed=false. Then ALWAYS ask {user_name}: 'Are you sure you want to delete [filename]? Yes or No?'. NEVER delete a file with confirmed=true unless they have explicitly replied 'Yes'. "
@@ -794,24 +1023,33 @@ class KurekEngine:
             "• desktop_control: minimize, maximize, hide, or arrange windows "
             "• computer_control: simulate typing, clicks, hotkeys, or capture screenshots "
             "• reminder: schedule alarms and notifications "
-            "• manage_memory: store and recall user knowledge, preferences, and notes "
+            "• manage_memory: store and recall user knowledge, preferences, and notes; pass replaces=<#id> to correct an earlier learned memory "
             "• screen_vision: visual perception of the monitor and active Hyprland windows. Use action='inspect' when asked what is on screen, to diagnose compiler errors, review code, or inspect active windows. Use action='start_watch' to continuously watch until told to stop. "
             "• manage_clipboard: persistent Wayland clipboard manager with snippet pinning and recall. Use action='get_latest' when asked what is in the clipboard. Use action='pin' with an optional title to pin a snippet. Use action='list_pinned' to review saved snippets. Use action='copy' to restore a snippet back into the system clipboard. "
             "• system_monitor: hardware diagnostics and 5-minute sustained CPU/RAM watcher. Use action='status' when asked about system resources, CPU, RAM, or temperature. "
             "• process_sentinel: watch long-running compile, build, test, or training jobs (cargo, npm, python, rustc, make). Use action='watch' with a process name, command, or PID. When the job finishes, Kurek alerts verbally and sends a notification. "
             "• draft_to_clipboard: format dictated text into conventional commits, GitHub PR descriptions, issues, docstrings, or markdown notes and copies immediately to the Wayland system clipboard (wl-copy) for instant pasting with Ctrl+V. "
             "• workstation_radar: parallel health scan across repositories in ~/Projects and similar project roots. Use action='actionable' to report dirty working trees, untracked files, and unpushed commits ahead of upstream. "
-            "• dream_tool: executes the Muse Memory reflection cycle. Synthesizes today's daily log into an atmospheric dream journal (~/dreams/YYYY-MM-DD.md) and updates standing guidance in ~/ALIGNMENT_SYNTHESIS.md. "
+            "• dream_tool: executes the Muse Memory reflection cycle. Synthesizes today's daily log into an atmospheric dream journal (~/dreams/YYYY-MM-DD.md) and writes rule proposals to ~/kurek_proposed_rules.md for the user to review. "
+            + _run_tool_prompt_line() +
             "• vault_knowledge: access the nodaysidle-knowledge llm-wiki and Obsidian vault. Use action='list_projects' when asked about what projects exist in the nodaysidle portfolio, what is done, active projects, or releases. Use action='read' with note_name (e.g. 'x-promo-strategy', 'cascade-v3-overview', 'nodaysrammar-overview', 'kureksistant-overview', 'nodaysidle-sonora-overview') to read architecture specs, project PRDs, roadmaps, or social media promotion plans. Use action='search' with a query to look up anything across all notes in the vault. Use action='add_inbox' to capture quick ideas or tasks directly into the vault inbox. "
             "Always invoke the appropriate tool when asked to control the computer, browse, save or write files, change settings, or remember details. "
             "CONVERSATION & OPINIONS: "
             "• When asked for your opinion, thoughts, perspective, or recommendation, provide a direct, candid, and thoughtful opinion with a clear, confident stance. Speak naturally and conversationally. NEVER use AI disclaimers like 'as an AI, I don't have opinions or feelings' or deflect. "
-            "• Only offer an opinion when explicitly asked. For standard instructions, factual queries, and computer control commands, stay sharp, punchy, and execute immediately without unsolicited commentary or fluff. "
+            "• Only offer an opinion when explicitly asked. For standard instructions, factual queries, and computer control commands, stay terse, razor-sharp, and execute immediately without unsolicited commentary, explanation, or fluff. "
             "VOICE & SPEECH RULES: "
             "1. The user only hears your voice over the speaker. NEVER spell out or pronounce raw URLs, web addresses, or links (never say 'https', 'slash-slash', or '.com'). "
             "2. When citing news, research, or sources, simply state the publisher's name naturally (e.g. 'according to Reuters' or 'the BBC reports') without reading links. "
-            "3. Keep all spoken answers concise, conversational, and punchy. Avoid bullet points, symbols, asterisks, or markdown formatting so it sounds completely fluid when spoken. "
-            "4. NEVER read aloud long lists of filenames, file sizes, or raw system logs over the speaker unless explicitly asked to read every item. Summarize what was found or done in 1-2 punchy sentences."
+            "3. EXTREME BREVITY (CRITICAL): Spoken answers must be 1 to 4 sentences maximum (under 100 words total). Never speak paragraphs. State the direct answer or action result and stop immediately. "
+            "4. NEVER read aloud long lists of filenames, file sizes, or raw system logs over the speaker unless explicitly asked to read every item. Summarize what was found or done in 1 punchy sentence. "
+            "5. NO PADDING OR OFFERS: Never justify your decisions (e.g. do not explain why you chose a filename), never analyze the prompt (e.g. do not say 'the name sounds fake'), and never append closing offers like 'Let me know if you want...', 'Say the word if...', or 'Give me X and I will...'. "
+            "TASK DISCIPLINE & EXECUTION TRUTH: "
+            "1. Task Scope & Brevity: Execute strictly the task given in 1-2 concise sentences. Do not branch into unrequested work, offer unsolicited follow-ups, or drift into side topics. "
+            "2. Completed vs. Planned: Never state or imply that an action was completed unless its corresponding tool call executed and succeeded in the current turn. If an action is merely planned, queued, or intended, state plainly that it is planned—never that it is done. "
+            "3. File Writes and Sources: Never claim you saved, filed, placed, or recorded sources in a folder or document unless the write operation succeeded in that turn. When reporting a write, state only what was written and the exact destination path in one sentence. Do not justify naming choices or offer renames. If you did not perform the write, do not claim any file was modified. "
+            "4. Web Search Integrity: Never invent citations, URLs, snippets, or file paths. If a search yields no relevant results or fails, state the truth in one sentence: say plainly that you found nothing and report the exact query you searched. Do not add commentary or speculation about the query. "
+            "5. No Apology Deflections: Apologies are never an acceptable substitute for results or honest reporting. Do not use 'Sorry, Master Alan.' or any variant to close a turn, gloss over an unperformed task, or mask a failure. Report facts, tool outcomes, and errors directly. "
+            "6. Clarify Instead of Guessing: If a prompt is ambiguous, blocked, or missing parameters required to act, ask exactly one direct, brief question to resolve the blocker. Do not fabricate missing information or guess."
         )
 
         vault_anchor = (
@@ -821,6 +1059,8 @@ class KurekEngine:
             "Social Media / X Strategy: wiki/concepts/x-promo-strategy.md, moc-x-promo.md, reel-clip-workflow.md.\n"
             "Whenever asked about portfolio projects, roadmap, what must be done, what is done, or social media strategy, ALWAYS call vault_knowledge(action='read'|'list_projects'|'search') to retrieve ground truth."
         )
+        if rules_block := rules_prompt_block():
+            sys_prompt += f"\n\n{rules_block}"
         sys_prompt += f"\n\n{vault_anchor}"
 
         if mem_block:
@@ -836,11 +1076,12 @@ class KurekEngine:
         # Include last 10 conversational turns for continuity
         for turn in self.history[-10:]:
             messages.append(turn)
-        messages.append({"role": "user", "content": effective_user_prompt})
+        pinned = rules_pinned_block()
+        messages.append({"role": "user", "content": f"{effective_user_prompt}\n\n{pinned}" if pinned else effective_user_prompt})
 
         reply_text = ""
         last_tool_output = ""
-        max_tool_turns = 5
+        max_tool_turns = 15
         sentence_count = 0
         stream_error: str | None = None
 
@@ -853,7 +1094,10 @@ class KurekEngine:
 
             for ev in stream_deepseek_sentences(
                 messages=messages,
-                tools=self.openai_tools if (self.openai_tools and turn_idx < max_tool_turns - 1) else None,
+                # Final round: keep the tool list and forbid calls instead of
+                # dropping tools, or Haiku rejects this round's thinking blocks.
+                tools=self.openai_tools or None,
+                tool_choice="none" if turn_idx == max_tool_turns - 1 else None,
                 model="deepseek-flash",
             ):
                 if self._cancel_requested:
@@ -861,17 +1105,23 @@ class KurekEngine:
 
                 ev_type = ev.get("type")
                 if ev_type == "error":
-                    stream_error = ev.get("error") or "DeepSeek request failed."
+                    stream_error = ev.get("error") or f"{brain_name()} request failed."
                     break
 
                 if ev_type == "tool_calls":
                     tool_detected = True
+                    if callback and stream_audio:
+                        # Sentence audio events are emitted by the TTS worker;
+                        # flush them so the phone sees them before tool events.
+                        self.tts.wait_stream(timeout=30)
                     tool_calls = ev.get("tool_calls", [])
                     asst_msg = {
                         "role": "assistant",
                         "content": ev.get("content") or "",
                         "tool_calls": tool_calls,
                     }
+                    if ev.get("reasoning_content"):
+                        asst_msg["reasoning_content"] = ev["reasoning_content"]
                     messages.append(asst_msg)
 
                     last_tool_output = ""
@@ -911,17 +1161,12 @@ class KurekEngine:
                     raw_sentence = ev.get("sentence", "")
                     clean_sentence = self.sanitize_text_for_speech(raw_sentence)
                     if clean_sentence and not self._cancel_requested:
-                        if not mute_speaker:
-                            if sentence_count == 0:
-                                self.set_state(KurekState.SPEAKING)
-                            self.tts.speak_chunk(clean_sentence, append=(sentence_count > 0))
+                        self._queue_sentence(
+                            raw_sentence, clean_sentence, sentence_count,
+                            mute_speaker=mute_speaker, callback=callback, stream_audio=stream_audio,
+                        )
                         sentence_count += 1
                         streamed_sentences.append(raw_sentence)
-                        if callback:
-                            try:
-                                callback({"type": "sentence", "sentence": raw_sentence})
-                            except Exception:
-                                pass
 
                 elif ev_type == "done":
                     reply_text = ev.get("full_content", "") or " ".join(streamed_sentences)
@@ -936,10 +1181,10 @@ class KurekEngine:
 
         if stream_error or (not reply_text and not last_tool_output and sentence_count == 0):
             if stream_error:
-                failure_msg = "I couldn't reach DeepSeek right now."
+                failure_msg = f"I couldn't reach {brain_name()} right now."
                 detail = stream_error
             else:
-                failure_msg = "I didn't get a response from DeepSeek."
+                failure_msg = f"I didn't get a response from {brain_name()}."
                 detail = "empty stream"
             print(f"[Kurek] Stream failure ({detail})", flush=True)
             self._notify_failure(failure_msg)
@@ -951,11 +1196,40 @@ class KurekEngine:
                     print(f"[Kurek] TTS error: {e}")
             return
 
+        if not reply_text and sentence_count == 0 and last_tool_output:
+            # DeepSeek ran tools but did not emit spoken response tokens. Request a 1-sentence synthesis.
+            try:
+                summary_msgs = list(messages)
+                summary_msgs.append({
+                    "role": "user",
+                    "content": "In 1 or 2 concise, spoken sentences, directly tell me what was done or found.",
+                })
+                for ev in stream_deepseek_sentences(
+                    messages=summary_msgs, tools=self.openai_tools or None, tool_choice="none", model="deepseek-flash"
+                ):
+                    if ev.get("type") == "sentence":
+                        raw_sentence = ev.get("sentence", "")
+                        clean_sentence = self.sanitize_text_for_speech(raw_sentence)
+                        if clean_sentence and not self._cancel_requested:
+                            self._queue_sentence(
+                                raw_sentence, clean_sentence, sentence_count,
+                                mute_speaker=mute_speaker, callback=callback, stream_audio=stream_audio,
+                            )
+                            sentence_count += 1
+                            streamed_sentences.append(raw_sentence)
+                    elif ev.get("type") == "done":
+                        reply_text = ev.get("full_content", "") or " ".join(streamed_sentences)
+                        break
+            except Exception as e:
+                print(f"[Kurek] Summary synthesis notice: {e}")
+
         if not reply_text and last_tool_output:
-            if "Contents of " in last_tool_output or ("\n" in last_tool_output and len(last_tool_output) > 120):
-                reply_text = "I executed the requested action on your system."
+            if "error" in last_tool_output.lower():
+                reply_text = f"Notice: {last_tool_output.strip()[:140]}"
+            elif len(last_tool_output) <= 120 and "\n" not in last_tool_output:
+                reply_text = last_tool_output.strip()
             else:
-                reply_text = last_tool_output
+                reply_text = "Done."
 
         # Strip DeepSeek safety tags, thinking wrappers, and DSML markup if present
         reply_text = re.sub(r"<ds_safety>.*?</ds_safety>", "", reply_text, flags=re.DOTALL)
@@ -993,12 +1267,64 @@ class KurekEngine:
                 print(f"[Kurek] TTS error: {e}")
 
         if callback:
+            if stream_audio:
+                # Let queued sentence audio reach the phone before "done".
+                self.tts.wait_stream(timeout=60)
             try:
-                callback({"type": "done", "reply": reply_text})
+                done_payload = {"type": "done", "reply": reply_text}
+                if stream_audio and sentence_count == 0 and reply_text:
+                    clean_reply = self.sanitize_text_for_speech(reply_text)
+                    audio_bytes = self.synthesize_speech_bytes(clean_reply)
+                    if audio_bytes:
+                        done_payload["audio"] = base64.b64encode(audio_bytes).decode("utf-8")
+                callback(done_payload)
             except Exception:
                 pass
 
         return reply_text
+
+    def synthesize_speech_bytes(self, text: str) -> bytes | None:
+        """Audio bytes for text via the configured TTS engine (no playback)."""
+        if not text or not text.strip():
+            return None
+        return self.tts.synthesize(text)
+
+    def _queue_sentence(
+        self,
+        raw_sentence: str,
+        clean_sentence: str,
+        index: int,
+        *,
+        mute_speaker: bool,
+        callback,
+        stream_audio: bool,
+    ) -> None:
+        """Hand one streamed sentence to the TTS queue and/or the SSE callback.
+
+        Speech is synthesized once by the TTS worker: the same bytes play on the
+        PC speaker (unless muted) and go to the phone (when stream_audio).
+        """
+        if index == 0 and not mute_speaker:
+            self.set_state(KurekState.SPEAKING)
+
+        def _send(payload: dict) -> None:
+            try:
+                callback(payload)
+            except Exception as e:
+                print(f"[Kurek Remote] SSE callback error: {e}", flush=True)
+
+        on_audio = None
+        if callback and stream_audio:
+            def on_audio(audio: bytes | None) -> None:
+                payload = {"type": "sentence", "sentence": raw_sentence}
+                if audio:
+                    payload["audio"] = base64.b64encode(audio).decode("utf-8")
+                _send(payload)
+        elif callback:
+            _send({"type": "sentence", "sentence": raw_sentence})
+
+        if not mute_speaker or on_audio is not None:
+            self.tts.enqueue(clean_sentence, play_local=not mute_speaker, on_audio=on_audio)
 
     @staticmethod
     def sanitize_text_for_speech(text: str) -> str:
@@ -1083,31 +1409,25 @@ class KurekEngine:
 
             if is_durable and salience >= 1.5 and kind in ("preference", "boundary", "fact"):
                 today = datetime.now().strftime("%Y-%m-%d")
-                citation = f"source:daily/{today}.md|jev:{salience:.1f}|conf:{conf:.2f}"
-                line = f"- [{kind.upper()}] {user_prompt.strip()} <!-- [{citation}] -->\n"
+                fact = " ".join(user_prompt.split())
+                source = f"daily/{today}.md (jev:{salience:.1f}, conf:{conf:.2f})"
+                memory_id = ledger.append(kind, fact, source, heard=fact)
+                print(f"[Muse Jev] 🧠 Learned durable {kind} as memory #{memory_id}: {fact[:60]}...", flush=True)
 
-                muse_core = Path.home() / "MEMORY.md"
-                if muse_core.exists():
-                    with open(muse_core, "a", encoding="utf-8") as f:
-                        f.write(line)
-                    print(f"[Muse Jev] 🧠 Consolidated durable {kind} into MEMORY.md: {user_prompt[:60]}...", flush=True)
-
-                if kind == "boundary":
-                    align_file = Path.home() / "ALIGNMENT_SYNTHESIS.md"
-                    if align_file.exists():
-                        with open(align_file, "a", encoding="utf-8") as f:
-                            f.write(f"- **[BOUNDARY]** {user_prompt.strip()}\n")
-                        print(f"[Muse Jev] 🛡️ Hoisted boundary into ALIGNMENT_SYNTHESIS.md", flush=True)
+                if kind == "boundary" and propose(
+                    f"jev (boundary, salience {salience:.1f})", fact, heard=fact, source=f"daily/{today}.md"
+                ):
+                    print("[Muse Jev] 🛡️ Proposed boundary in kurek_proposed_rules.md", flush=True)
         except Exception as e:
             print(f"[Muse Jev Consolidation Notice] {e}", flush=True)
 
     def _check_auto_screen_context(self, user_prompt: str) -> str | None:
         """Detect whether the prompt needs on-screen / terminal visual context.
 
-        Uses an optional fast decision model (OpenRouter Decision-1) first, then
-        TypeSafe Jev as fallback. With neither key (or ``KUREK_AUTO_SCREEN=0``),
-        returns None and skips screen capture. When OpenRouter is used, the
-        prompt text is sent to OpenRouter.
+        One decision call through ``core.decision_client`` (Mouse-1 → Decision-1
+        → Jev), each with its own timeout. With no key, or when the model
+        abstains, the heuristic path returns None and skips screen capture. The
+        prompt text is sent to whichever provider answers.
         """
         try:
             if not auto_screen_enabled():
@@ -1115,47 +1435,7 @@ class KurekEngine:
 
             load_api_keys()
 
-            prob: float | None = None
-            source_engine = "Heuristic"
-
-            openrouter_key = get_openrouter_api_key()
-            if openrouter_key:
-                prob = query_openrouter_needs_screen(
-                    user_prompt,
-                    openrouter_key,
-                    timeout=decision_timeout_s(),
-                )
-                if prob is not None:
-                    source_engine = "Microsoft-Decision-1"
-
-            if prob is None and get_typesafe_key():
-                try:
-                    from typesafe_sdk import Noul, TypeSafeClient
-
-                    client = TypeSafeClient()
-                    resp = client.system_one(
-                        state={"prompt": user_prompt},
-                        questions={
-                            "needs_screen": Noul(instructions=NEEDS_SCREEN_INSTRUCTIONS)
-                        },
-                    )
-                    noul = resp.answers["needs_screen"].noul
-                    if (
-                        isinstance(noul, (int, float))
-                        and not isinstance(noul, bool)
-                        and 0.0 <= float(noul) <= 1.0
-                    ):
-                        prob = float(noul)
-                        source_engine = "TypeSafe Jev"
-                except Exception as ex_ts:
-                    msg = str(ex_ts)
-                    if len(msg) > 120:
-                        msg = msg[:117] + "..."
-                    print(
-                        f"[Kurek Jev Notice] TypeSafe fallback failed "
-                        f"({type(ex_ts).__name__}: {msg})",
-                        flush=True,
-                    )
+            prob, source_engine = query_needs_screen(user_prompt)
 
             if prob is not None and prob > SCREEN_CONTEXT_THRESHOLD:
                 print(
@@ -1193,24 +1473,26 @@ class KurekEngine:
         return None
 
     def _hourly_consolidation_loop(self):
-        """Hourly background sweep checking for unindexed signals and nightly dream reflection."""
-        while True:
-            time.sleep(3600)
-            try:
-                today = datetime.now().strftime("%Y-%m-%d")
-                daily_file = Path.home() / "memory" / f"{today}.md"
-                if daily_file.exists():
-                    print(f"[Muse Jev] 🔄 Running hourly memory consolidation sweep on {daily_file.name}...", flush=True)
+        """Dream reflection on yesterday's log, once per day after 05:00.
 
-                # Nightly dream reflection (runs once per day around 05:00-06:00 CET)
-                current_hour = datetime.now().hour
-                if 5 <= current_hour <= 7:
+        execute_dream_cycle skips when yesterday's dream already exists and
+        writes nothing on an LLM failure, so checking hourly retries failures
+        and catches up when the PC was off at 05:00.
+        """
+        time.sleep(300)
+        while True:
+            try:
+                if datetime.now().hour >= 5:
                     from core.dream_cycle import execute_dream_cycle
                     d_res = execute_dream_cycle(force=False)
-                    if d_res.get("status") == "success":
-                        print(f"[Muse Dream] 🌙 Nightly dream journal created: {d_res.get('dream_file')}", flush=True)
+                    status = d_res.get("status")
+                    if status == "success":
+                        print(f"[Muse Dream] 🌙 Dream journal created: {d_res.get('dream_file')}", flush=True)
+                    elif status == "error":
+                        print(f"[Muse Dream] Dream cycle failed, will retry next hour: {d_res.get('message')}", flush=True)
             except Exception as e:
-                print(f"[Muse Jev] Hourly sweep notice: {e}", flush=True)
+                print(f"[Muse Dream] Dream cycle notice: {e}", flush=True)
+            time.sleep(3600)
 
 
 
@@ -1377,6 +1659,7 @@ class KurekHTTPHandler(BaseHTTPRequestHandler):
             if data is None:
                 return
             prompt_text = data.get("prompt", "")
+            stream_audio = bool(data.get("stream_audio", False))
             speak_local = (
                 data.get("speak_local") is True
                 or os.environ.get("KUREK_REMOTE_LOCAL_TTS") == "1"
@@ -1389,7 +1672,9 @@ class KurekHTTPHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
+            # Close after "done": keep-alive would leave the client waiting on an
+            # unterminated body (no Content-Length) after the stream ends.
+            self.send_header("Connection", "close")
             self.end_headers()
 
             stream_lock = threading.Lock()
@@ -1410,6 +1695,7 @@ class KurekHTTPHandler(BaseHTTPRequestHandler):
                 callback=_sse_callback,
                 mute_speaker=mute_speaker,
                 remote=is_remote,
+                stream_audio=stream_audio,
             )
             return
 
@@ -1632,6 +1918,13 @@ def _tailscale_rebind_loop(port: int, bound_hosts: set[str], stop_event: threadi
             )
 
 
+def _live_authorized(authorization: str | None) -> bool:
+    # Live voice spends xAI minutes, so it needs the token even on loopback.
+    token = get_remote_token()
+    provided = parse_bearer_token(authorization)
+    return remote_token_is_strong(token) and provided is not None and tokens_match(provided, token)
+
+
 def run_server(engine: KurekEngine, port: int = 8790):
     KurekHTTPHandler.engine = engine
     # Launch UDS listener in background
@@ -1674,6 +1967,14 @@ def run_server(engine: KurekEngine, port: int = 8790):
         bound.add("127.0.0.1")
         print(f"[Kurek Server] 🚀 Listening at http://127.0.0.1:{port}", flush=True)
 
+    if live_voice_enabled():
+        start_live_servers(
+            sorted(bound),
+            _live_authorized,
+            engine.openai_tools,
+            lambda name, args: engine._run_tool(name, args, remote=True),
+        )
+
     stop_event = threading.Event()
     if watch_tailscale:
         threading.Thread(
@@ -1697,22 +1998,40 @@ if __name__ == "__main__":
     engine = KurekEngine()
 
     # Background auto-silence watchdog
+    stop_messages = {
+        "silence": f"Silence detected after speech (> {SILENCE_DURATION}s) — auto-submitting…",
+        "no_speech": f"No speech detected within {INITIAL_SILENCE_TIMEOUT}s "
+        f"(peak RMS {{peak:.4f}} vs gate ~{{gate:.4f}}) — auto-stopping listening…",
+        "max_duration": f"Max recording duration reached ({MAX_RECORD_SECONDS}s) — auto-submitting…",
+    }
+
     def silence_watchdog():
         while True:
             time.sleep(0.1)
             if engine.is_recording:
-                now = time.time()
-                # 1. If speech was detected and followed by silence (1.2s) -> auto submit
-                if engine.has_speech and (now - engine.last_sound_time > SILENCE_DURATION):
-                    print(f"[Kurek] Silence detected after speech ({now - engine.last_sound_time:.2f}s) — auto-submitting…", flush=True)
-                    engine.stop_listening_and_process()
-                # 2. If no speech detected at all within 4.5s -> auto stop
-                elif not engine.has_speech and (now - engine.record_start_time > 4.5):
-                    print("[Kurek] No speech detected within 4.5s — auto-stopping listening…", flush=True)
-                    engine.stop_listening_and_process()
-                # 3. Safety cap: stop after MAX_RECORD_SECONDS
-                elif engine.record_start_time > 0 and (now - engine.record_start_time > MAX_RECORD_SECONDS):
-                    print("[Kurek] Max recording duration reached — auto-submitting…", flush=True)
+                reason = silence_stop_reason(
+                    time.time(), engine.has_speech, engine.last_sound_time, engine.record_start_time
+                )
+                if reason:
+                    if reason == "silence":
+                        window = effective_silence_window(
+                            engine.last_sound_time, engine.record_start_time
+                        )
+                        print(
+                            f"[Kurek] Silence detected after speech "
+                            f"(> {window:.1f}s, adaptive) — auto-submitting…",
+                            flush=True,
+                        )
+                    elif reason == "no_speech":
+                        gate = max(0.006, engine.noise_floor * 2.0)
+                        print(
+                            stop_messages[reason].format(
+                                peak=getattr(engine, "peak_rms", 0.0), gate=gate
+                            ),
+                            flush=True,
+                        )
+                    else:
+                        print(f"[Kurek] {stop_messages[reason]}", flush=True)
                     engine.stop_listening_and_process()
 
     threading.Thread(target=silence_watchdog, daemon=True).start()

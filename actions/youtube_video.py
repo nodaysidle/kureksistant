@@ -1,25 +1,12 @@
 #youtube_video.py
-import json
 import re
 import sys
-import time
 import subprocess
 import shutil
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote_plus
 
-try:
-    import pyautogui
-    _PYAUTOGUI = True
-except ImportError:
-    _PYAUTOGUI = False
-
-try:
-    import numpy as np
-    _NUMPY = True
-except ImportError:
-    _NUMPY = False
 
 try:
     import requests
@@ -33,7 +20,7 @@ try:
 except ImportError:
     _TRANSCRIPT_OK = False
 
-from config import get_os, is_windows, is_mac, is_linux
+from config import is_mac
 
 
 def _get_base_dir() -> Path:
@@ -65,10 +52,8 @@ def _open_url(url: str) -> None:
     try:
         if is_mac():
             subprocess.Popen(["open", "-a", "Safari", url])
-        elif is_linux():
-            subprocess.Popen(["xdg-open", url])
         else:
-            subprocess.Popen(["cmd", "/c", "start", "", url], shell=False)
+            subprocess.Popen(["xdg-open", url])
     except Exception as e:
         print(f"[YouTube] ⚠️ open_url failed: {e}")
 
@@ -116,20 +101,13 @@ def _is_valid_youtube_url(url: str) -> bool:
 
 
 def _ask_for_url(prompt_text: str = "YouTube video URL:") -> str | None:
-    try:
-        import tkinter as tk
-        from tkinter import simpledialog
+    """Kurek is a headless daemon with no GUI, so there is no URL dialog.
 
-        root = tk._default_root
-        if root is None:
-            root = tk.Tk()
-            root.withdraw()
-
-        url = simpledialog.askstring("J.A.R.V.I.S", prompt_text, parent=root)
-        return url.strip() if url else None
-    except Exception as e:
-        print(f"[YouTube] ⚠️ URL dialog failed: {e}")
-        return None
+    Returns None; callers then reply with a spoken prompt asking the user to
+    say or paste the URL in their request (or open the video in the browser).
+    """
+    print(f"[YouTube] No URL supplied ({prompt_text!r}); headless daemon, no dialog.")
+    return None
 
 
 def _get_transcript(video_id: str) -> str | None:
@@ -169,7 +147,7 @@ def _summarize_with_gemini(transcript: str, video_url: str) -> str:
     from google import genai as _genai
     from google.genai import types
 
-    _client = _genai.Client(api_key=_get_api_key())
+    _client = _genai.Client(api_key=_get_api_key(), http_options={"timeout": 60_000})
     max_chars = 80000
     truncated = transcript[:max_chars] + ("..." if len(transcript) > max_chars else "")
     response  = _client.models.generate_content(
@@ -205,9 +183,7 @@ def _save_summary(content: str, video_url: str) -> str:
     filepath.write_text(header + content, encoding="utf-8")
 
     try:
-        if is_windows():
-            subprocess.Popen(["notepad.exe", str(filepath)])
-        elif is_mac():
+        if is_mac():
             subprocess.Popen(["open", "-t", str(filepath)])
         else:
             subprocess.Popen(["xdg-open", str(filepath)])
@@ -276,6 +252,26 @@ def _scrape_trending(region: str = "TR", max_results: int = 8) -> list[dict]:
         print(f"[YouTube] ⚠️ Trending scrape failed: {e}")
         return []
 
+def _playerctl_toggle() -> str:
+    """Toggle play/pause on the active MPRIS player (browser YouTube tab included)."""
+    if not shutil.which("playerctl"):
+        return ("I can't pause or resume playback: 'playerctl' is not installed. "
+                "Tell me what you'd like to watch on YouTube instead, sir.")
+    try:
+        res = subprocess.run(["playerctl", "play-pause"], capture_output=True, text=True, timeout=5)
+    except subprocess.TimeoutExpired:
+        return "playerctl timed out while toggling playback."
+    if res.returncode != 0:
+        err = (res.stderr or res.stdout).strip() or f"exit code {res.returncode}"
+        return f"Could not toggle playback: {err}"
+    try:
+        status = subprocess.run(["playerctl", "status"], capture_output=True,
+                                text=True, timeout=5).stdout.strip()
+    except Exception:
+        status = ""
+    return f"Playback {status.lower()}, sir." if status else "Toggled playback, sir."
+
+
 def _handle_play(parameters: dict, player) -> str:
     query = parameters.get("query", "").strip()
     if not query:
@@ -296,11 +292,13 @@ def _handle_play(parameters: dict, player) -> str:
                     end if
                 end tell
                 '''
-                res = subprocess.run(["osascript", "-e", cmd], capture_output=True, text=True).stdout.strip()
+                res = subprocess.run(["osascript", "-e", cmd], capture_output=True, text=True, timeout=10).stdout.strip()
                 if res == "toggled":
                     return "Toggled YouTube playback in Safari, sir."
             except Exception:
                 pass
+        else:
+            return _playerctl_toggle()
         return "Please tell me what you'd like to watch on YouTube, sir."
 
     if player:
@@ -314,7 +312,8 @@ def _handle_play(parameters: dict, player) -> str:
         play_url = video_url + ("&autoplay=1" if "?" in video_url else "?autoplay=1")
         print(f"[YouTube] ▶️ Opening: {play_url}")
         _open_url(play_url)
-        return f"Playing {query} on YouTube in Safari, sir."
+        where = "in Safari" if is_mac() else "in your browser"
+        return f"Playing {query} on YouTube {where}, sir."
 
     print(f"[YouTube] ⚠️ Scrape failed, opening filtered search page")
     fallback_url = (
@@ -332,7 +331,7 @@ def _handle_summarize(parameters: dict, player, speak) -> str:
 
     url = _ask_for_url("Please paste the YouTube video URL:")
     if not url:
-        return "No URL provided, sir. Summary cancelled."
+        return "I need a YouTube link to summarise. Please include the video URL in your request, or open the video in your browser and ask again."
     if not _is_valid_youtube_url(url):
         return "That doesn't appear to be a valid YouTube URL, sir."
 
@@ -372,7 +371,7 @@ def _handle_get_info(parameters: dict, player, speak) -> str:
     if not url:
         url = _ask_for_url("Please paste the YouTube video URL:")
     if not url or not _is_valid_youtube_url(url):
-        return "Please provide a valid YouTube URL, sir."
+        return "I need a valid YouTube link. Please include the video URL in your request."
 
     video_id = _extract_video_id(url)
     if not video_id:

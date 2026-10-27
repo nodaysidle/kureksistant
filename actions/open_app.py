@@ -8,11 +8,6 @@ import platform
 import shutil
 from pathlib import Path
 
-try:
-    import psutil
-    _PSUTIL = True
-except ImportError:
-    _PSUTIL = False
 
 _SYSTEM = platform.system()
 
@@ -98,45 +93,6 @@ def _normalize(raw: str) -> str:
             return os_map.get(_SYSTEM, raw)
 
     return raw
-
-def _launch_windows(app_name: str) -> bool:
-
-    if shutil.which(app_name) or shutil.which(app_name.split(".")[0]):
-        try:
-            subprocess.Popen(
-                app_name,
-                shell=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            time.sleep(1.5)
-            return True
-        except Exception as e:
-            print(f"[open_app] subprocess failed: {e}")
-
-    if ":" in app_name:
-        try:
-            subprocess.Popen(f"start {app_name}", shell=True)
-            time.sleep(1.0)
-            return True
-        except Exception:
-            pass
-
-    try:
-        import pyautogui
-        pyautogui.PAUSE = 0.1
-        pyautogui.press("win")
-        time.sleep(0.7)
-        pyautogui.write(app_name, interval=0.05)
-        time.sleep(0.9)
-        pyautogui.press("enter")
-        time.sleep(2.5)
-        return True
-    except Exception as e:
-        print(f"[open_app] Start Menu search failed: {e}")
-
-    return False
-
 
 def _launch_macos(app_name: str) -> bool:
 
@@ -268,6 +224,27 @@ def _find_linux_desktop_file(app_name: str) -> Path | None:
     return None
 
 
+_GENERIC_TERMINAL_NAMES = ("terminal", "x-terminal-emulator", "shell", "bash", "gnome-terminal")
+
+
+def _launch_default_terminal(command: list[str] | None = None) -> bool:
+    """Open the user's default terminal; xdg-terminal-exec reads ~/.config/xdg-terminals.list."""
+    exe = shutil.which("xdg-terminal-exec")
+    if not exe:
+        return False
+    try:
+        subprocess.Popen(
+            [exe, *(command or [])],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError:
+        return False
+    return True
+
+
 def _launch_linux(app_name: str) -> bool:
     # 1. If already running on Hyprland, switch workspace and focus
     if _focus_hyprland_app(app_name):
@@ -275,6 +252,13 @@ def _launch_linux(app_name: str) -> bool:
 
     # 2. Terminal emulators and shells: try common ones in order
     clean_name = app_name.strip().lower()
+    if clean_name in _GENERIC_TERMINAL_NAMES and _launch_default_terminal():
+        return True
+    if clean_name in ("fish", "ghostty -e fish") and _launch_default_terminal([shutil.which("fish") or "fish"]):
+        return True
+    # herdr is a TUI: run it inside the default terminal (Foot here), not as a bare window.
+    if clean_name == "herdr" and _launch_default_terminal([shutil.which("herdr") or "herdr"]):
+        return True
     if clean_name in ("terminal", "x-terminal-emulator", "ghostty", "herdr", "shell", "bash", "gnome-terminal"):
         for term in _LINUX_TERMINAL_FALLBACKS:
             if shutil.which(term):
@@ -414,7 +398,6 @@ def _launch_linux(app_name: str) -> bool:
 
 
 _OS_LAUNCHERS = {
-    "Windows": _launch_windows,
     "Darwin":  _launch_macos,
     "Linux":   _launch_linux,
 }

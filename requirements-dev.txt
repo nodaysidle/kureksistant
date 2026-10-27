@@ -1,0 +1,5 @@
+# Dev / CI tooling on top of the runtime set.
+-r requirements.txt
+
+pytest
+ruff

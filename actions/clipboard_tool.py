@@ -16,7 +16,6 @@ Capabilities:
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -59,8 +58,10 @@ class ClipboardStore:
 
     def _save(self):
         try:
-            with open(self.filepath, "w", encoding="utf-8") as f:
-                json.dump(self.items, f, indent=2, ensure_ascii=False)
+            from memory.atomic_io import atomic_write_text
+            atomic_write_text(self.filepath,
+                              json.dumps(self.items, indent=2, ensure_ascii=False),
+                              mode=0o600)
         except Exception as e:
             print(f"[Clipboard] Error saving store: {e}", flush=True)
 

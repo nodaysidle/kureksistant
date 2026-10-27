@@ -19,9 +19,11 @@
 
 ---
 
-Kurek is a headless Python daemon (`kurek_daemon.py`) that runs as a systemd user service on your Linux desktop. You summon it with a mouse middle-click, a hotkey or the `kurek` CLI. It listens, thinks with DeepSeek-Flash, talks back with xAI Grok TTS (voice **Sol**), and can act on your desktop through about two dozen tool modules in [`actions/`](actions/), including windows, apps, the browser, files, the clipboard, screen vision and memory.
+**A headless voice assistant daemon on Linux — no GUI on purpose.**
 
-It is built and tested first on **Arch Linux with Omarchy / Hyprland**. A macOS menu-bar client exists ([`menubar/`](menubar/)) but is less exercised. The old PyQt6 GUI lives in [`legacy/`](legacy/) and is unsupported.
+Kurek is a headless Python daemon (`kurek_daemon.py`) with no GUI that runs as a systemd user service on your Linux desktop. You summon it with a mouse middle-click, a hotkey or the `kurek` CLI. It listens, thinks with DeepSeek-Flash (or Claude Haiku 5.5 when you set `KUREK_LLM=haiku`), talks back with xAI Grok TTS (voice **Sol**), and can act on your desktop through 27 tool modules in [`actions/`](actions/), including windows, apps, the browser, files, the clipboard, screen vision and memory.
+
+It is built and tested on **Arch Linux with Omarchy / Hyprland**. The old macOS menu-bar client and PyQt6 GUI were removed in v0.2.2.
 
 **Latest release: [v0.2.1, Omarchy Integration & Stability Refactor](https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.1)** (see also [CHANGELOG.md](CHANGELOG.md)).
 
@@ -54,12 +56,19 @@ It is built and tested first on **Arch Linux with Omarchy / Hyprland**. A macOS 
 - Anything longer, such as "notes for today" or "stop the music", is handled as a normal prompt.
 - **By design**, an authenticated phone request may confirm or cancel a confirmation that was raised on the PC.
 
-### Memory: SQLite (WAL + FTS5) with auto-migration
-- Long-term memory lives in `memory/kurek_memory.db`, in SQLite WAL mode with an FTS5 full-text index. Recall falls back to plain word matching.
-- On first start, the legacy `memory/long_term.json` is imported automatically.
-  - If the import fails, it is rolled back, logged and retried on the next start.
-  - The JSON file is never overwritten before migration has completed, and it is then kept up to date as a compatibility copy.
-- Separately, the Muse memory layer keeps daily logs in `~/memory/`, a durable core in `~/MEMORY.md` and standing alignment in `~/ALIGNMENT_SYNTHESIS.md`. Optional TypeSafe Jev triage decides what gets promoted. Optional Hermes continuity is available via `HERMES_PROFILE` / `HERMES_MEMORIES_DIR`.
+### Memory: rules you control, and a ledger that can't be rewritten
+- **Rules, `~/.config/kurek/rules.toml`:** your standing rules, stored word for word and injected into every prompt as `[USER RULES]`. Only you edit this file; no model writes to it. A missing file means no rules. A malformed one injects a visible "rules unavailable" notice and logs the error.
+  ```toml
+  [[rule]]
+  id = "never-lie"
+  text = "Never lie. If you are not sure, always check the web, then answer."
+  pin = true   # optional: also re-send this rule, verbatim, right after each of your messages
+  ```
+- **Learned memory, an append-only ledger:** what Kurek learns through `manage_memory` and Jev triage goes into a `ledger` table in `memory/kurek_memory.db`. The database refuses updates and deletes, and every row needs a source. A correction is a new row that supersedes the old one (the same key does it automatically, or pass `replaces=<#id>`), so history stays and the prompt carries only entries nothing has replaced. The block is capped by `KUREK_MEMORY_FILE_MAX_CHARS`; if the oldest entries have to be left out, a warning is logged.
+- **Proposals, `~/kurek_proposed_rules.md`:** the nightly dream cycle and Jev's boundary triage only *propose* rules here, with a source and your words verbatim. Nothing reads this file back into a prompt. You promote a proposal by copying it into `rules.toml`.
+- **Everything else:** daily logs in `~/memory/`, a hand-written reference in `~/MEMORY.md`, and `~/ALIGNMENT_SYNTHESIS.md`, which is still read if present but is no longer written by Kurek. Memory files longer than the cap are cut to head and tail, with a warning in the log. Optional Hermes continuity is available via `HERMES_PROFILE` / `HERMES_MEMORIES_DIR`.
+- **Why it is built this way, and how rule-following is measured:** [docs/ANTI-DRIFT.md](docs/ANTI-DRIFT.md).
+- **Storage:** SQLite in WAL mode with an FTS5 full-text index. On first start the legacy `memory/long_term.json` is imported automatically (a failed import is rolled back, logged and retried; the JSON file is never overwritten before migration completes).
 
 ### Stability: the 600M systemd memory limit
 - `kurek.service` runs with `MemoryHigh=512M` / `MemoryMax=600M` and `Restart=on-failure`.
@@ -74,7 +83,8 @@ It is built and tested first on **Arch Linux with Omarchy / Hyprland**. A macOS 
 - `process_sentinel`: announces when long builds or tests finish.
 - `draft_to_clipboard`: dictate commit messages and PR text into `wl-copy`.
 - `workstation_radar`: git status across `~/Projects` and `~/dev`.
-- `vault_knowledge`: queries the nodaysidle-knowledge Obsidian vault.
+- `vault_knowledge`: queries the nodaysidle-knowledge Obsidian vault. Set `KUREK_VAULT_DIR`, or it looks in `~/dev/nodaysidle/nodaysidle-knowledge`.
+- `open_app`: launches desktop apps by name, including the Grok Bot app (`grok-bot`).
 - `dream_tool`: nightly reflection journal.
 - Also: Playwright browser control, web search, file management (deletion requires confirmation), volume/brightness, alarms, and the clipboard manager.
 
@@ -106,8 +116,11 @@ cd kureksistant
 - creates `.venv` and installs `requirements.txt` plus the Playwright Chromium;
 - compiles `kurek-trigger`;
 - installs `~/.local/bin/kurek`, the icon and the desktop entry;
-- renders the systemd user unit into `~/.config/systemd/user/kurek.service`. The unit loads your settings with `EnvironmentFile=-<install dir>/.env`;
+- renders the systemd user unit into `${XDG_CONFIG_HOME:-~/.config}/systemd/user/kurek.service`. The unit loads your settings with `EnvironmentFile=-<install dir>/.env`;
+- enables and starts `kurek.service` (skip with `--no-enable`);
 - creates `.env` from `.env.example` only if it doesn't exist yet.
+
+Flags: `--no-enable`, `--dev` (also installs `requirements-dev.txt`), `--locked` (installs the exact pins in `requirements.lock`). Afterwards run `kurek doctor` to check keys, binaries, mic and service.
 
 ### 2. Configure `.env`
 
@@ -117,22 +130,32 @@ nano .env
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `DEEPSEEK_API_KEY` | **Yes** | Reasoning and tool dispatch (DeepSeek-Flash). |
+| `DEEPSEEK_API_KEY` | **Yes**, unless `KUREK_LLM=haiku` | Reasoning and tool dispatch (DeepSeek-Flash). |
+| `KUREK_LLM` | Optional | `haiku` switches the brain to Claude Haiku 5.5. Unset keeps DeepSeek-Flash. |
+| `ANTHROPIC_API_KEY` / `HAIKU_API_KEY` | With `KUREK_LLM=haiku` | Anthropic key for the Haiku brain. |
+| `KUREK_HAIKU_MODEL` / `KUREK_HAIKU_EFFORT` / `KUREK_HAIKU_THINKING` | Optional | Haiku model (default `claude-haiku-5-5`), effort (default `low`), and `off` to turn thinking off. |
 | `XAI_API_KEY` | **Yes** | Speech (xAI Grok TTS, voice Sol). |
 | `GEMINI_API_KEY` | Optional | Screen vision and Gemini-backed tools. |
-| `DEEPGRAM_API_KEY` | Optional | Deepgram Nova-2 STT. Falls back to local `faster-whisper`. |
+| `DEEPGRAM_API_KEY` | Optional | Deepgram Nova-2 STT (voice audio is sent to Deepgram). |
 | `TYPESAFE_API_KEY` | Optional | TypeSafe Jev triage / screen-context fallback. |
-| `OPENROUTER_API_KEY` | Optional | Decision-1 auto screen-context (prompt text is sent to OpenRouter when set). |
+| `OPENROUTER_API_KEY` | Optional | **Primary STT** (your voice audio is sent to OpenRouter Whisper) and Decision-1 auto screen-context (prompt text is sent). |
+| `KUREK_STT_PROVIDER` / `OPENROUTER_STT_MODEL` | Optional | Prefer `openrouter` (default) or `deepgram`; OpenRouter STT model. |
+| `KUREK_WHISPER_MODEL` | Optional | Local faster-whisper model (default `base.en`, English-only; `base`/`small` are multilingual). Used with no cloud STT key, and as the fallback when cloud STT fails. |
+| `KUREK_SILENCE_DURATION` / `KUREK_INITIAL_SILENCE_TIMEOUT` / `KUREK_MAX_RECORD_SECONDS` | Optional | Listening window: 2.2 s / 6 s / 30 s. |
+| `KUREK_STATE_NOTIFY` | Optional | `minimal` (default), `all` or `off` state toasts. |
+| `KUREK_MEMORY_FILE_MAX_CHARS` | Optional | Cap per memory file, and for the learned-memory block, injected into each prompt (default 6000). A warning is logged when something is cut. |
+| `KUREK_RULES_FILE` | Optional | Path to `rules.toml` (default `~/.config/kurek/rules.toml`). |
+| `KUREK_VAULT_DIR` | Optional | Path to the Obsidian vault used by `vault_knowledge`. |
+| `KUREK_CODEBASE_ROOTS` | Optional | Project roots for the `codebase` tool (`:`-separated). |
 | `KUREK_AUTO_SCREEN` | Optional | `0` disables auto screen-context. |
 | `KUREK_DECISION_TIMEOUT` | Optional | Decision-1 HTTP timeout in seconds. |
 | `KUREK_USER_NAME` | Optional | How Kurek addresses you. |
 | `HERMES_PROFILE` / `HERMES_MEMORIES_DIR` | Optional | Hermes memory continuity. |
 | `INPUT_DEVICE` | Optional | Microphone name substring. |
-| `KUREK_PROJECT_DIR` | Optional | Install path for the macOS menu-bar client. |
 | `KUREK_TIMING` | Optional | `1` logs per-query timing deltas. |
 | `KUREK_REMOTE_BIND` | For phone | `tailscale` enables the remote bind (see below). |
 | `KUREK_REMOTE_TOKEN` | For phone | Bearer token, **at least 32 characters** (`openssl rand -hex 32`). |
-| `KUREK_REMOTE_ALLOW_EXEC` | Optional | `1` lets remote prompts use exec-capable tools. Leave it empty unless you need that. |
+| `KUREK_REMOTE_ALLOW_EXEC` | Optional | `1` lets remote prompts use exec-capable tools and enables the `run` tool's unrestricted shell. |
 | `KUREK_REMOTE_LOCAL_TTS` | Optional | `1` makes remote prompts also speak on the PC. |
 | `KUREK_BIND` | Optional | Explicit bind host. Never use `0.0.0.0` unless you understand the risk. |
 
@@ -241,15 +264,25 @@ Full details and how to report issues: **[SECURITY.md](SECURITY.md)**.
 
 ---
 
+## ⚠️ Unrestricted shell (`KUREK_REMOTE_ALLOW_EXEC`) — off by default
+
+The `run` tool is a sandboxed, allowlisted, root-scoped command runner by default. An **unrestricted shell mode** exists that runs *any* command as your user, bypassing the allowlist and root scoping. It is **OFF** unless you explicitly set:
+
+```bash
+KUREK_REMOTE_ALLOW_EXEC=1
+```
+
+The older `KUREK_UNRESTRICTED_SHELL` / `KUREK_ALLOW_SHELL` variables no longer enable it on their own. When enabled, the daemon logs a loud warning and the tool description and system prompt say so. Combined with the phone remote, anyone holding your remote token could run arbitrary commands on your desktop. Only enable it on a machine and tailnet you fully trust.
+
 ## ⚠️ Known limits
 
-- **Not offline:** reasoning (DeepSeek) and voice (xAI) need cloud API keys and internet. Only speech-to-text can fall back to local `faster-whisper`.
+- **Not offline:** reasoning (DeepSeek-Flash or Claude Haiku) needs internet. Speech-to-text falls back to local `faster-whisper`, and voice falls back to the robotic `spd-say` when xAI is unreachable.
 - **Desktop scope:** Hyprland/Omarchy comes first. Other Wayland compositors need their own keybinds, and the Hyprland-specific window actions won't apply there.
 - **Timed-out tools keep running:** they can't be killed. After 120 s Kurek reports the timeout, but the tool may finish in the background.
-- **Confirmation wording:** after a "yes", Kurek replies "Confirmed and executed." as soon as the action is started, before its result is known.
+- **Confirmation wording:** after a "yes", Kurek replies "Confirmed, doing it now." as the action starts; a failure is logged and shown as a notification.
 - **Memory headroom:** the service can run close to `MemoryHigh=512M` with faster-whisper and Chromium loaded. If it exceeds `MemoryMax=600M`, systemd restarts it, and an in-flight request is dropped.
 - **Local tool permissions:** tools run with your user's permissions. Creating files is unrestricted, and deleting needs confirmation.
-- **Lint:** older modules still have ruff warnings.
+- **Lint:** CI enforces a subset of ruff rules (see `[tool.ruff.lint]` in `pyproject.toml`); stricter rules are a ratchet target.
 
 ---
 

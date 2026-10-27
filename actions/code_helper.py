@@ -1,6 +1,5 @@
 import subprocess
 import sys
-import json
 import re
 import time
 from pathlib import Path
@@ -12,6 +11,7 @@ def get_base_dir():
     return Path(__file__).resolve().parent.parent
 
 from memory.config_manager import get_gemini_key
+from core.decision_client import classify_intent, intent_routing_enabled
 BASE_DIR           = get_base_dir()
 DESKTOP            = Path.home() / "Desktop"
 MAX_BUILD_ATTEMPTS = 3
@@ -24,7 +24,7 @@ def _get_api_key() -> str:
 
 def _get_gemini(model: str = GEMINI_MODEL):
     from google import genai
-    _c = genai.Client(api_key=_get_api_key())
+    _c = genai.Client(api_key=_get_api_key(), http_options={"timeout": 60_000})
 
     class _W:
         def generate_content(self, contents):
@@ -115,12 +115,20 @@ _VALID_INTENTS = {"write", "edit", "explain", "run", "build", "screen_debug", "o
 def _detect_intent(description: str, file_path: str, code: str) -> str:
     """
     Language-independent intent detection — NO fixed keyword list.
-    Whatever language the user speaks, the description is classified by
-    Gemini. If the API is unreachable, it falls back to language-agnostic
-    structural hints (does the file exist on disk, was code provided).
+
+    A decision model answers first (Mouse-1 → Decision-1 → Jev, ~100 ms) when
+    KUREK_DECISION_INTENT is on. Gemini stays the fallback for when no decision
+    key is configured, the call fails, or the model abstains. If both are
+    unavailable, language-agnostic structural hints decide.
     """
     desc        = (description or "").strip()
     file_exists = bool(file_path) and Path(file_path).exists()
+
+    if desc and intent_routing_enabled():
+        intent, engine = classify_intent(desc, file_path, code)
+        if intent in _VALID_INTENTS:
+            print(f"[Code] 🧭 Intent via {engine}: {intent}", flush=True)
+            return intent
 
     if desc:
         try:
@@ -468,7 +476,7 @@ def _screen_debug_action(description, file_path, player, speak=None) -> str:
         from google import genai
         from google.genai import types
 
-        client = genai.Client(api_key=_get_api_key())
+        client = genai.Client(api_key=_get_api_key(), http_options={"timeout": 60_000})
 
         image_bytes  = screenshot_path.read_bytes()
         image_base64 = _image_to_base64(screenshot_path)

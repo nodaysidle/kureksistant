@@ -1,9 +1,69 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Dark only on purpose: DESIGN.md follows the owner's Omarchy theme (Nodaysidle Miasma),
+         which has no light variant. Parent is explicitly Dark so a light system setting cannot flip it. -->
     <style name="Theme.Kurek" parent="Theme.Material3.Dark.NoActionBar">
-        <item name="android:statusBarColor">#0B0D11</item>
-        <item name="android:navigationBarColor">#0B0D11</item>
-        <item name="android:windowBackground">@color/bg_main</item>
-        <item name="colorPrimary">@color/accent_primary</item>
+        <item name="android:windowBackground">@color/background</item>
+        <item name="android:forceDarkAllowed">false</item>
+        <item name="colorPrimary">@color/accent</item>
+        <item name="colorOnPrimary">@color/on_accent</item>
+        <item name="colorAccent">@color/accent</item>
+        <item name="colorControlActivated">@color/accent</item>
+        <item name="colorControlHighlight">@color/outline</item>
+        <item name="colorSurface">@color/surface</item>
+        <item name="colorOnSurface">@color/text</item>
+        <item name="colorOutline">@color/outline</item>
+        <item name="colorError">@color/error</item>
+        <item name="android:textColorHint">@color/text_muted</item>
+    </style>
+
+    <style name="Theme.Kurek.Trampoline" parent="@android:style/Theme.Translucent.NoTitleBar">
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowIsTranslucent">true</item>
+    </style>
+
+    <style name="TextMono">
+        <item name="android:fontFamily">@font/jetbrains_mono</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:textSize">14sp</item>
+    </style>
+
+    <style name="TextMeta" parent="TextMono">
+        <item name="android:textColor">@color/text_muted</item>
+        <item name="android:textSize">12sp</item>
+    </style>
+
+    <style name="TextBody">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:textSize">15sp</item>
+        <item name="android:lineSpacingExtra">3dp</item>
+    </style>
+
+    <!-- Quiet outlined control: 48dp target, border darkens on press, accent ring on focus. -->
+    <style name="PresetButton" parent="TextMono">
+        <item name="android:minHeight">48dp</item>
+        <item name="android:minWidth">48dp</item>
+        <item name="android:gravity">center</item>
+        <item name="android:paddingStart">16dp</item>
+        <item name="android:paddingEnd">16dp</item>
+        <item name="android:background">@drawable/bg_outlined</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+    </style>
+
+    <style name="IconButton">
+        <item name="android:layout_width">48dp</item>
+        <item name="android:layout_height">48dp</item>
+        <item name="android:background">@drawable/bg_icon_button</item>
+        <item name="android:scaleType">center</item>
+    </style>
+
+    <style name="FieldInput" parent="TextBody">
+        <item name="android:background">@drawable/bg_field</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:paddingStart">12dp</item>
+        <item name="android:paddingEnd">12dp</item>
+        <item name="android:textColorHint">@color/text_muted</item>
     </style>
 </resources>

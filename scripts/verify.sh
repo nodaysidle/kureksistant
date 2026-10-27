@@ -34,7 +34,10 @@ fi
 REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "FAIL: not a git repo"; exit 2; }
 SHA=$(git -C "$REPO_ROOT" rev-parse "${1:-HEAD}^{commit}") || { echo "FAIL: bad rev"; exit 2; }
 PORT=${VERIFY_PORT:-18791}
-[[ "$PORT" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$PORT" -le 65535 ] || { echo "FAIL: bad VERIFY_PORT"; exit 2; }
+if ! [[ "$PORT" =~ ^[1-9][0-9]{0,4}$ ]] || [ "$PORT" -gt 65535 ]; then
+    echo "FAIL: bad VERIFY_PORT"
+    exit 2
+fi
 [ "$PORT" -eq 8790 ] && { echo "FAIL: refusing live port 8790"; exit 2; }
 if [ -z "${PYTHON:-}" ]; then
   if [ -x "$REPO_ROOT/.venv/bin/python" ]; then PYTHON="$REPO_ROOT/.venv/bin/python"; else PYTHON=python3; fi
@@ -56,7 +59,7 @@ trap cleanup EXIT
 ORIG_HOME=$HOME
 mkdir -p "$TMP/src" "$TMP/home" "$TMP/run" "$TMP/cfg"; chmod 700 "$TMP/run"
 git -C "$REPO_ROOT" archive "$SHA" | tar -x -C "$TMP/src"
-cd "$TMP/src"
+cd "$TMP/src" || { echo "FAIL: cannot cd to $TMP/src"; exit 2; }
 # some tests call `git ls-files`: give the copy its own throwaway git index
 git init -q . && git add -A && git -c user.name=verify -c user.email=verify@localhost commit -qm "verify $SHA" >/dev/null
 export HOME="$TMP/home" XDG_RUNTIME_DIR="$TMP/run" XDG_CONFIG_HOME="$TMP/cfg" PYTHONDONTWRITEBYTECODE=1

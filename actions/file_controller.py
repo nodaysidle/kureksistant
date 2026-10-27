@@ -69,25 +69,11 @@ def _undo_write(target: Path, previous: str | None):
 def _restore_from_trash(original: Path) -> str:
     """Best-effort undelete.
 
-    delete_file uses send2trash, which is the right call: the file lands in the
-    Recycle Bin / Trash where the person can also find it themselves. Getting it
-    back out again is shell work and only reliable on Windows, where pywin32 is
-    already a dependency. Everywhere else this says where the file is instead of
-    pretending it failed — the file is not lost either way."""
-    if _OS == "Windows":
-        try:
-            import win32com.client
-            shell = win32com.client.Dispatch("Shell.Application")
-            bin_folder = shell.NameSpace(10)      # ssfBITBUCKET
-            for item in bin_folder.Items():
-                if str(bin_folder.GetDetailsOf(item, 1)).strip().lower() == \
-                        str(original.parent).strip().lower():
-                    if str(item.Name).strip().lower() == original.name.strip().lower():
-                        item.InvokeVerb("UNDELETE")
-                        return f"'{original.name}' restored from the Recycle Bin."
-        except Exception as e:
-            print(f"[file] Recycle Bin restore failed: {e}")
-    return (f"'{original.name}' is in the Recycle Bin — I could not pull it back "
+    delete_file uses send2trash, so the file lands in the desktop Trash where
+    the person can also find it themselves. Pulling it back out automatically
+    is not supported here; this says where the file is instead of pretending
+    the restore failed — the file is not lost either way."""
+    return (f"'{original.name}' is in the Trash — I could not pull it back "
             f"automatically, but it is there and can be restored by hand.")
 
 
@@ -163,6 +149,11 @@ def _resolve_path(raw: str) -> Path:
     lower = raw.lower()
     if lower in shortcuts:
         return shortcuts[lower]
+
+    for name, base_path in shortcuts.items():
+        if lower.startswith(f"{name}/") or lower.startswith(f"{name}\\"):
+            sub = raw[len(name)+1:]
+            return base_path / sub
 
     # Remap foreign absolute home-style prefixes onto the current user's home
     if _OS != "Darwin" and raw.startswith("/Users/"):
@@ -404,8 +395,12 @@ def rename_file(path: str, name: str = "", new_name: str = "") -> str:
             return f"Not found: {target.name}"
         if not new_name:
             return "No new name provided."
+        if "/" in new_name or "\\" in new_name or new_name in (".", ".."):
+            return "The new name must be a plain file name, not a path."
 
         new_path = target.parent / new_name
+        if not _is_safe_path(new_path):
+            return f"Access denied: {new_path}"
         if new_path.exists():
             return f"A file named '{new_name}' already exists here."
 
@@ -688,38 +683,38 @@ def file_controller(
         player.write_log(f"[file] {action} {name or path}")
 
     try:
-        if action == "list":
+        if action in ("list", "ls", "dir"):
             return list_files(path)
 
-        elif action == "create_file":
+        elif action in ("create_file", "create", "touch", "new_file", "make_file"):
             return create_file(path, name=name, content=params.get("content", ""))
 
-        elif action == "create_folder":
+        elif action in ("create_folder", "mkdir", "make_folder", "folder"):
             return create_folder(path, name=name)
 
-        elif action == "delete":
+        elif action in ("delete", "remove", "rm", "unlink"):
             return delete_file(path, name=name, confirmed=bool(params.get("confirmed", False)))
 
-        elif action == "move":
+        elif action in ("move", "mv"):
             return move_file(path, name=name, destination=params.get("destination", ""))
 
-        elif action == "copy":
+        elif action in ("copy", "cp"):
             return copy_file(path, name=name, destination=params.get("destination", ""))
 
-        elif action == "rename":
+        elif action in ("rename", "mv_name"):
             return rename_file(path, name=name, new_name=params.get("new_name", ""))
 
-        elif action == "read":
+        elif action in ("read", "cat", "view"):
             return read_file(path, name=name)
 
-        elif action == "write":
+        elif action in ("write", "write_file", "save", "save_file"):
             return write_file(
                 path, name=name,
                 content=params.get("content", ""),
                 append=params.get("append", False)
             )
 
-        elif action == "find":
+        elif action in ("find", "search"):
             return find_files(
                 name=name or params.get("name", ""),
                 extension=params.get("extension", ""),

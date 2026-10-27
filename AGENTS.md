@@ -1,6 +1,6 @@
 # AGENTS.md — Developer & AI Agent Guide for Kurek (Kureksistant)
 
-> **Kurek** is a headless personal AI assistant for **Arch Linux / Omarchy Quattro (Hyprland)** and **macOS** (~450MB peak RAM with faster-whisper loaded, observed). Features Middle Click mouse summon (C trigger; `scripts/bench_trigger.py` is an informational, machine-dependent mock-daemon benchmark, not end-to-end latency), native desktop launcher, DeepSeek-Flash reasoning, xAI Grok speech (**Sol** voice), Hermes bidirectional memory continuity, and 25 tool modules in `actions/`. Release: v0.2.0.
+> **Kurek** is a headless personal AI assistant for **Arch Linux / Omarchy Quattro (Hyprland)** — a headless daemon with no GUI on purpose (~450MB peak RAM with faster-whisper loaded, observed). Features Middle Click mouse summon (C trigger; `scripts/bench_trigger.py` is an informational, machine-dependent mock-daemon benchmark, not end-to-end latency), native desktop launcher, DeepSeek-Flash reasoning, xAI Grok speech (**Sol** voice), Hermes bidirectional memory continuity, and 27 tool modules in `actions/`. Latest release: v0.2.1 (v0.2.2 unreleased).
 
 ---
 
@@ -8,30 +8,30 @@
 
 ```
   ┌──────────────────────────────────────────────┐       ┌──────────────────────────────────────────────┐
-  │     Arch Linux / Omarchy Quattro             │       │       macOS Menu Bar Item (Kurek.app)        │
-  │  • Middle Click (mouse:274) / Super+Middle   │       │   Swift 6 / AppKit  •  Fn Key Global Monitor │
-  │  • Super+Space Launcher (kurek.desktop)      │       │      10 Hz Reactive Polling / State Indicator│
-  │  • CLI: kurek [toggle|prompt|status|stop]    │       │                                              │
+  │     Arch Linux / Omarchy Quattro             │       │  Android remote app (over Tailscale)         │
+  │  • Middle Click (mouse:274) / Super+Middle   │       │   POST /remote/prompt (Bearer token, SSE)    │
+  │  • Super+Space Launcher (kurek.desktop)      │       │   optional per-sentence TTS audio            │
+  │  • CLI: kurek [toggle|prompt|status|doctor]  │       │                                              │
   └──────────────────────┬───────────────────────┘       └──────────────────────┬───────────────────────┘
-                         │                                                      │
+                         │ UDS ($XDG_RUNTIME_DIR/kurek.sock)                    │ HTTP :8790
                          └───────────────────────┬──────────────────────────────┘
-                                                 │ HTTP (127.0.0.1:8790)
+                                                 │
                                                  ▼
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
 │                        KUREK PYTHON DAEMON (kurek_daemon.py)                           │
 │                                                                                        │
 │  ┌──────────────────────┐   ┌───────────────────────┐   ┌───────────────────────────┐  │
 │  │   Audio Input (STT)  │   │      Brain (LLM)      │   │     Speech Output (TTS)   │  │
-│  │  • Deepgram Nova-2   │   │  • DeepSeek-Flash     │   │  • xAI Grok TTS (Sol/sal) │  │
-│  │  • faster-whisper    │   │    (api.deepseek.com) │   │    (api.x.ai/v1/tts)      │  │
-│  │    (base.en local)   │   │  • Reasoning tokens   │   │  • Linux mpv (PipeWire)   │  │
-│  │  • DC offset removal │   │  • 24 OpenAI Tools    │   │  • macOS afplay           │  │
-│  │  • Peak normalization│   │  • Unrestricted Jarvis│   │  • In-place notifications │  │
+│  │  • OpenRouter Whisper│   │  • DeepSeek-Flash     │   │  • xAI Grok TTS (Sol/sal) │  │
+│  │  • Deepgram Nova-2   │   │    (V4.1-Flash)       │   │  • sentence queue worker  │  │
+│  │  • faster-whisper    │   │  • Reasoning tokens   │   │  • mpv sink (PipeWire)    │  │
+│  │    (local fallback)  │   │  • 27 tool modules    │   │  • spd-say fallback       │  │
+│  │  • Adaptive VAD      │   │  • Gated shell opt-in │   │  • In-place notifications │  │
 │  └──────────────────────┘   └───────────┬───────────┘   └───────────────────────────┘  │
 │                                         │                                              │
 │                                         ▼                                              │
 │  ┌──────────────────────────────────────────────────────────────────────────────────┐  │
-│  │                         24 Computer Control & Core Tools                         │  │
+│  │                         27 Computer Control & Core Tools                         │  │
 │  │  • open_app           • browser_control     • desktop_control   • reminder       │  │
 │  │  • computer_control   • computer_settings   • manage_memory     • weather        │  │
 │  │  • file_controller    • dev_agent           • web_search        • youtube_video  │  │
@@ -56,16 +56,15 @@
 |-----------|-----------|-------------|
 | **Python Daemon** | [`kurek_daemon.py`](kurek_daemon.py) | Headless background daemon. Exposes Unix Domain Socket (`$XDG_RUNTIME_DIR/kurek.sock`) and HTTP port `8790`. Orchestrates audio capture, VAD auto-submitting, STT, DeepSeek LLM, tools, and TTS. |
 | **C Trigger Client** | [`bin/kurek-trigger`](bin/kurek-trigger) (`bin/kurek-trigger.c`) | Compiled C binary dispatching JSON over UDS (timing: `scripts/bench_trigger.py`, an informational, machine-dependent benchmark against a mock daemon, not end-to-end latency). Auto-spawns daemon if offline. |
-| **Linux CLI & App Launcher** | [`bin/kurek`](bin/kurek) (`~/.local/bin/kurek`) | Single binary control: `kurek [toggle|prompt|status|start|stop]`. Delegates to `kurek-trigger` over UDS. |
+| **Linux CLI & App Launcher** | [`bin/kurek`](bin/kurek) (`~/.local/bin/kurek`) | Single binary control: `kurek [toggle|prompt|status|start|stop|logs|doctor]`. Delegates to `kurek-trigger` over UDS. `kurek doctor` checks keys (presence only), binaries, mic, socket and service. |
 | **systemd User Service** | [`desktop/kurek.service`](desktop/kurek.service) (`~/.config/systemd/user/kurek.service`) | Template unit (`@KUREK_DIR@`) rendered by the installer; journald logging and memory envelope (`MemoryHigh=512M`, `MemoryMax=600M`). |
 | **Hyprland Event Watcher** | [`core/hyprland_watcher.py`](core/hyprland_watcher.py) | Event-driven `.socket2.sock` listener. Parses focus/open/move/workspace into RAM; one `hyprctl` seed at startup + one lazy geometry fetch per vision request. |
 | **PipeWire Audio Sink** | [`core/mpv_sink.py`](core/mpv_sink.py) | Persistent background `mpv` process bound to PipeWire via `$XDG_RUNTIME_DIR/kurek_mpv.sock`. Zero-disk tmpfs playback & instant barge-in. |
 | **Desktop Entry** | [`desktop/kurek.desktop`](desktop/kurek.desktop) | Standard FreeDesktop `.desktop` entry. Appears in Omarchy launcher (`Super+Space`) under Apps with 1024x1024 retina icon. |
 | **Hyprland Bindings** | `~/.config/hypr/bindings.lua` | Middle Click (`mouse:274`) and `SUPER + mouse:274` calling `kurek-trigger toggle`. |
-| **macOS Menu Bar UI** | [`menubar/KurekBar.swift`](menubar/KurekBar.swift) | Native Swift 6 status item for macOS. Polls `/status` at 10 Hz and monitors global `Fn` modifier flags. |
 | **LLM Client** | [`core/llm_client.py`](core/llm_client.py) | Direct `api.deepseek.com` client with sentence-buffered streaming pipeline (`stream_deepseek_sentences`). |
 | **TTS Engine** | [`core/tts.py`](core/tts.py) | Implements `XAITTSEngine` (Grok Cloud TTS, voice: **Sol** / `sal`) with chunk streaming into `MpvPipeWireSink`. |
-| **STT Engine** | [`core/stt.py`](core/stt.py) | Implements `DeepgramSTT` (Nova-2) and `WhisperSTT` (`faster-whisper`) with DC offset stripping and peak normalization. |
+| **STT Engine** | [`core/stt.py`](core/stt.py) | `OpenRouterSTT` (multilingual `openai/whisper-large-v3-turbo`), `DeepgramSTT` (Nova-2), `WhisperSTT` (local `faster-whisper`, model via `KUREK_WHISPER_MODEL`). Order: OpenRouter → Deepgram → local. Cloud failures raise `STTError`; `FallbackSTT` retries the utterance on local Whisper. |
 | **Memory Tool** | [`actions/memory_tool.py`](actions/memory_tool.py) | `manage_memory(action='remember'|'recall')`. Bidirectionally syncs with Hermes `USER.md` & `MEMORY.md`. |
 | **External Memory** | `HERMES_PROFILE` / `HERMES_MEMORIES_DIR` / `~/.hermes/memories` | Optional Hermes `USER.md` + `MEMORY.md` continuity. |
 | **Knowledge Vault** | [`actions/vault_knowledge.py`](actions/vault_knowledge.py) | `vault_knowledge(action='list_projects'\|'read'\|'search'\|'add_inbox')`. Accesses nodaysidle-knowledge Obsidian vault notes, PRDs, roadmaps, and social media plans. |
@@ -84,8 +83,9 @@ Environment variables are loaded from [`.env`](.env):
 KUREK_TIMING=1            # Optional: print per-query ms timing marks to the daemon log
 DEEPSEEK_API_KEY=sk-...   # Direct platform key for api.deepseek.com
 XAI_API_KEY=xai-...        # Direct platform key for api.x.ai (Grok TTS)
-DEEPGRAM_API_KEY=...      # Deepgram Nova-2 STT (falls back to local Whisper if omitted)
-OPENROUTER_API_KEY=       # Optional: Decision-1 auto screen-context (prompt text sent to OpenRouter)
+DEEPGRAM_API_KEY=...      # Deepgram Nova-2 STT (used when no OpenRouter key; voice audio sent to Deepgram)
+OPENROUTER_API_KEY=       # Optional: primary STT (voice audio sent) + Decision-1 auto screen-context (prompt text sent)
+GEMINI_API_KEY=           # Gemini-backed tools and screen vision
 TYPESAFE_API_KEY=         # Optional: Jev triage + Decision-1 fallback for needs_screen
 KUREK_AUTO_SCREEN=1       # Set 0 to disable auto screen-context detection
 # KUREK_DECISION_TIMEOUT=1.5
@@ -96,7 +96,7 @@ KUREK_REMOTE_ALLOW_EXEC=  # set 1 to allow remote prompts to run exec/shell tool
 ```
 
 > [!IMPORTANT]
-> DeepSeek chat completions must route straight to `https://api.deepseek.com/chat/completions` (never via OpenRouter). Optional `OPENROUTER_API_KEY` is only for Decision-1 auto screen-context detection; when set, each prompt's text is sent to OpenRouter unless `KUREK_AUTO_SCREEN=0`.
+> DeepSeek chat completions must route straight to `https://api.deepseek.com/chat/completions` (never via OpenRouter). Optional `OPENROUTER_API_KEY` is used for speech-to-text (your voice audio is sent to OpenRouter; local faster-whisper is the fallback) and for Decision-1 auto screen-context detection (each prompt's text is sent unless `KUREK_AUTO_SCREEN=0`). The model name `deepseek-flash` is DeepSeek's unversioned alias, served by DeepSeek-V4.1-Flash-1017 since 2026-10-17. See `.env.example` for every setting.
 
 ---
 
@@ -107,11 +107,11 @@ On Linux, real-time feedback is displayed through in-place desktop notifications
 | State | Notification Badge | Trigger / Meaning |
 |-------|--------------------|-------------------|
 | **IDLE** | `● Idle` | Ready and waiting for user input. |
-| **LISTENING** | `🟢 Listening... (Speak now)` | Mic recording active. Auto-submits on 1.2s silence or max 12s. |
+| **LISTENING** | `🟢 Listening... (Speak now)` | Mic recording active. Auto-submits after 2.2s of silence following speech, stops after 6s if no speech starts, hard cap 30s (`KUREK_SILENCE_DURATION`, `KUREK_INITIAL_SILENCE_TIMEOUT`, `KUREK_MAX_RECORD_SECONDS`). |
 | **THINKING** | `🟡 Thinking...` | Transcribing audio, querying DeepSeek-Flash, or executing tools. |
 | **SPEAKING** | `🔵 Speaking...` | Streaming speech audio via xAI Grok TTS (**Sol** voice). |
 
-On macOS, the status is rendered by `KurekBar.swift` in the system menu bar.
+By default only Listening and Thinking show a toast (`KUREK_STATE_NOTIFY=minimal`); set `all` for every state or `off` for none.
 
 ---
 
@@ -120,8 +120,15 @@ On macOS, the status is rendered by `KurekBar.swift` in the system menu bar.
 Kurek uses the **Muse Memory** three-tier markdown memory plane, triaged by TypeSafe Jev. Auto screen-context detection (`KurekEngine._check_auto_screen_context`) tries an optional fast decision model via OpenRouter Decision-1 first (`core/decision_client.py`), then TypeSafe Jev; with neither key—or with `KUREK_AUTO_SCREEN=0`—no screen context is injected.
 
 1. **Daily logs:** `~/memory/YYYY-MM-DD.md`, the day's captured context.
-2. **Durable core:** `~/MEMORY.md`, durable preferences and rules promoted by Jev.
-3. **Standing alignment:** `~/ALIGNMENT_SYNTHESIS.md`, behavioural guidance distilled by the nightly dream cycle (`dream_tool`).
+2. **Reference facts:** `~/MEMORY.md`, hand-written identity, environment and projects. Kurek never appends to it.
+3. **Legacy alignment:** `~/ALIGNMENT_SYNTHESIS.md`, still read if present, never written by Kurek.
+
+Rules and learned memory live outside those files:
+- **User rules:** `~/.config/kurek/rules.toml`, verbatim, injected as `[USER RULES]`; only the user edits it (`core/rules.py`).
+- **Learned memory:** the append-only `ledger` table in `memory/kurek_memory.db`, written by `manage_memory` and Jev (`memory/ledger.py`).
+- **Proposals:** `~/kurek_proposed_rules.md`, where the dream cycle and Jev boundary triage only propose rules (`core/proposals.py`). Nothing reads it into a prompt.
+
+**Before changing anything that reads or writes memory, rules or the prompt, read [docs/ANTI-DRIFT.md](docs/ANTI-DRIFT.md)** and run `scripts/rules_eval.py` before and after.
 
 Supporting stores:
 - `memory/kurek_history.json` keeps the rolling conversation context between turns.
@@ -133,7 +140,7 @@ Supporting stores:
 
 The daemon auto-discovers all tools in the [`actions/`](actions/) directory:
 
-- **`open_app`**: Cross-platform launcher (`xdg-open` / binary on Linux, `open -a` on macOS).
+- **`open_app`**: Launcher (`.desktop` entries / binary / `xdg-open`, focuses via `hyprctl`).
 - **`browser_control`**: Full Playwright browser automation (navigate, click, type, scrape).
 - **`computer_settings`**: Volume (`pactl` / `osascript`), brightness (`brightnessctl`), Wi-Fi, Bluetooth.
 - **`desktop_control`**: Window management (minimize, maximize, hide, tile).
@@ -179,9 +186,15 @@ kurek prompt "Open browser and check latest Rust news"
 - **Super + Middle Click**: Secondary shortcut.
 - **App Launcher**: Press `Super + Space`, type `Kurek`, hit `Enter`.
 
+### Diagnose Setup
+```bash
+kurek doctor   # keys (presence only), mpv/wtype/playerctl/spd-say/…, mic, socket, service
+```
+
 ### View Live Daemon Logs
 ```bash
-tail -f /tmp/kurek_daemon.log
+kurek logs -f
+# journald when kurek.service is active, else ~/.local/state/kurek/daemon.log
 ```
 
 ### Phone remote (Android, over Tailscale)
@@ -193,3 +206,57 @@ HTTP defaults to `127.0.0.1:8790`. For the Android app over Tailscale:
 3. In the app Settings, enter the PC Tailscale IP/MagicDNS name, port `8790`, and the same token.
 
 The app uses GET `/status` and POST `/remote/prompt` (JSON + `Authorization: Bearer …`, SSE). Transport security is Tailscale/WireGuard (no daemon TLS). Remote prompts block `desktop_control` / `code_helper` / `dev_agent` / `run` / `codebase` unless `KUREK_REMOTE_ALLOW_EXEC=1`. Rotate the token if it was ever shared.
+
+<!-- trail:start -->
+## Trail — repo context graph
+
+This repo is indexed in `.trail/cache/`: small linked markdown nodes that explain each
+system and carry exact file:line spans, kept in sync with the code through git.
+
+For ANY task here — understanding how something works, finding where code lives,
+or scoping a change — get context from the graph before grepping or opening
+source files. Re-ask freely (it's cheap) and reuse literal identifiers you
+already have (symbol, error string, file name) as the query. New to this repo?
+Run `trail map` first — a token-budgeted orientation (dir clusters, hubs,
+hotspots), no LLM, no key.
+
+- Run `trail ask "<your question>" --source` → ranked nodes with the relevant
+  code spans inlined (each hit's ≤8-line crux by default; `--full` for whole
+  definitions when the crux isn't enough). Match the tool to the task shape:
+  for understanding or editing, the top node IS the answer — cite its
+  `covers:` file:line spans and edit straight from `--source`. For
+  exhaustive tasks ("every occurrence / every caller of this pattern"), ranked
+  results are top-N, not complete — run `trail grep "<literal>"` instead
+  (exhaustive over indexed files, grouped by enclosing symbol), falling back
+  to raw `grep -rn` only for unindexed files.
+- `trail skeleton <file>` → every definition's signature + span, ~10× cheaper
+  than reading the file; use it to skim an API surface.
+- `trail callers <symbol>` gives precomputed, exact edges — who calls this.
+  Add `--direction out` for what it calls, or `--depth N` to walk
+  transitively for the full blast radius. For structural questions, skip
+  ranking and use this directly.
+- Or browse: `.trail/cache/INDEX.md` lists every node; follow the links.
+- Monorepos and folders of multiple repos rank fairly across sub-projects —
+  hits carry `[scope/]` labels naming which one they're from. Narrow with
+  `trail ask "<task>" --in <scope>/` once you know where you're working.
+
+If a returned span is truncated ("+N more lines"), open the file at that exact
+range before finalizing. Only open source files when a node genuinely lacks a
+needed detail, and then at the exact file:line the node points to — never
+re-read whole files.
+
+After big code changes, refresh the graph with `trail build` (deterministic,
+no API key, $0).
+<!-- trail:end -->
+
+<!-- delegation:v1 -->
+## Delegation — Sonnet builds, Haiku swarms, Opus reviews
+
+Launch with `claude --model sonnet --advisor opus`. Sonnet 5.5 runs the session, coordinates, writes the code and applies fixes.
+
+- **Delegate every repo search and test run to the Haiku 5.5 subagents** to keep the main context small:
+  - `search`: maps the repo (read-only).
+  - `grep`: finds call sites and occurrences in its own context.
+  - `audit`: checks the diff and runs the tests in a throwaway worktree. The worktree branches from the default branch, so put the `git diff` output in the audit prompt.
+- **Consult the Opus advisor only at three moments:** before a plan locks, when the same error shows up twice, and before calling it done (it signs off on the synthesized diff).
+- **Micro-forks** (which file, which tool, retry or stop) need no thinker. Decide them directly, without spawning agents or calling the advisor. When app code here needs routing like this at runtime, use TypeSafe Jev (the `typesafe` skill).

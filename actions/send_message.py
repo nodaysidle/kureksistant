@@ -25,7 +25,7 @@ def _base_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 def _get_os() -> str:
-    real = {"Windows": "windows", "Darwin": "mac", "Linux": "linux"}.get(
+    real = {"Darwin": "mac", "Linux": "linux"}.get(
         platform.system(), "linux"
     )
     try:
@@ -33,7 +33,7 @@ def _get_os() -> str:
             (_base_dir() / "config" / "api_keys.json").read_text(encoding="utf-8")
         )
         val = cfg.get("os_system", "").lower()
-        if val in ("windows", "mac", "linux") and val == real:
+        if val in ("mac", "linux") and val == real:
             return val
     except Exception:
         pass
@@ -75,16 +75,7 @@ def _open_app(app_name: str) -> bool:
     os_name = _get_os()
 
     try:
-        if os_name == "windows":
-            pyautogui.press("win")
-            time.sleep(0.5)
-            _paste_text(app_name)
-            time.sleep(0.6)
-            pyautogui.press("enter")
-            time.sleep(2.5)
-            return True
-
-        elif os_name == "mac":
+        if os_name == "mac":
             result = subprocess.run(
                 ["open", "-a", app_name],
                 capture_output=True, text=True, timeout=10,
@@ -141,20 +132,28 @@ def _search_in_app(query: str) -> None:
     _clear_and_paste(query)
     time.sleep(1.0)
 
+def _typed_reply(receiver: str, app_name: str) -> str:
+    return (f"Typed the message to {receiver} in {app_name} and pressed Enter — "
+            "I can't confirm delivery.")
+
+
 def _desktop_send(app_name: str, receiver: str, message: str) -> str:
     if not _open_app(app_name):
         return f"Could not open {app_name}."
 
-    time.sleep(1.0)
-    _search_in_app(receiver)
-    pyautogui.press("enter")
-    time.sleep(0.8)
+    try:
+        time.sleep(1.0)
+        _search_in_app(receiver)
+        pyautogui.press("enter")
+        time.sleep(0.8)
 
-    _paste_text(message)
-    time.sleep(0.2)
-    pyautogui.press("enter")
-    time.sleep(0.3)
-    return f"Message sent to {receiver} via {app_name}."
+        _paste_text(message)
+        time.sleep(0.2)
+        pyautogui.press("enter")
+        time.sleep(0.3)
+    except Exception as e:
+        return f"Failed while typing the message to {receiver} in {app_name}: {e}"
+    return _typed_reply(receiver, app_name)
 
 def _send_whatsapp(receiver: str, message: str) -> str:
     return _desktop_send("WhatsApp", receiver, message)
@@ -176,26 +175,29 @@ def _send_instagram(receiver: str, message: str) -> str:
     if not _open_browser_url("https://www.instagram.com/direct/new/"):
         return "Could not open Instagram in browser."
 
-    _paste_text(receiver)
-    time.sleep(1.5)
+    try:
+        _paste_text(receiver)
+        time.sleep(1.5)
 
-    pyautogui.press("down")
-    time.sleep(0.3)
-    pyautogui.press("enter")
-    time.sleep(0.4)
+        pyautogui.press("down")
+        time.sleep(0.3)
+        pyautogui.press("enter")
+        time.sleep(0.4)
 
-    for _ in range(4):
-        pyautogui.press("tab")
-        time.sleep(0.15)
-    pyautogui.press("enter")
-    time.sleep(2.0)
+        for _ in range(4):
+            pyautogui.press("tab")
+            time.sleep(0.15)
+        pyautogui.press("enter")
+        time.sleep(2.0)
 
-    _paste_text(message)
-    time.sleep(0.2)
-    pyautogui.press("enter")
-    time.sleep(0.3)
+        _paste_text(message)
+        time.sleep(0.2)
+        pyautogui.press("enter")
+        time.sleep(0.3)
+    except Exception as e:
+        return f"Failed while typing the message to {receiver} in Instagram: {e}"
 
-    return f"Message sent to {receiver} via Instagram."
+    return _typed_reply(receiver, "Instagram")
 
 
 def _send_messenger(receiver: str, message: str) -> str:
@@ -204,20 +206,22 @@ def _send_messenger(receiver: str, message: str) -> str:
     if not _open_browser_url("https://www.messenger.com/"):
         return "Could not open Messenger in browser."
 
+    try:
+        _search_in_app(receiver)
+        time.sleep(0.5)
+        pyautogui.press("down")
+        time.sleep(0.3)
+        pyautogui.press("enter")
+        time.sleep(1.0)
 
-    _search_in_app(receiver)
-    time.sleep(0.5)
-    pyautogui.press("down")
-    time.sleep(0.3)
-    pyautogui.press("enter")
-    time.sleep(1.0)
+        _paste_text(message)
+        time.sleep(0.2)
+        pyautogui.press("enter")
+        time.sleep(0.3)
+    except Exception as e:
+        return f"Failed while typing the message to {receiver} in Messenger: {e}"
 
-    _paste_text(message)
-    time.sleep(0.2)
-    pyautogui.press("enter")
-    time.sleep(0.3)
-
-    return f"Message sent to {receiver} via Messenger."
+    return _typed_reply(receiver, "Messenger")
 
 _PLATFORM_MAP = [
     ({"whatsapp", "wp", "wapp"},              _send_whatsapp),
@@ -266,7 +270,7 @@ def send_message(
     except Exception as e:
         result = f"Could not send message: {e}"
 
-    print(f"[SendMessage] {'✅' if 'sent' in result.lower() else '❌'} {result}")
+    print(f"[SendMessage] {'✅' if result.startswith('Typed') else '❌'} {result}")
     if player:
         player.write_log(f"[msg] {result}")
 

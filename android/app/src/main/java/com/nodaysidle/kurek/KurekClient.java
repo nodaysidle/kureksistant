@@ -16,6 +16,7 @@ public class KurekClient {
     public interface Callback {
         void onToolCalled(String toolDescription);
         void onSentence(String sentence);
+        void onAudio(byte[] audioBytes);
         void onDone(String fullReply);
         void onError(String error);
     }
@@ -58,6 +59,10 @@ public class KurekClient {
     }
 
     public void sendPrompt(String host, int port, String token, String prompt, Callback cb) {
+        sendPrompt(host, port, token, prompt, false, cb);
+    }
+
+    public void sendPrompt(String host, int port, String token, String prompt, boolean streamAudio, Callback cb) {
         new Thread(() -> {
             HttpURLConnection conn = null;
             try {
@@ -75,6 +80,7 @@ public class KurekClient {
                 JSONObject payload = new JSONObject();
                 payload.put("prompt", prompt);
                 payload.put("remote", true);
+                payload.put("stream_audio", streamAudio);
 
                 OutputStream os = conn.getOutputStream();
                 os.write(payload.toString().getBytes(StandardCharsets.UTF_8));
@@ -106,8 +112,18 @@ public class KurekClient {
                     JSONObject event = new JSONObject(jsonStr);
                     String type = event.optString("type");
 
+                    if (event.has("audio")) {
+                        String audioB64 = event.optString("audio");
+                        if (!audioB64.isEmpty()) {
+                            try {
+                                byte[] audioBytes = android.util.Base64.decode(audioB64, android.util.Base64.DEFAULT);
+                                mainHandler.post(() -> cb.onAudio(audioBytes));
+                            } catch (Exception ignored) {}
+                        }
+                    }
+
                     if ("tool".equals(type)) {
-                        String desc = event.optString("description", "⚙️ Executing action...");
+                        String desc = event.optString("description", "executing action");
                         mainHandler.post(() -> cb.onToolCalled(desc));
                     } else if ("sentence".equals(type)) {
                         String sentence = event.optString("sentence", "");
