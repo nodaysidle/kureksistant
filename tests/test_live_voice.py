@@ -46,6 +46,50 @@ def test_authorized_without_xai_key_gets_error(server) -> None:
 def test_session_update_is_binary_pcm_with_sol_voice() -> None:
     s = live_voice.session_update()["session"]
     assert s["voice"] == "sal"
-    assert s["audio"]["input"] == {"format": {"type": "audio/pcm", "rate": 16000}, "transport": "binary"}
+    assert s["audio"]["input"]["format"] == {"type": "audio/pcm", "rate": 16000}
+    assert s["audio"]["input"]["transport"] == "binary"
+    assert "Koper" in s["audio"]["input"]["transcription"]["keyterms"]
     assert s["audio"]["output"]["format"]["rate"] == 24000
     assert "talk-only" in s["instructions"]
+
+
+def test_live_tools_keep_only_read_only_and_narrow_actions() -> None:
+    specs = [
+        {"type": "function", "function": {"name": "desktop_control", "parameters": {}}},
+        {"type": "function", "function": {"name": "vault_knowledge", "description": "v", "parameters": {
+            "type": "object", "properties": {"action": {"type": "string", "enum": ["read", "search", "add_inbox", "list_projects"]}},
+        }}},
+        {"type": "function", "function": {"name": "web_search", "parameters": {"type": "object", "properties": {}}}},
+    ]
+    tools = live_voice.live_tools(specs)
+    assert [t["name"] for t in tools] == ["vault_knowledge", "web_search"]
+    assert tools[0]["type"] == "function" and "function" not in tools[0]
+    assert tools[0]["parameters"]["properties"]["action"]["enum"] == ["list_projects", "read", "search"]
+    assert specs[1]["function"]["parameters"]["properties"]["action"]["enum"][2] == "add_inbox"  # input untouched
+
+
+def test_call_allowed_enforces_allowlist_again() -> None:
+    assert live_voice.call_allowed("web_search", {"query": "x"})
+    assert live_voice.call_allowed("manage_memory", {"action": "recall"})
+    assert not live_voice.call_allowed("manage_memory", {"action": "remember"})
+    assert not live_voice.call_allowed("system_monitor", {"action": "set_threshold"})
+    assert not live_voice.call_allowed("vault_knowledge", {})
+    assert not live_voice.call_allowed("run", {"action": "read"})
+
+
+def test_weather_city_copper_becomes_koper() -> None:
+    seen = {}
+    sent = []
+
+    class _WS:
+        def send(self, m):
+            sent.append(m)
+
+    def run(name, args):
+        seen.update(args)
+        return "ok"
+
+    ev = {"name": "weather_report", "call_id": "c1", "arguments": '{"city": "Copper"}'}
+    live_voice._answer_tool_call(ev, _WS(), _WS(), run)
+    assert seen["city"] == "Koper"
+    assert json.loads(sent[-2])["item"]["call_id"] == "c1"

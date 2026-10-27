@@ -32,6 +32,7 @@ public class LiveVoiceSession {
         void onLive();
         void onUserText(String text);
         void onKurekText(String text);
+        void onTool(String description);
         void onError(String message);
         void onClosed();
     }
@@ -128,6 +129,14 @@ public class LiveVoiceSession {
                 case "response.output_audio_transcript.done": {
                     String s = ev.optString("transcript").trim();
                     if (!s.isEmpty()) main.post(() -> listener.onKurekText(s));
+                    break;
+                }
+                case "kurek.tool": {
+                    // Daemon-side read-only tool call, shown like normal-mode tool lines.
+                    JSONObject args = ev.optJSONObject("arguments");
+                    String action = args != null ? args.optString("action") : "";
+                    String desc = action.isEmpty() ? ev.optString("name") : ev.optString("name") + " " + action;
+                    main.post(() -> listener.onTool(desc));
                     break;
                 }
                 case "error": {

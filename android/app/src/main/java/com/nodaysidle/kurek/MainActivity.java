@@ -567,6 +567,11 @@ public class MainActivity extends AppCompatActivity {
         }
 
         @Override
+        public void onTool(String description) {
+            pendingLiveTools.add(description);
+        }
+
+        @Override
         public void onError(String message) {
             Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
         }
@@ -585,8 +590,16 @@ public class MainActivity extends AppCompatActivity {
         super.onStop();
     }
 
+    // Tool calls arrive before Kurek's spoken answer; attach them to that answer.
+    private final List<String> pendingLiveTools = new ArrayList<>();
+
     private void appendLiveMessage(int type, String text) {
-        messageList.add(new ChatMessage(type, text, getTime()));
+        ChatMessage msg = new ChatMessage(type, text, getTime());
+        if (type == ChatMessage.TYPE_KUREK) {
+            for (String t : pendingLiveTools) msg.addToolCall(t);
+            pendingLiveTools.clear();
+        }
+        messageList.add(msg);
         int pos = messageList.size() - 1;
         chatAdapter.notifyItemInserted(pos);
         recyclerChat.smoothScrollToPosition(pos);

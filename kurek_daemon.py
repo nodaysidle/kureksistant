@@ -1968,7 +1968,12 @@ def run_server(engine: KurekEngine, port: int = 8790):
         print(f"[Kurek Server] 🚀 Listening at http://127.0.0.1:{port}", flush=True)
 
     if live_voice_enabled():
-        start_live_servers(sorted(bound), _live_authorized)
+        start_live_servers(
+            sorted(bound),
+            _live_authorized,
+            engine.openai_tools,
+            lambda name, args: engine._run_tool(name, args, remote=True),
+        )
 
     stop_event = threading.Event()
     if watch_tailscale:

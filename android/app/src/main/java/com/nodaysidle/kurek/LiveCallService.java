@@ -31,6 +31,7 @@ public class LiveCallService extends Service {
         void onStateChanged(State state);
         void onUserText(String text);
         void onKurekText(String text);
+        void onTool(String description);
         void onError(String message);
     }
 
@@ -130,6 +131,11 @@ public class LiveCallService extends Service {
             @Override
             public void onKurekText(String text) {
                 for (Listener l : LISTENERS) l.onKurekText(text);
+            }
+
+            @Override
+            public void onTool(String description) {
+                for (Listener l : LISTENERS) l.onTool(description);
             }
 
             @Override
