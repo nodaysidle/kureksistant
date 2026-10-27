@@ -34,7 +34,10 @@ fi
 REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "FAIL: not a git repo"; exit 2; }
 SHA=$(git -C "$REPO_ROOT" rev-parse "${1:-HEAD}^{commit}") || { echo "FAIL: bad rev"; exit 2; }
 PORT=${VERIFY_PORT:-18791}
-[[ "$PORT" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$PORT" -le 65535 ] || { echo "FAIL: bad VERIFY_PORT"; exit 2; }
+if ! [[ "$PORT" =~ ^[1-9][0-9]{0,4}$ ]] || [ "$PORT" -gt 65535 ]; then
+    echo "FAIL: bad VERIFY_PORT"
+    exit 2
+fi
 [ "$PORT" -eq 8790 ] && { echo "FAIL: refusing live port 8790"; exit 2; }
 if [ -z "${PYTHON:-}" ]; then
   if [ -x "$REPO_ROOT/.venv/bin/python" ]; then PYTHON="$REPO_ROOT/.venv/bin/python"; else PYTHON=python3; fi

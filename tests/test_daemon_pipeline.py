@@ -238,7 +238,9 @@ def test_tool_loop_runs_tool_then_speaks_answer(monkeypatch, tmp_path):
     assert engine.history[-1] == {"role": "assistant", "content": "It is sunny."}
 
 
-def test_tool_loop_stops_after_max_turns_without_tools_on_last(monkeypatch, tmp_path):
+def test_tool_loop_last_turn_keeps_tools_but_forbids_calls(monkeypatch, tmp_path):
+    # Haiku thinking blocks are bound to the tool list, so the last round keeps the
+    # tools and ends the loop with tool_choice="none" instead of dropping them.
     engine = _make_lite_engine(monkeypatch)
     engine.history_file = tmp_path / "hist.json"
     engine.openai_tools = [{"type": "function", "function": {"name": "noop"}}]
@@ -247,7 +249,7 @@ def test_tool_loop_stops_after_max_turns_without_tools_on_last(monkeypatch, tmp_
 
     def fake_stream(**kwargs):
         calls.append(kwargs)
-        if kwargs.get("tools"):
+        if kwargs.get("tools") and kwargs.get("tool_choice") != "none":
             yield _tool_call_event("noop", idx=len(calls))
             return
         yield {"type": "sentence", "sentence": "Done looping.", "full_content": "Done looping."}
@@ -255,8 +257,10 @@ def test_tool_loop_stops_after_max_turns_without_tools_on_last(monkeypatch, tmp_
 
     monkeypatch.setattr(daemon, "stream_deepseek_sentences", fake_stream)
     reply = engine.handle_text_query("loop forever")
-    assert len(calls) == 5
-    assert calls[-1]["tools"] is None
+    assert len(calls) == 15
+    assert calls[-1]["tools"] == engine.openai_tools
+    assert calls[-1]["tool_choice"] == "none"
+    assert all(c["tool_choice"] is None for c in calls[:-1])
     assert reply == "Done looping."
 
 
