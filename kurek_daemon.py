@@ -459,6 +459,17 @@ def classify_confirmation_reply(text: str) -> bool | None:
         return False
     return None
 
+
+def history_message(turn: dict) -> dict:
+    """A stored turn as a chat message. Assistant turns carry the tools they ran, so a later
+    turn can tell whether it really searched instead of guessing from the reply text."""
+    content = turn.get("content", "")
+    if turn.get("role") == "assistant" and "tools" in turn:  # older turns have no record
+        ran = "; ".join(turn["tools"]) or "none"
+        content = f"{content}\n\n(Tool calls in that turn, recorded by the daemon: {ran}.)"
+    return {"role": turn.get("role", "user"), "content": content}
+
+
 class KurekEngine:
     def __init__(self):
         self.state = KurekState.IDLE
@@ -1075,12 +1086,13 @@ class KurekEngine:
         ]
         # Include last 10 conversational turns for continuity
         for turn in self.history[-10:]:
-            messages.append(turn)
+            messages.append(history_message(turn))
         pinned = rules_pinned_block()
         messages.append({"role": "user", "content": f"{effective_user_prompt}\n\n{pinned}" if pinned else effective_user_prompt})
 
         reply_text = ""
         last_tool_output = ""
+        tools_run: list[str] = []
         max_tool_turns = 15
         sentence_count = 0
         stream_error: str | None = None
@@ -1135,6 +1147,7 @@ class KurekEngine:
                             fn_args = {}
 
                         print(f"[Kurek Tool Dispatch] ⚙️ {fn_name}({fn_args})", flush=True)
+                        tools_run.append(f"{fn_name}({json.dumps(fn_args, ensure_ascii=False)[:200]})")
                         try:
                             tool_result = self._run_tool(fn_name, fn_args, remote=remote)
                         except Exception as e:
@@ -1239,6 +1252,7 @@ class KurekEngine:
         reply_text = re.sub(r"</[｜|]{2}DSML[｜|]{2}.*?>", "", reply_text)
         reply_text = re.sub(r"<[｜|].*?[｜|]>", "", reply_text)
         reply_text = re.sub(r"</[｜|].*?[｜|]>", "", reply_text)
+        reply_text = re.sub(r"\(Tool calls in that turn, recorded by the daemon:.*", "", reply_text, flags=re.DOTALL)
         reply_text = reply_text.strip()
         if not reply_text:
             # Successful tool path with no spoken content — not a transport failure.
@@ -1248,7 +1262,7 @@ class KurekEngine:
 
         # Update multi-turn history & persist
         self.history.append({"role": "user", "content": user_prompt})
-        self.history.append({"role": "assistant", "content": reply_text})
+        self.history.append({"role": "assistant", "content": reply_text, "tools": tools_run})
         self._save_history()
 
         # Muse Daily Log & Asynchronous Jev Memory Triage

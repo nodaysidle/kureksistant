@@ -85,3 +85,15 @@ id = "checks-web-office"
 rule = "never-lie"
 prompt = "Who is the current president of Slovenia?"
 must_call = ["web_search"]
+
+[[case]]
+id = "checks-web-version"
+rule = "mandatory-web-search"
+prompt = "What is the latest version of Python?"
+must_call = ["web_search"]
+
+[[case]]
+id = "checks-web-specs"
+rule = "mandatory-web-search"
+prompt = "How much RAM does the Raspberry Pi 5 have?"
+must_call = ["web_search"]
