@@ -11,6 +11,9 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 - **Reply length and language live only in `rules.toml`.** The system prompt now defers to `[USER RULES]` for both, with a short-reply, user's-language fallback when no such rule exists. `tests/test_anti_drift_prompts.py` enforces this and checks that nothing but `core/rules.py` touches the rules file.
 - **rules_eval:** the `english-only` case is replaced by `slovenian-allowed` and `other-language-gets-english`.
 
+### Fixed
+- **Kurek Remote 0.2.3 (Android):** rotating the phone no longer restarts the screen, which wiped the conversation and lost a reply still on its way. The main screen now handles rotation itself (`android:configChanges`).
+
 ### Removed
 - **`core/prompt.txt`:** no code loaded it, and keeping it in step with the real prompt was a source of drift.
 
