@@ -30,7 +30,7 @@ It is built and tested on **Arch Linux with Omarchy / Hyprland**. The old macOS 
 ## ✨ Features (v0.2.1)
 
 ### Omarchy / Hyprland desktop integration
-- **Terminals and shell:** Ghostty and Herdr are preferred, and there's a Fish shell alias. btop/htop open in a terminal.
+- **Terminals and shell:** Foot is the default terminal and Herdr runs inside it, with a Fish shell alias. btop/htop open in a terminal.
 - **Native `hyprctl dispatch` window control:**
   - cycle windows;
   - focus an already-open app (`workspace` + `focuswindow address:`);
@@ -135,8 +135,8 @@ nano .env
 | `XAI_API_KEY` | **Yes** | Speech (xAI Grok TTS, voice Sol). |
 | `GEMINI_API_KEY` | Optional | Screen vision and Gemini-backed tools. |
 | `DEEPGRAM_API_KEY` | Optional | Deepgram Nova-2 STT (voice audio is sent to Deepgram). |
-| `TYPESAFE_API_KEY` | Optional | TypeSafe Jev triage / screen-context fallback. |
-| `OPENROUTER_API_KEY` | Optional | **Primary STT** (your voice audio is sent to OpenRouter Whisper) and Decision-1 auto screen-context (prompt text is sent). |
+| `TYPESAFE_API_KEY` | Optional | TypeSafe Jev memory triage (direct SDK). |
+| `OPENROUTER_API_KEY` | Optional | **Primary STT** (your voice audio is sent to OpenRouter Whisper) and typed decisions (Jev, then Decision-1) for auto screen-context and code intent (prompt text is sent). |
 | `KUREK_STT_PROVIDER` / `OPENROUTER_STT_MODEL` | Optional | Prefer `openrouter` (default) or `deepgram`; OpenRouter STT model. |
 | `KUREK_WHISPER_MODEL` | Optional | Local faster-whisper model (default `base.en`, English-only; `base`/`small` are multilingual). Used with no cloud STT key, and as the fallback when cloud STT fails. |
 | `KUREK_SILENCE_DURATION` / `KUREK_INITIAL_SILENCE_TIMEOUT` / `KUREK_MAX_RECORD_SECONDS` | Optional | Listening window: 2.2 s / 6 s / 30 s. |
@@ -146,7 +146,7 @@ nano .env
 | `KUREK_VAULT_DIR` | Optional | Path to the Obsidian vault used by `vault_knowledge`. |
 | `KUREK_CODEBASE_ROOTS` | Optional | Project roots for the `codebase` tool (`:`-separated). |
 | `KUREK_AUTO_SCREEN` | Optional | `0` disables auto screen-context. |
-| `KUREK_DECISION_TIMEOUT` | Optional | Decision-1 HTTP timeout in seconds. |
+| `KUREK_DECISION_TIMEOUT` | Optional | Decision request timeout in seconds (Jev and Decision-1). |
 | `KUREK_USER_NAME` | Optional | How Kurek addresses you. |
 | `HERMES_PROFILE` / `HERMES_MEMORIES_DIR` | Optional | Hermes memory continuity. |
 | `INPUT_DEVICE` | Optional | Microphone name substring. |
