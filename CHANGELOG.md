@@ -7,6 +7,8 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-10-28
+
 ### Changed
 - **Reply length and language live only in `rules.toml`.** The system prompt now defers to `[USER RULES]` for both, with a short-reply, user's-language fallback when no such rule exists. `tests/test_anti_drift_prompts.py` enforces this and checks that nothing but `core/rules.py` touches the rules file.
 - **rules_eval:** the `english-only` case is replaced by `slovenian-allowed` and `other-language-gets-english`.
