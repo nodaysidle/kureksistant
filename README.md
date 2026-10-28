@@ -9,9 +9,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.1"><img src="https://img.shields.io/badge/Release-v0.2.1-blue.svg?style=flat-square" alt="Release v0.2.1"></a>
+  <a href="https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.2"><img src="https://img.shields.io/badge/Release-v0.2.2-blue.svg?style=flat-square" alt="Release v0.2.2"></a>
   <img src="https://img.shields.io/badge/Desktop-Arch%20%2F%20Omarchy%20%2F%20Hyprland-1793D1?style=flat-square&logo=arch-linux&logoColor=white" alt="Arch / Omarchy / Hyprland">
-  <img src="https://img.shields.io/badge/Remote-Android%20app%20(debug%20APK%20in%20v0.2.1)-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android remote">
+  <img src="https://img.shields.io/badge/Remote-Android%20app%20(APK%20in%20v0.2.2)-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android remote">
   <img src="https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey?style=flat-square" alt="License">
 </p>
 
@@ -23,11 +23,11 @@ Kurek is a headless Python daemon (`kurek_daemon.py`) with no GUI that runs as a
 
 It is built and tested on **Arch Linux with Omarchy / Hyprland**. The old macOS menu-bar client and PyQt6 GUI were removed in v0.2.2.
 
-**Latest release: [v0.2.1, Omarchy Integration & Stability Refactor](https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.1)** (see also [CHANGELOG.md](CHANGELOG.md)).
+**Latest release: [v0.2.2, live voice on the phone](https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.2)** (see also [CHANGELOG.md](CHANGELOG.md)).
 
 ---
 
-## ✨ Features (v0.2.1)
+## ✨ Features (v0.2.2)
 
 ### Omarchy / Hyprland desktop integration
 - **Terminals and shell:** Foot is the default terminal and Herdr runs inside it, with a Fish shell alias. btop/htop open in a terminal.
@@ -46,7 +46,8 @@ It is built and tested on **Arch Linux with Omarchy / Hyprland**. The old macOS 
 - An Android app, **Kurek Remote**, is built from [`android/`](android/). It sends prompts to `POST /remote/prompt` and receives the reply as a Server-Sent Events stream (`sentence` / `tool` / `done`).
 - Off by default. Enable it with `KUREK_REMOTE_BIND=tailscale` and a Bearer token of **32+ characters** (`KUREK_REMOTE_TOKEN`).
 - **Silent on the PC by default:** remote prompts don't speak through the PC's speakers. Opt in per request with `"speak_local": true`, or globally with `KUREK_REMOTE_LOCAL_TTS=1`.
-- A debug-signed APK (Kurek Remote) is attached to the [v0.2.1 release](https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.1). Uninstall any older copy of the app first. You can also build it yourself (see below).
+- **Live voice (opt-in, `KUREK_LIVE_VOICE=1`):** tap Talk live in the app, or the 2x1 home-screen widget, and talk to Kurek in real time. The phone streams your mic to the PC over `ws://<host>:8791/live`, and the PC bridges it to xAI's speech-to-speech model (voice Sol). The xAI key stays on the PC. During a call Kurek can run read-only lookups (system status, weather, web search, repo status, the vault, memory recall). Calls keep running with the screen off, with an ongoing notification and an End button. xAI bills this per minute.
+- The APK (Kurek Remote 0.2.2) is attached to the [v0.2.2 release](https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.2). You can also build it yourself (see below).
 
 ### Conversational yes/no confirmations
 - Risky actions ask for confirmation, shown on the PC via `notify-send`.
@@ -90,15 +91,14 @@ It is built and tested on **Arch Linux with Omarchy / Hyprland**. The old macOS 
 
 ## ⚡ Install (Linux)
 
-### Option: download the v0.2.1 bundle
+### Option: download the v0.2.2 bundle
 
-Download [`kureksistant-v0.2.1-linux-x86_64.tar.gz`](https://github.com/nodaysidle/kureksistant/releases/download/v0.2.1/kureksistant-v0.2.1-linux-x86_64.tar.gz) and [`SHA256SUMS.txt`](https://github.com/nodaysidle/kureksistant/releases/download/v0.2.1/SHA256SUMS.txt), then:
+Download [`kureksistant-v0.2.2-linux-x86_64.tar.gz`](https://github.com/nodaysidle/kureksistant/releases/download/v0.2.2/kureksistant-v0.2.2-linux-x86_64.tar.gz) and [`SHA256SUMS.txt`](https://github.com/nodaysidle/kureksistant/releases/download/v0.2.2/SHA256SUMS.txt), then:
 
 ```bash
-grep ' kureksistant-v0.2.1-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c - && \
-echo '8b3a7a6ec36795d6651a3b38d36b62f5dc1590a5a17abe1a3604ecf8c7a96b33  kureksistant-v0.2.1-linux-x86_64.tar.gz' | sha256sum -c - && \
-tar -xzf kureksistant-v0.2.1-linux-x86_64.tar.gz && \
-cd kureksistant-0.2.1 && \
+grep ' kureksistant-v0.2.2-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c - && \
+tar -xzf kureksistant-v0.2.2-linux-x86_64.tar.gz && \
+cd kureksistant-0.2.2 && \
 ./install_linux.sh
 ```
 
@@ -208,7 +208,7 @@ kurek-trigger toggle   # C trigger over the Unix socket
 
 ## 📱 Android remote (Kurek Remote)
 
-A **debug-signed APK** (Kurek Remote) is attached to the [v0.2.1 release](https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.1). It is signed with a throwaway debug key, so **uninstall any older copy of the app first**. Or build it from [`android/`](android/) (the Android SDK is required; the Gradle wrapper is included):
+The APK (Kurek Remote 0.2.2) is attached to the [v0.2.2 release](https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.2). **If you installed the v0.2.1 APK, uninstall it once first:** 0.2.2 is signed with a different key, and later updates install over 0.2.2. Or build it from [`android/`](android/) (the Android SDK is required; the Gradle wrapper is included):
 
 ```bash
 cd android

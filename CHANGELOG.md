@@ -11,11 +11,16 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 - **Correction to the 0.2.0 entry below:** it lists "~0.8ms median trigger, 24 tools" as measured figures. The 0.2.0/0.2.1 tool count was **25** (25 `actions/*.py` files defined a `TOOL` dict); 0.2.2 ships **27**. The trigger timing is an informational, machine-dependent benchmark of `bin/kurek-trigger` against a mock UDS daemon (`scripts/bench_trigger.py`), not end-to-end latency, so it is no longer quoted as a number. The 0.2.0 entry is left unchanged as a historical record.
 - AGENTS.md: removed the "~0.8ms median" figure and describes the benchmark as above.
 
-## [0.2.2] — Unreleased
+## [0.2.2] - 2026-10-28
 
 ### Added
+- **Live voice on the phone (opt-in, `KUREK_LIVE_VOICE=1`):** `core/live_voice.py` serves `ws://<host>:8791/live` on the same hosts as HTTP and bridges the phone's 16 kHz PCM mic audio to xAI `grok-voice-3.0` (voice Sol), streaming 24 kHz PCM back. The xAI key stays on the PC. The endpoint needs the remote Bearer token, even on loopback, and rejects browser `Origin` requests.
+- **Read-only tools during live calls:** system status, weather, web search, workstation radar, codebase reads, the vault, memory recall and process list. The daemon enforces the same allowlist again before anything runs.
+- **Kurek Remote 0.2.2 (Android):** a redesign in the Omarchy Miasma theme (direction in `android/DESIGN.md`), a Talk live button with live transcripts, a Terminal action that opens herdr in Foot on the PC, and a 2x1 home-screen widget. A foreground service owns the call, so it keeps running with the screen off, with an ongoing notification, a timer and an End action.
+- **Typed decisions, Jev first:** `core/decision_client.py` asks `typesafe/jev-1.14` on OpenRouter Decisions first, then `microsoft/microsoft-decision-1`, then a local heuristic, for screen context, code intent and dev-agent error judgments.
+- **DeepSeek Search API for `web_search`:** DuckDuckGo and Google News RSS are the fallback.
 - **OpenRouter speech-to-text by default:** new `OpenRouterSTT` in `core/stt.py` using `openai/whisper-large-v3-turbo` (override with `OPENROUTER_STT_MODEL`). `KUREK_STT_PROVIDER` defaults to `openrouter`; without an OpenRouter key the daemon falls back to Deepgram Nova-2, then local faster-whisper.
-- **Spoken summaries and fallback replies:** when tools run but the model emits no spoken text, the daemon asks DeepSeek-Flash for a 1–2 sentence spoken summary. Final fallbacks: an error notice, the short tool output itself, or "Done."
+- **Spoken summaries and fallback replies:** when tools run but the model emits no spoken text, the daemon asks the model for a spoken summary of 1 to 4 sentences. Final fallbacks: an error notice, the short tool output itself, or "Done."
 - **Android speak-aloud option:** Kurek Remote has a speaker toggle (persisted setting) and an `AudioQueuePlayer`; the daemon can stream synthesized TTS audio (base64) with each sentence to the phone.
 - **File tool aliases:** `file_controller` accepts shell-style action aliases (`ls`, `mkdir`, `rm`, `mv`, `cp`, `cat`, `touch`, `save`, `search`, …) and shortcut sub-paths such as `desktop/notes.txt`.
 - **Optional Claude Haiku brain:** `KUREK_LLM=haiku` switches reasoning and tool dispatch to Claude Haiku 5.5 (`ANTHROPIC_API_KEY` or `HAIKU_API_KEY`; `KUREK_HAIKU_MODEL`, `KUREK_HAIKU_EFFORT`, `KUREK_HAIKU_THINKING`). DeepSeek-Flash stays the default. `scripts/llm_ab.py` compares the two on the same prompts and tool loop. The startup log, the startup key check and stream errors name the active brain.
@@ -33,6 +38,8 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 - **Weather with real data:** `weather_report` returns current conditions and today's/tomorrow's forecast from wttr.in instead of opening a browser search.
 
 ### Changed
+- **Longer spoken answers:** up to 6 sentences and 150 words for explanations and conversation; facts and action results stay short.
+- **Tool rounds:** up to 15 tool rounds per request (was 5).
 - **Streaming TTS queue:** sentences are synthesized by a worker thread and appended to mpv, so the DeepSeek stream no longer pauses for each xAI TTS round trip. Remote requests with `stream_audio` synthesize each sentence once (previously twice when the PC also spoke).
 - **Wayland-native input:** typing, hotkeys and key presses use `wtype` on Wayland (pyautogui fallback); brightness uses `brightnessctl` only; wallpaper uses Omarchy's `omarchy-theme-bg-set`, then hyprpaper/swaybg; YouTube play/pause uses `playerctl`.
 - **Installer enables the service:** `install_linux.sh` runs `systemctl --user enable --now kurek.service` and respects `XDG_CONFIG_HOME`.
@@ -46,6 +53,9 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 - **Longer listen window:** 2.2 s of silence to auto-submit (was 1.2 s), 30 s maximum recording (was 12 s), 6 s initial-silence timeout (was 4.5 s). Tunable via `KUREK_SILENCE_DURATION`, `KUREK_MAX_RECORD_SECONDS`, `KUREK_INITIAL_SILENCE_TIMEOUT`.
 
 ### Fixed
+- **Haiku brain after tool-heavy prompts:** the final round keeps the tool list and forbids calls with `tool_choice`, so Anthropic no longer rejects the replayed thinking blocks.
+- **Phone stream:** `/remote/prompt` closes the connection after `done` instead of holding it open.
+- **Tests:** a shell that exports the live `.env` no longer changes test results.
 - **Dream cycle:** a failed LLM call no longer writes a placeholder dream that blocked retries for the day, and the nightly run no longer wipes boundaries added during the day.
 - **Speech recognition errors:** network/auth failures no longer sound like "I didn't hear anything"; Kurek says recognition failed and notifies.
 - **mpv chunk cleanup:** queued sentence clips of a long reply are no longer deleted after 30 s before they play.
@@ -62,6 +72,7 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 - **Gated unrestricted shell:** the `run` tool's unrestricted shell mode is OFF unless `KUREK_REMOTE_ALLOW_EXEC=1`; `KUREK_UNRESTRICTED_SHELL` / `KUREK_ALLOW_SHELL` alone no longer enable it. A loud warning is logged when enabled, and the tool description and prompts only mention arbitrary execution when it is on.
 
 ### Removed
+- **Mouse-1 decision provider** and `MOUSE_API_KEY`; Gemini no longer classifies code intent.
 - **Unsupported code:** the legacy PyQt6 GUI (`legacy/`), the macOS menu bar (`menubar/`), the unused Ollama/OpenAI-local LLM stack, Edge/Kokoro/ElevenLabs/Vosk speech engines, `core/wake_word.py`, `core/plugin_loader.py`, `core/audio_devices.py`, `core/installer.py`, the tool-less `actions/background_monitor.py`, `proactive.py`, `screen_processor.py`, and Windows-only branches in `actions/`.
 - **Unused dependencies:** pytest moved to `requirements-dev.txt`; `beautifulsoup4` removed.
 - **tkinter dialog:** `actions/youtube_video.py` no longer opens a tkinter URL dialog (Kurek is headless); it replies asking for the URL instead.
