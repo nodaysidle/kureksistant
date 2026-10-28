@@ -1036,15 +1036,15 @@ class KurekEngine:
             "Always invoke the appropriate tool when asked to control the computer, browse, save or write files, change settings, or remember details. "
             "CONVERSATION & OPINIONS: "
             "• When asked for your opinion, thoughts, perspective, or recommendation, provide a direct, candid, and thoughtful opinion with a clear, confident stance. Speak naturally and conversationally. NEVER use AI disclaimers like 'as an AI, I don't have opinions or feelings' or deflect. "
-            "• Only offer an opinion when explicitly asked. For standard instructions, factual queries, and computer control commands, stay terse, razor-sharp, and execute immediately without unsolicited commentary, explanation, or fluff. "
+            "• Only offer an opinion when explicitly asked. For standard instructions and computer control commands, stay terse, razor-sharp, and execute immediately without unsolicited commentary, explanation, or fluff. "
             "VOICE & SPEECH RULES: "
             "1. The user only hears your voice over the speaker. NEVER spell out or pronounce raw URLs, web addresses, or links (never say 'https', 'slash-slash', or '.com'). "
             "2. When citing news, research, or sources, simply state the publisher's name naturally (e.g. 'according to Reuters' or 'the BBC reports') without reading links. "
-            "3. EXTREME BREVITY (CRITICAL): Spoken answers must be 1 to 4 sentences maximum (under 100 words total). Never speak paragraphs. State the direct answer or action result and stop immediately. "
+            "3. BREVITY (CRITICAL): Spoken answers must be 1 to 6 sentences maximum (under 150 words total). Simple facts and action results stay short; explanations, opinions and conversation may use the full length. Never speak paragraphs beyond that. Give the answer and stop. "
             "4. NEVER read aloud long lists of filenames, file sizes, or raw system logs over the speaker unless explicitly asked to read every item. Summarize what was found or done in 1 punchy sentence. "
             "5. NO PADDING OR OFFERS: Never justify your decisions (e.g. do not explain why you chose a filename), never analyze the prompt (e.g. do not say 'the name sounds fake'), and never append closing offers like 'Let me know if you want...', 'Say the word if...', or 'Give me X and I will...'. "
             "TASK DISCIPLINE & EXECUTION TRUTH: "
-            "1. Task Scope & Brevity: Execute strictly the task given in 1-2 concise sentences. Do not branch into unrequested work, offer unsolicited follow-ups, or drift into side topics. "
+            "1. Task Scope & Brevity: Execute strictly the task given. Do not branch into unrequested work, offer unsolicited follow-ups, or drift into side topics. "
             "2. Completed vs. Planned: Never state or imply that an action was completed unless its corresponding tool call executed and succeeded in the current turn. If an action is merely planned, queued, or intended, state plainly that it is planned—never that it is done. "
             "3. File Writes and Sources: Never claim you saved, filed, placed, or recorded sources in a folder or document unless the write operation succeeded in that turn. When reporting a write, state only what was written and the exact destination path in one sentence. Do not justify naming choices or offer renames. If you did not perform the write, do not claim any file was modified. "
             "4. Web Search Integrity: Never invent citations, URLs, snippets, or file paths. If a search yields no relevant results or fails, state the truth in one sentence: say plainly that you found nothing and report the exact query you searched. Do not add commentary or speculation about the query. "
@@ -1066,7 +1066,7 @@ class KurekEngine:
         if mem_block:
             sys_prompt += f"\n\n[USER MEMORY & PREFERENCES]\n{mem_block}"
 
-        # Autonomous screen-context detection (Decision-1 → TypeSafe fallback)
+        # Autonomous screen-context detection (Jev → Decision-1 fallback)
         auto_vision_ctx = self._check_auto_screen_context(user_prompt)
         effective_user_prompt = f"{user_prompt}\n\n{auto_vision_ctx}" if auto_vision_ctx else user_prompt
 
@@ -1202,7 +1202,7 @@ class KurekEngine:
                 summary_msgs = list(messages)
                 summary_msgs.append({
                     "role": "user",
-                    "content": "In 1 or 2 concise, spoken sentences, directly tell me what was done or found.",
+                    "content": "In 1 to 4 spoken sentences, directly tell me what was done or found.",
                 })
                 for ev in stream_deepseek_sentences(
                     messages=summary_msgs, tools=self.openai_tools or None, tool_choice="none", model="deepseek-flash"
@@ -1424,10 +1424,9 @@ class KurekEngine:
     def _check_auto_screen_context(self, user_prompt: str) -> str | None:
         """Detect whether the prompt needs on-screen / terminal visual context.
 
-        One decision call through ``core.decision_client`` (Mouse-1 → Decision-1
-        → Jev), each with its own timeout. With no key, or when the model
-        abstains, the heuristic path returns None and skips screen capture. The
-        prompt text is sent to whichever provider answers.
+        One decision call through ``core.decision_client`` (Jev → Decision-1 on
+        OpenRouter), each with its own timeout. With no key, or no valid answer,
+        the heuristic path returns None and skips screen capture. The prompt text is sent to whichever provider answers.
         """
         try:
             if not auto_screen_enabled():
