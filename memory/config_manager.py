@@ -69,7 +69,6 @@ def load_api_keys() -> dict:
         "GEMINI_API_KEY",
         "OPENROUTER_API_KEY",
         "TYPESAFE_API_KEY",
-        "MOUSE_API_KEY",
         "KUREK_USER_NAME",
         "USER_DISPLAY_NAME",
         "HERMES_PROFILE",
@@ -117,22 +116,8 @@ def get_typesafe_key() -> str | None:
     keys = load_api_keys()
     return keys.get("TYPESAFE_API_KEY") or keys.get("typesafe_api_key") or os.environ.get("TYPESAFE_API_KEY")
 
-def get_mouse_key() -> str | None:
-    """Mouse API key for the fast decision layer (env or api_keys.json)."""
-    import os
-    keys = load_api_keys()
-    key = (
-        keys.get("MOUSE_API_KEY")
-        or keys.get("mouse_api_key")
-        or os.environ.get("MOUSE_API_KEY")
-    )
-    if key is None:
-        return None
-    key = str(key).strip()
-    return key or None
-
 def get_openrouter_api_key() -> str | None:
-    """OpenRouter key for optional Decision-1 auto screen-context (env or api_keys.json)."""
+    """OpenRouter key for STT and the Jev / Decision-1 decision layer (env or api_keys.json)."""
     import os
     keys = load_api_keys()
     key = (
