@@ -229,7 +229,11 @@ _SECRET_PATTERNS = [
     (re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}"), "[REDACTED_JWT]"),
     (re.compile(r"\bBearer\s+[a-zA-Z0-9_\-\.=]{20,}"), "Bearer [REDACTED_TOKEN]"),
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"), "[REDACTED_PRIVATE_KEY]"),
-    (re.compile(r"(https?://)([^:\s@/]+):([^@\s]+)@"), r"\1[REDACTED_USER]:[REDACTED_PASS]@"),
+    # Credentials in any scheme's URL (https, postgres, redis, amqp, mongodb+srv, ...).
+    (re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)([^:\s@/]+):([^@\s]+)@"), r"\1[REDACTED_USER]:[REDACTED_PASS]@"),
+    # Env-style *_KEY names (OPENAI_KEY, STRIPE_KEY); case-sensitive so code like primary_key stays.
+    (re.compile(r"""\b([A-Z][A-Z0-9_]*_KEY["']?[ \t]*[:=][ \t]*["']?)(?!\[REDACTED)([^\s"'`,;]{8,})"""),
+     r"\1[REDACTED_SECRET]"),
     # Container/package registry auth: docker/podman "auth", "identitytoken", "registrytoken",
     # "password" values (any length, quoted JSON/YAML), and .npmrc _auth/_authToken.
     (re.compile(

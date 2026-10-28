@@ -1497,3 +1497,22 @@ def test_r12_3_run_history_capped(run_workspace: Path, monkeypatch: pytest.Monke
     for _ in range(8):
         _exec(run_workspace, "cat hello.txt")
     assert len(run_mod._RUN_HISTORY) <= 5, len(run_mod._RUN_HISTORY)
+
+
+@pytest.mark.parametrize(
+    ("line", "secret"),
+    [
+        ("postgres://app:hunter2pass@db:5432/x", "hunter2pass"),
+        ("redis://default:s3cr3tPassw0rd@cache:6379", "s3cr3tPassw0rd"),
+        ("mongodb+srv://u:pw-abcdefgh@cluster0.example.net/db", "pw-abcdefgh"),
+        ("OPENAI_KEY: 'abcdefghijklmnop1234'", "abcdefghijklmnop1234"),
+        ("STRIPE_KEY=rk_abcdefghijkl1234", "rk_abcdefghijkl1234"),
+    ],
+)
+def test_redaction_any_scheme_url_and_env_key_names(line: str, secret: str) -> None:
+    assert secret not in _redact_secrets(line)
+
+
+def test_redaction_keeps_lowercase_key_code() -> None:
+    code = "primary_key = 'user_identifier'\nsort_key: created_at_desc"
+    assert _redact_secrets(code) == code
