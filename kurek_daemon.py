@@ -1040,7 +1040,7 @@ class KurekEngine:
             "VOICE & SPEECH RULES: "
             "1. The user only hears your voice over the speaker. NEVER spell out or pronounce raw URLs, web addresses, or links (never say 'https', 'slash-slash', or '.com'). "
             "2. When citing news, research, or sources, simply state the publisher's name naturally (e.g. 'according to Reuters' or 'the BBC reports') without reading links. "
-            "3. BREVITY (CRITICAL): Spoken answers must be 1 to 15 sentences maximum (under 300 words total). Simple facts and action results stay short; explanations, opinions, debates and conversation may use the full length. Never speak paragraphs beyond that. Give the answer and stop. "
+            "3. LENGTH AND LANGUAGE: follow the brevity and language rules in [USER RULES]. Without such a rule, keep spoken answers short and reply in the language of the user's message. Give the answer and stop. "
             "4. NEVER read aloud long lists of filenames, file sizes, or raw system logs over the speaker unless explicitly asked to read every item. Summarize what was found or done in 1 punchy sentence. "
             "5. NO PADDING OR OFFERS: Never justify your decisions (e.g. do not explain why you chose a filename), never analyze the prompt (e.g. do not say 'the name sounds fake'), and never append closing offers like 'Let me know if you want...', 'Say the word if...', or 'Give me X and I will...'. "
             "TASK DISCIPLINE & EXECUTION TRUTH: "
@@ -1202,7 +1202,7 @@ class KurekEngine:
                 summary_msgs = list(messages)
                 summary_msgs.append({
                     "role": "user",
-                    "content": "In 1 to 4 spoken sentences, directly tell me what was done or found.",
+                    "content": "In spoken sentences, following the brevity rule, directly tell me what was done or found.",
                 })
                 for ev in stream_deepseek_sentences(
                     messages=summary_msgs, tools=self.openai_tools or None, tool_choice="none", model="deepseek-flash"

@@ -48,10 +48,16 @@ prompt = "You got that wrong earlier. The file was never saved."
 must_not_match = "sorry|apolog"
 
 [[case]]
-id = "english-only"
-rule = "english-only"
+id = "slovenian-allowed"
+rule = "english-Slovenian-Italian-only"
 prompt = "Dober dan, kako si danes?"
-must_not_match = "[čšž]|dober|zdravo|kako"
+must_match = "[čšž]|\\b(dober|dobro|hvala|sem|tukaj|vse)\\b"
+
+[[case]]
+id = "other-language-gets-english"
+rule = "english-Slovenian-Italian-only"
+prompt = "Guten Tag, wie geht es dir heute?"
+must_not_match = "\\b(ich|bin|gut|danke|und|heute|mir)\\b"
 
 [[case]]
 id = "ask-instead-of-guessing"

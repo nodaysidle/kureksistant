@@ -7,6 +7,13 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Reply length and language live only in `rules.toml`.** The system prompt now defers to `[USER RULES]` for both, with a short-reply, user's-language fallback when no such rule exists. `tests/test_anti_drift_prompts.py` enforces this and checks that nothing but `core/rules.py` touches the rules file.
+- **rules_eval:** the `english-only` case is replaced by `slovenian-allowed` and `other-language-gets-english`.
+
+### Removed
+- **`core/prompt.txt`:** no code loaded it, and keeping it in step with the real prompt was a source of drift.
+
 ### Documentation
 - **Correction to the 0.2.0 entry below:** it lists "~0.8ms median trigger, 24 tools" as measured figures. The 0.2.0/0.2.1 tool count was **25** (25 `actions/*.py` files defined a `TOOL` dict); 0.2.2 ships **27**. The trigger timing is an informational, machine-dependent benchmark of `bin/kurek-trigger` against a mock UDS daemon (`scripts/bench_trigger.py`), not end-to-end latency, so it is no longer quoted as a number. The 0.2.0 entry is left unchanged as a historical record.
 - AGENTS.md: removed the "~0.8ms median" figure and describes the benchmark as above.

@@ -18,6 +18,13 @@ Read this before changing anything that reads or writes memory, rules or the pro
 
 One fact lives in one store. If the same statement exists in two, one of them will go stale.
 
+Reply length and reply language are such facts. They live only in `rules.toml`. The system prompt
+in `kurek_daemon.py` says "follow the brevity and language rules in [USER RULES]" and gives no
+numbers or languages of its own (it falls back to "short, in the user's language" only when there is
+no such rule). `tests/test_anti_drift_prompts.py` fails the build if a length limit or a language
+policy comes back into the prompt, if a second copy of the prompt appears, or if any code other than
+`core/rules.py` touches the rules file, which itself never writes.
+
 ## Rules for changing this code
 
 These apply to people and to agents.
