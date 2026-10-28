@@ -116,10 +116,10 @@ def _detect_intent(description: str, file_path: str, code: str) -> str:
     """
     Language-independent intent detection — NO fixed keyword list.
 
-    A decision model answers first (Mouse-1 → Decision-1 → Jev, ~100 ms) when
-    KUREK_DECISION_INTENT is on. Gemini stays the fallback for when no decision
-    key is configured, the call fails, or the model abstains. If both are
-    unavailable, language-agnostic structural hints decide.
+    A decision model answers first (Jev → Decision-1 on OpenRouter) when
+    KUREK_DECISION_INTENT is on. With no key, a failed call or an invalid
+    answer, language-agnostic structural hints decide; no generative model is
+    asked for this choice.
     """
     desc        = (description or "").strip()
     file_exists = bool(file_path) and Path(file_path).exists()
@@ -129,35 +129,6 @@ def _detect_intent(description: str, file_path: str, code: str) -> str:
         if intent in _VALID_INTENTS:
             print(f"[Code] 🧭 Intent via {engine}: {intent}", flush=True)
             return intent
-
-    if desc:
-        try:
-            ctx = []
-            if file_path:
-                ctx.append(f"a file path is provided (exists on disk: {file_exists})")
-            if code:
-                ctx.append("an inline code snippet is provided")
-            prompt = (
-                "Classify a coding assistant request into exactly ONE intent word.\n"
-                "The request may be written in ANY language.\n\n"
-                f"Request: {desc}\n"
-                + (f"Context: {'; '.join(ctx)}\n" if ctx else "")
-                + "\nIntents:\n"
-                "  write        = create new code from scratch\n"
-                "  edit         = modify an existing file\n"
-                "  explain      = describe what given code/file does\n"
-                "  run          = execute an existing file\n"
-                "  build        = write code, run it, and iterate until it works\n"
-                "  screen_debug = analyze an error currently visible on the user's screen\n"
-                "  optimize     = refactor / clean up / speed up existing code\n\n"
-                "Reply with ONLY the intent word, nothing else."
-            )
-            ans = _get_gemini().generate_content(prompt).text.strip().lower()
-            ans = ans.strip("`'\". \n")
-            if ans in _VALID_INTENTS:
-                return ans
-        except Exception as e:
-            print(f"[Code] Intent classification failed ({e}) — structural fallback")
 
     # Structural fallback — not tied to any language
     if file_exists:

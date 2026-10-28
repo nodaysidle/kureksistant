@@ -27,6 +27,7 @@ def get_base_dir():
 
 
 from memory.config_manager import get_gemini_key
+from core.decision_client import classify_error, intent_routing_enabled
 BASE_DIR         = get_base_dir()
 PROJECTS_DIR     = Path.home() / "Desktop" / "JarvisProjects"
 MAX_FIX_ATTEMPTS = 5
@@ -74,27 +75,52 @@ def _parse_traceback(output: str, project_files: list[str]) -> tuple[str | None,
     return None, None
 
 
+# Tail of the output sent for an ambiguous classification; well under Jev's 64K-token cap.
+_ERROR_STATE_CHARS = 4000
+# Model answers by redacted output tail, so one build attempt costs one call. Fallbacks
+# are never stored, so a provider outage is retried on the next attempt.
+_ERROR_JUDGMENTS: dict[str, str] = {}
+
+
 def _classify_error(output: str) -> str:
 
     low = output.lower()
 
+    # Python's own markers are unambiguous; they never need a model call.
     if any(x in low for x in ("no module named", "modulenotfounderror", "importerror")):
         return "dependency_error"
 
     if "syntaxerror" in low or "invalid syntax" in low:
         return "syntax_error"
 
-    if "cannot import" in low or "importerror" in low:
+    if "cannot import" in low:
         return "import_error"
 
-    if any(x in low for x in (
-        "traceback", "exception", "error:", "nameerror", "typeerror",
+    if "traceback" in low:
+        return "runtime_error"
+
+    if not any(x in low for x in (
+        "exception", "error:", "nameerror", "typeerror",
         "attributeerror", "valueerror", "keyerror", "indexerror",
         "zerodivisionerror", "filenotfounderror", "permissionerror",
     )):
-        return "runtime_error"
+        return "none"
 
-    return "none"
+    # An error word without a traceback may be ordinary program output: let Jev judge.
+    if intent_routing_enabled():
+        from actions.run import _redact_secrets  # lazy: keep dev_agent import light
+        state = _redact_secrets(output)[-_ERROR_STATE_CHARS:]
+        if state in _ERROR_JUDGMENTS:
+            return _ERROR_JUDGMENTS[state]
+        category, engine = classify_error(state)
+        if category is not None:
+            print(f"[DevAgent] 🧭 Error class via {engine}: {category}", flush=True)
+            if len(_ERROR_JUDGMENTS) >= 16:
+                _ERROR_JUDGMENTS.clear()
+            _ERROR_JUDGMENTS[state] = category
+            return category
+
+    return "runtime_error"
 
 
 def _has_error(output: str, run_command: str) -> bool:

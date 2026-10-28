@@ -2,7 +2,8 @@
 actions/web_search.py — Live web search & synthesis for Kurek.
 Auto-discovered by core/action_loader.py.
 
-Uses DuckDuckGo (ddgs) & Google News RSS with Gemini / DeepSeek synthesis.
+Primary backend is the DeepSeek Search API (billed $0.75 per 1000 successful
+requests); DuckDuckGo (ddgs) & Google News RSS are the fallback.
 Automatically resolves locale (Slovenia / CEST) for timing & local inquiries.
 """
 from __future__ import annotations
@@ -16,6 +17,8 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import requests
+
 
 def _get_base_dir() -> Path:
     if getattr(sys, "frozen", False):
@@ -24,6 +27,8 @@ def _get_base_dir() -> Path:
 
 
 BASE_DIR = _get_base_dir()
+DEEPSEEK_SEARCH_URL = "https://api.deepseek.com/v1/tools/search"
+DEEPSEEK_QUERY_MAX_CHARS = 128
 USER_LOCALE_CONTEXT = "User Location: Slovenia (Central European Time / CEST, UTC+2)."
 
 
@@ -50,6 +55,45 @@ def _clean_query(raw_query: str) -> str:
     # Remove question prefixes
     q = re.sub(r"(?i)^(when does|can you tell me|can you find|what is|tell me|find out|search for|google)\s+", "", q)
     return q.strip()
+
+
+def _deepseek_search(query: str, original: str, max_results: int = 6) -> list[dict]:
+    """Queries the DeepSeek Search API. Returns [] without a key or on any failure."""
+    from memory.config_manager import get_deepseek_key
+    key = get_deepseek_key()
+    if not key:
+        return []
+
+    body: dict = {"query": query[:DEEPSEEK_QUERY_MAX_CHARS], "count": max_results}
+    if original != query:
+        body["ori_question"] = original[:DEEPSEEK_QUERY_MAX_CHARS]
+    try:
+        resp = requests.post(
+            DEEPSEEK_SEARCH_URL,
+            headers={"Authorization": f"Bearer {key}"},
+            json=body,
+            timeout=8,
+        )
+        if resp.status_code != 200:
+            print(f"[WebSearch] DeepSeek HTTP {resp.status_code}: {resp.text[:200]}")
+            return []
+        items = resp.json().get("results") or []
+    except Exception as e:
+        print(f"[WebSearch] DeepSeek search error: {e}")
+        return []
+
+    results = []
+    for r in items:
+        text = (r.get("summary") or r.get("snippet") or "").strip()
+        if r.get("date"):
+            text = f"({r['date'][:10]}) {text}"
+        results.append({
+            "title": r.get("title", ""),
+            "snippet": text,
+            "url": r.get("url", ""),
+            "source": r.get("site_name") or "Web",
+        })
+    return results
 
 
 def _ddg_text_search(query: str, max_results: int = 6) -> list[dict]:
@@ -165,10 +209,17 @@ def web_search(parameters: dict, player=None, session_memory=None) -> str:
 
     cleaned = _clean_query(query)
 
-    # 1. Primary: DuckDuckGo text search with cleaned query
+    # 1. Primary: DeepSeek Search API
+    results = _deepseek_search(cleaned, query, max_results=6)
+    print(f"[WebSearch] DeepSeek returned {len(results)} results", flush=True)
+    if results:
+        return _format_results(query, results)
+    print("[WebSearch] Falling back to DuckDuckGo", flush=True)
+
+    # 2. Fallback: DuckDuckGo text search with cleaned query
     results = _ddg_text_search(cleaned, max_results=6)
 
-    # 2. Secondary: If few results, try original query or news search
+    # 3. If few results, try original query or news search
     if len(results) < 2 and cleaned != query:
         extra = _ddg_text_search(query, max_results=4)
         results.extend(extra)
@@ -177,7 +228,7 @@ def web_search(parameters: dict, player=None, session_memory=None) -> str:
         news_results = _ddg_news_search(cleaned, max_results=4)
         results.extend(news_results)
 
-    # 3. Third fallback: Google News RSS
+    # 4. Last fallback: Google News RSS
     if not results:
         results = _fetch_rss_news(query, max_results=6)
 

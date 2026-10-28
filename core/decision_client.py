@@ -1,12 +1,11 @@
-"""Decision layer for Kurek: mouse-1 → Decision-1 → Jev, one request shape.
+"""Decision layer for Kurek: Jev → Decision-1 on OpenRouter Decisions.
 
-Every provider accepts ``POST {model, state, questions}`` and answers with
-``{"answers": {"<question id>": {...}}}``. Mouse answers additionally carry
-``mouse: {calibrated, p_top, abstain}`` when a calibration profile is passed.
-
-Order matters: mouse-1 answers in ~100 ms, Decision-1 has a 1.5 s budget, and
-Jev is the last resort. A provider that is not configured is skipped, and a
-provider that fails or times out never blocks the daemon path.
+Both models sit behind ``POST https://openrouter.ai/api/alpha/decisions`` with
+``{model, state, questions}`` and answer ``{"answers": {"<id>": {...}}}``.
+The model only judges; every answer is validated here and thresholds and
+actions stay in Python. A missing, malformed or out-of-range answer counts as a
+provider failure, so the next model is tried, then the caller's local fallback.
+Neither a missing key nor a failing provider ever blocks the daemon path.
 
 Privacy: the prompt text leaves the machine on every call that is made.
 Disable screen context with ``KUREK_AUTO_SCREEN=0`` and intent routing with
@@ -45,29 +44,40 @@ INTENT_LABELS: dict[str, str] = {
     "optimize": "Refactor, clean up, or speed up existing code",
 }
 
-MOUSE_URL = "https://api.mouse.dev/v1/decisions"
+ERROR_INSTRUCTIONS = (
+    "Which single category describes the failure in `output`, the combined stdout "
+    "and stderr of a program run? Pick `none` when the program ran correctly, even "
+    "if its normal output mentions words like error or exception."
+)
+
+ERROR_LABELS: dict[str, str] = {
+    "dependency_error": "A required third-party package or module is not installed",
+    "syntax_error": "The source code does not parse",
+    "import_error": "A project module or name cannot be imported",
+    "runtime_error": "The program crashed or reported a failure while running",
+    "none": "The program ran without failing",
+}
+
 OPENROUTER_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
-TYPESAFE_URL = "https://api.typesafe.ai/v1/systemone"
 
-MOUSE_MODEL = "mouse-1"
+JEV_MODEL = "typesafe/jev-1.14"
 DECISION_MODEL = "microsoft/microsoft-decision-1"
-TYPESAFE_MODEL = "jev-latest"
 
+# One HTTP timeout per decision request (``KUREK_DECISION_TIMEOUT`` overrides).
 DEFAULT_TIMEOUT_S = 1.5
-# Mouse is served from US-East. Measured from a European desktop: ~85 ms TLS,
-# ~0.55 s warm end-to-end, with occasional multi-second cold starts. 0.45 s
-# always timed out, so the budget is 1.5 s and the call fails open.
-PROVIDER_TIMEOUTS = {"mouse": 1.5, "decision1": 1.5, "jev": 2.0}
 # Ceiling for one decision across all providers, so a bad network cannot stall
 # the daemon (``KUREK_DECISION_BUDGET``).
 DEFAULT_BUDGET_S = 2.5
 SCREEN_CONTEXT_THRESHOLD = 0.75
-DEFAULT_PROVIDER_ORDER = ("mouse", "decision1", "jev")
+# A choice is acted on only at or above this confidence; below it the caller's
+# local fallback decides (a low-confidence "none" must not pass a broken build).
+CHOICE_CONFIDENCE_FLOOR = 0.8
+DEFAULT_PROVIDER_ORDER = ("jev", "decision1")
 
+PROVIDER_MODELS = {"jev": JEV_MODEL, "decision1": DECISION_MODEL}
 PROVIDER_LABELS = {
-    "mouse": "Mouse-1",
-    "decision1": "Microsoft-Decision-1",
     "jev": "TypeSafe Jev",
+    "decision1": "Microsoft-Decision-1",
 }
 
 UrlOpen = Callable[..., Any]
@@ -146,25 +156,17 @@ def intent_budget_s() -> float:
 
 def _provider_spec(name: str) -> dict[str, Any] | None:
     """URL, model, key and timeout for a provider, or None when unconfigured."""
-    if name == "mouse":
-        key = config_manager.get_mouse_key()
-        url, model = MOUSE_URL, MOUSE_MODEL
-    elif name == "decision1":
-        key = config_manager.get_openrouter_api_key()
-        url, model = OPENROUTER_DECISIONS_URL, DECISION_MODEL
-    elif name == "jev":
-        key = config_manager.get_typesafe_key()
-        url, model = TYPESAFE_URL, TYPESAFE_MODEL
-    else:
+    if name not in PROVIDER_MODELS:
         raise ValueError(f"Unknown decision provider: {name}")
+    key = config_manager.get_openrouter_api_key()
     if not key:
         return None
     return {
         "name": name,
         "key": key,
-        "url": url,
-        "model": model,
-        "timeout": decision_timeout_s(PROVIDER_TIMEOUTS[name]),
+        "url": OPENROUTER_DECISIONS_URL,
+        "model": PROVIDER_MODELS[name],
+        "timeout": decision_timeout_s(),
     }
 
 
@@ -257,10 +259,12 @@ def query_decision(
         if payload is None:
             continue
         answers = payload.get("answers")
-        if not isinstance(answers, dict) or not answers:
+        if not isinstance(answers, dict) or not all(
+            _valid_answer(spec_q, answers.get(qid)) for qid, spec_q in questions.items()
+        ):
             print(
-                f"[Kurek Decision Notice] {PROVIDER_LABELS[name]} returned no answers; "
-                "trying next...",
+                f"[Kurek Decision Notice] {PROVIDER_LABELS[name]} returned a missing or "
+                "invalid answer; trying next...",
                 flush=True,
             )
             continue
@@ -276,96 +280,66 @@ def query_decision(
 # ── answer parsing ────────────────────────────────────────────────────────────
 
 
+def _valid_answer(question: dict[str, Any], answer: Any) -> bool:
+    """True when ``answer`` is a well-formed answer to ``question``."""
+    kind = question.get("type")
+    if kind == "noul":
+        return _noul_value(answer) is not None
+    if kind == "choice":
+        return (
+            isinstance(answer, dict)
+            and _choice_value(answer, question["criteria"]) is not None
+            and _unit_interval(answer.get("confidence")) is not None
+        )
+    # shortcut: no call site sends `score` yet; reject until its rubric range is validated here.
+    return False
+
+
+def _choice_value(answer: dict[str, Any], options: dict[str, Any]) -> str | None:
+    choice = answer.get("choice")
+    return choice if isinstance(choice, str) and choice in options else None
+
+
 def _noul_value(answer: Any) -> float | None:
     """Extract a probability from a ``noul`` answer object."""
     if not isinstance(answer, dict):
         return None
-    noul = answer.get("noul")
+    return _unit_interval(answer.get("noul"))
+
+
+def _unit_interval(raw: Any) -> float | None:
+    """``raw`` as a float when it is a finite number in [0, 1], else None."""
     # bool is a subclass of int — reject True/False explicitly.
-    if isinstance(noul, bool) or not isinstance(noul, (int, float)):
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
         return None
-    value = float(noul)
-    if value < 0.0 or value > 1.0:
+    value = float(raw)
+    # NaN fails both comparisons, so test the valid range rather than its complement.
+    if not 0.0 <= value <= 1.0:
         return None
     return value
-
-
-def parse_needs_screen_noul(payload: Any) -> float | None:
-    """Extract ``answers.needs_screen.noul`` when it is a number in ``[0, 1]``."""
-    if not isinstance(payload, dict):
-        return None
-    answers = payload.get("answers")
-    if not isinstance(answers, dict):
-        return None
-    return _noul_value(answers.get("needs_screen"))
 
 
 def noul_answer(decision: Decision | None, key: str = "needs_screen") -> float | None:
-    """Probability for a noul question, or None when missing or abstained."""
+    """Probability for a noul question, or None when missing or invalid."""
     if decision is None:
         return None
-    answer = decision.answers.get(key)
-    value = _noul_value(answer)
-    if value is None:
-        return None
-    if _abstained(answer):
-        return None
-    return value
+    return _noul_value(decision.answers.get(key))
 
 
 def choice_answer(decision: Decision | None, key: str, options: dict[str, Any]) -> str | None:
-    """Picked option for a choice question, or None when missing/abstained/unknown."""
+    """Picked option for a choice question, or None when missing, unknown or unsure."""
     if decision is None:
         return None
     answer = decision.answers.get(key)
-    if not isinstance(answer, dict) or _abstained(answer):
-        return None
-    choice = answer.get("choice")
-    if not isinstance(choice, str) or choice not in options:
-        return None
-    return choice
-
-
-def _abstained(answer: Any) -> bool:
     if not isinstance(answer, dict):
-        return False
-    mouse = answer.get("mouse")
-    return bool(isinstance(mouse, dict) and mouse.get("abstain") is True)
+        return None
+    confidence = _unit_interval(answer.get("confidence"))
+    if confidence is None or confidence < CHOICE_CONFIDENCE_FLOOR:
+        return None
+    return _choice_value(answer, options)
 
 
 # ── call sites ────────────────────────────────────────────────────────────────
-
-
-def query_openrouter_needs_screen(
-    prompt: str,
-    api_key: str,
-    *,
-    timeout: float | None = None,
-    urlopen: UrlOpen | None = None,
-) -> float | None:
-    """Call OpenRouter Decision-1 for ``needs_screen``; return P in [0, 1] or None.
-
-    Kept as the explicit Decision-1 entry point (tests and callers that already
-    hold a key). Prefer :func:`query_needs_screen`, which falls back across
-    providers.
-    """
-    if not api_key:
-        return None
-    spec = {
-        "name": "decision1",
-        "key": api_key,
-        "url": OPENROUTER_DECISIONS_URL,
-        "model": DECISION_MODEL,
-        "timeout": DEFAULT_TIMEOUT_S,
-    }
-    payload = _post(
-        spec,
-        {"prompt": prompt},
-        {"needs_screen": {"type": "noul", "instructions": NEEDS_SCREEN_INSTRUCTIONS}},
-        timeout=timeout,
-        opener=urlopen,
-    )
-    return parse_needs_screen_noul(payload)
 
 
 def query_needs_screen(
@@ -424,3 +398,35 @@ def classify_intent(
     if intent is None:
         return None, "Heuristic"
     return intent, decision.engine
+
+
+def classify_error(
+    output: str,
+    *,
+    timeout: float | None = None,
+    budget: float | None = None,
+    opener: UrlOpen | None = None,
+    order: tuple[str, ...] = DEFAULT_PROVIDER_ORDER,
+) -> tuple[str | None, str]:
+    """Pick an error category for program output; (None, "Heuristic") when unsure.
+
+    The caller must redact secrets and cap ``output`` before calling.
+    """
+    decision = query_decision(
+        {"output": output},
+        {
+            "error": {
+                "type": "choice",
+                "instructions": ERROR_INSTRUCTIONS,
+                "criteria": ERROR_LABELS,
+            }
+        },
+        timeout=timeout,
+        budget=budget if budget is not None else intent_budget_s(),
+        opener=opener,
+        order=order,
+    )
+    category = choice_answer(decision, "error", ERROR_LABELS)
+    if category is None:
+        return None, "Heuristic"
+    return category, decision.engine

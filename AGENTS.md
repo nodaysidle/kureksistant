@@ -1,6 +1,6 @@
 # AGENTS.md — Developer & AI Agent Guide for Kurek (Kureksistant)
 
-> **Kurek** is a headless personal AI assistant for **Arch Linux / Omarchy Quattro (Hyprland)** — a headless daemon with no GUI on purpose (~450MB peak RAM with faster-whisper loaded, observed). Features Middle Click mouse summon (C trigger; `scripts/bench_trigger.py` is an informational, machine-dependent mock-daemon benchmark, not end-to-end latency), native desktop launcher, DeepSeek-Flash reasoning, xAI Grok speech (**Sol** voice), Hermes bidirectional memory continuity, and 27 tool modules in `actions/`. Latest release: v0.2.1 (v0.2.2 unreleased).
+> **Kurek** is a headless personal AI assistant for **Arch Linux / Omarchy Quattro (Hyprland)** — a headless daemon with no GUI on purpose (~450MB peak RAM with faster-whisper loaded, observed). Features Middle Click mouse summon (C trigger; `scripts/bench_trigger.py` is an informational, machine-dependent mock-daemon benchmark, not end-to-end latency), native desktop launcher, DeepSeek-Flash reasoning, xAI Grok speech (**Sol** voice), Hermes bidirectional memory continuity, and 27 tool modules in `actions/`. Latest release: v0.2.2.
 
 ---
 
@@ -70,7 +70,7 @@
 | **Knowledge Vault** | [`actions/vault_knowledge.py`](actions/vault_knowledge.py) | `vault_knowledge(action='list_projects'\|'read'\|'search'\|'add_inbox')`. Accesses nodaysidle-knowledge Obsidian vault notes, PRDs, roadmaps, and social media plans. |
 | **Codebase Tool** | [`actions/codebase.py`](actions/codebase.py) | `codebase(action='search'\|'tree'\|'read'\|'find'\|'outline'\|'index'\|'status')`. Ground-truth repo-aware code inspection across allowed project roots. |
 | **Run Tool** | [`actions/run.py`](actions/run.py) | `run(action='exec'\|'read'\|'list'\|'cancel')`. Sandboxed, auditable runner for read-only inspection and build/test commands. |
-| **Decision Client** | [`core/decision_client.py`](core/decision_client.py) | Optional OpenRouter Decision-1 `needs_screen` gate for auto screen-context; TypeSafe Jev remains the fallback. |
+| **Decision Client** | [`core/decision_client.py`](core/decision_client.py) | Typed decisions (`needs_screen`, coding intent, ambiguous dev-agent errors) on OpenRouter Decisions: `typesafe/jev-1.14` first, `microsoft/microsoft-decision-1` fallback, then the local heuristic. Answers are validated in Python. |
 | **Android Remote APK** | [`android/`](android/) | Native Android client with voice dictation, live SSE streaming tokens, and Bearer token auth (`/remote/prompt`) over Tailscale (opt-in `KUREK_REMOTE_BIND`). |
 
 ---
@@ -84,9 +84,9 @@ KUREK_TIMING=1            # Optional: print per-query ms timing marks to the dae
 DEEPSEEK_API_KEY=sk-...   # Direct platform key for api.deepseek.com
 XAI_API_KEY=xai-...        # Direct platform key for api.x.ai (Grok TTS)
 DEEPGRAM_API_KEY=...      # Deepgram Nova-2 STT (used when no OpenRouter key; voice audio sent to Deepgram)
-OPENROUTER_API_KEY=       # Optional: primary STT (voice audio sent) + Decision-1 auto screen-context (prompt text sent)
+OPENROUTER_API_KEY=       # Optional: primary STT (voice audio sent) + Jev/Decision-1 typed decisions (prompt text sent)
 GEMINI_API_KEY=           # Gemini-backed tools and screen vision
-TYPESAFE_API_KEY=         # Optional: Jev triage + Decision-1 fallback for needs_screen
+TYPESAFE_API_KEY=         # Optional: Jev memory triage (direct SDK)
 KUREK_AUTO_SCREEN=1       # Set 0 to disable auto screen-context detection
 # KUREK_DECISION_TIMEOUT=1.5
 KUREK_REMOTE_TOKEN=       # openssl rand -hex 32 — required for any non-loopback HTTP bind
@@ -96,7 +96,7 @@ KUREK_REMOTE_ALLOW_EXEC=  # set 1 to allow remote prompts to run exec/shell tool
 ```
 
 > [!IMPORTANT]
-> DeepSeek chat completions must route straight to `https://api.deepseek.com/chat/completions` (never via OpenRouter). Optional `OPENROUTER_API_KEY` is used for speech-to-text (your voice audio is sent to OpenRouter; local faster-whisper is the fallback) and for Decision-1 auto screen-context detection (each prompt's text is sent unless `KUREK_AUTO_SCREEN=0`). The model name `deepseek-flash` is DeepSeek's unversioned alias, served by DeepSeek-V4.1-Flash-1017 since 2026-10-17. See `.env.example` for every setting.
+> DeepSeek chat completions must route straight to `https://api.deepseek.com/chat/completions` (never via OpenRouter). Optional `OPENROUTER_API_KEY` is used for speech-to-text (your voice audio is sent to OpenRouter; local faster-whisper is the fallback) and for typed decisions via OpenRouter Decisions, Jev first then Decision-1 (each prompt's text is sent for screen context unless `KUREK_AUTO_SCREEN=0`). The model name `deepseek-flash` is DeepSeek's unversioned alias, served by DeepSeek-V4.1-Flash-1017 since 2026-10-17. See `.env.example` for every setting.
 
 ---
 
@@ -117,7 +117,7 @@ By default only Listening and Thinking show a toast (`KUREK_STATE_NOTIFY=minimal
 
 ## 5. Memory System & Hermes Continuity
 
-Kurek uses the **Muse Memory** three-tier markdown memory plane, triaged by TypeSafe Jev. Auto screen-context detection (`KurekEngine._check_auto_screen_context`) tries an optional fast decision model via OpenRouter Decision-1 first (`core/decision_client.py`), then TypeSafe Jev; with neither key—or with `KUREK_AUTO_SCREEN=0`—no screen context is injected.
+Kurek uses the **Muse Memory** three-tier markdown memory plane, triaged by TypeSafe Jev. Auto screen-context detection (`KurekEngine._check_auto_screen_context`) asks `typesafe/jev-1.14` on OpenRouter Decisions first (`core/decision_client.py`), then `microsoft/microsoft-decision-1`; with no `OPENROUTER_API_KEY`—or with `KUREK_AUTO_SCREEN=0`—no screen context is injected.
 
 1. **Daily logs:** `~/memory/YYYY-MM-DD.md`, the day's captured context.
 2. **Reference facts:** `~/MEMORY.md`, hand-written identity, environment and projects. Kurek never appends to it.
@@ -146,7 +146,7 @@ The daemon auto-discovers all tools in the [`actions/`](actions/) directory:
 - **`desktop_control`**: Window management (minimize, maximize, hide, tile).
 - **`computer_control`**: Simulated keystrokes, mouse clicks, hotkeys, screenshots.
 - **`reminder`**: Schedules system alarms and notifications.
-- **`web_search`**: DuckDuckGo web search and real-time news retrieval.
+- **`web_search`**: DeepSeek Search API ($0.75 per 1000 successful searches) with DuckDuckGo / Google News RSS fallback.
 - **`manage_memory`**: Stores and retrieves personal knowledge, synced with Hermes.
 - **`vault_knowledge`**: Reads and searches the `nodaysidle-knowledge` Obsidian vault (projects, PRDs, social media plans, inbox).
 - **`codebase`**: Repo-aware search, tree inspection, line-range read, symbol outlines, index snapshots, and status.

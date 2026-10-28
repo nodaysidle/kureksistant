@@ -1,18 +1,12 @@
-"""Offline tests for OpenRouter Decision-1 auto screen-context gating."""
+"""Offline tests for auto screen-context gating (Jev → Decision-1 on OpenRouter)."""
 from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from urllib.error import URLError
 
 import pytest
 
 import core.decision_client as decision_client
-from core.decision_client import (
-    NEEDS_SCREEN_INSTRUCTIONS,
-    parse_needs_screen_noul,
-    query_openrouter_needs_screen,
-)
 
 # Deliberately not an sk-/xai-/AIza-shaped token — packaging deny-list scans tests.
 SECRET_KEY = "or-test-secret-DO-NOT-LEAK-9f82d28"
@@ -37,84 +31,6 @@ def _noul_payload(noul: float | str | None, *, wrap: bool = True) -> dict:
     if not wrap:
         return {"answers": {"needs_screen": noul}}
     return {"answers": {"needs_screen": {"noul": noul}}}
-
-
-def test_parse_needs_screen_noul_valid() -> None:
-    assert parse_needs_screen_noul(_noul_payload(0.9)) == pytest.approx(0.9)
-    assert parse_needs_screen_noul(_noul_payload(0.0)) == pytest.approx(0.0)
-    assert parse_needs_screen_noul(_noul_payload(1)) == pytest.approx(1.0)
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        None,
-        {},
-        {"answers": {}},
-        {"answers": {"needs_screen": {}}},
-        {"answers": {"needs_screen": {"noul": "high"}}},
-        {"answers": {"needs_screen": {"noul": True}}},
-        {"answers": {"needs_screen": {"noul": -0.1}}},
-        {"answers": {"needs_screen": {"noul": 1.01}}},
-        {"answers": {"needs_screen": "nope"}},
-    ],
-)
-def test_parse_needs_screen_noul_invalid(payload) -> None:
-    assert parse_needs_screen_noul(payload) is None
-
-
-def test_query_openrouter_success(monkeypatch) -> None:
-    calls: list[object] = []
-
-    def fake_urlopen(req, timeout=None):
-        calls.append((req, timeout))
-        body = json.loads(req.data.decode("utf-8"))
-        assert body["model"] == "microsoft/microsoft-decision-1"
-        instr = body["questions"]["needs_screen"]["instructions"]
-        assert instr == NEEDS_SCREEN_INSTRUCTIONS
-        assert req.get_header("Authorization") == f"Bearer {SECRET_KEY}"
-        return _FakeHTTPResponse(_noul_payload(0.9))
-
-    result = query_openrouter_needs_screen(
-        "what error is on my screen?",
-        SECRET_KEY,
-        timeout=1.5,
-        urlopen=fake_urlopen,
-    )
-    assert result == pytest.approx(0.9)
-    assert len(calls) == 1
-    assert calls[0][1] == 1.5
-
-
-def test_query_openrouter_malformed_returns_none() -> None:
-    def fake_urlopen(req, timeout=None):
-        return _FakeHTTPResponse({"answers": {"needs_screen": {"noul": "nope"}}})
-
-    assert (
-        query_openrouter_needs_screen("hi", SECRET_KEY, urlopen=fake_urlopen) is None
-    )
-
-
-def test_query_openrouter_timeout(capsys) -> None:
-    def boom(_req, timeout=None):
-        raise TimeoutError("timed out")
-
-    assert query_openrouter_needs_screen("hi", SECRET_KEY, urlopen=boom) is None
-    out = capsys.readouterr().out
-    assert "TimeoutError" in out
-    assert SECRET_KEY not in out
-    assert "timed out" in out
-
-
-def test_query_openrouter_exception_redacts_key(capsys) -> None:
-    def boom(_req, timeout=None):
-        raise URLError(f"auth failed for {SECRET_KEY}")
-
-    assert query_openrouter_needs_screen("hi", SECRET_KEY, urlopen=boom) is None
-    out = capsys.readouterr().out
-    assert SECRET_KEY not in out
-    assert "[REDACTED]" in out
-    assert "URLError" in out
 
 
 def test_auto_screen_opt_out(monkeypatch) -> None:
@@ -264,26 +180,40 @@ def test_check_auto_screen_p02_does_not_trigger(monkeypatch) -> None:
     assert captured == []
 
 
-def test_jev_answer_still_triggers_capture(monkeypatch, capsys) -> None:
-    """Provider fallback lives in core.decision_client; the daemon only gates."""
+@pytest.mark.parametrize(
+    ("noul", "expect_capture"),
+    [(decision_client.SCREEN_CONTEXT_THRESHOLD + 0.1, True),
+     (decision_client.SCREEN_CONTEXT_THRESHOLD - 0.1, False)],
+)
+def test_jev_noul_threshold_gates_capture(monkeypatch, capsys, noul, expect_capture) -> None:
+    """Real decision_client over mocked HTTP: Python applies the threshold."""
+    import urllib.request
+
     import kurek_daemon as daemon
+    from memory import config_manager
 
     engine = _make_lite_engine(monkeypatch)
     monkeypatch.setattr(daemon, "auto_screen_enabled", lambda: True)
     monkeypatch.setattr(daemon, "load_api_keys", lambda: {})
-    monkeypatch.setattr(
-        daemon,
-        "query_needs_screen",
-        lambda *_a, **_k: (0.88, "TypeSafe Jev"),
-    )
+    monkeypatch.setattr(config_manager, "get_openrouter_api_key", lambda: SECRET_KEY)
+    monkeypatch.delenv("KUREK_DECISION_BUDGET", raising=False)
+    models = []
+
+    def fake_urlopen(req, timeout=None):
+        models.append(json.loads(req.data.decode())["model"])
+        return _FakeHTTPResponse(_noul_payload(noul))
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     captured: list = []
     _stub_screen_capture(monkeypatch, captured)
 
     result = engine._check_auto_screen_context("fix this compiler error")
-    assert result is not None
-    assert captured == ["capture"]
+    assert models == [decision_client.JEV_MODEL]
+    assert (result is not None) is expect_capture
+    assert captured == (["capture"] if expect_capture else [])
     out = capsys.readouterr().out
-    assert "TypeSafe Jev" in out
+    if expect_capture:
+        assert "TypeSafe Jev" in out
     assert SECRET_KEY not in out
 
 
@@ -299,15 +229,12 @@ def test_no_keys_skips_network(monkeypatch) -> None:
     # decision_client reads provider keys from config_manager, not the daemon
     from memory import config_manager
 
-    for getter in ("get_mouse_key", "get_openrouter_api_key", "get_typesafe_key"):
-        monkeypatch.setattr(config_manager, getter, lambda: None)
+    monkeypatch.setattr(config_manager, "get_openrouter_api_key", lambda: None)
 
     def network_forbidden(*_a, **_k):
         raise AssertionError("urlopen must not be called when no keys are set")
 
     monkeypatch.setattr(urllib.request, "urlopen", network_forbidden)
-    # Also ensure the helper itself never issues a request without a key.
-    assert query_openrouter_needs_screen("hi", "", urlopen=network_forbidden) is None
     assert engine._check_auto_screen_context("what's on my screen?") is None
 
 
@@ -326,6 +253,12 @@ def test_opt_out_skips_decision_and_capture(monkeypatch) -> None:
     monkeypatch.setattr(daemon, "get_openrouter_api_key", lambda: SECRET_KEY)
     monkeypatch.setattr(daemon, "query_needs_screen", mark_or)
     monkeypatch.setattr(daemon, "load_api_keys", lambda: {})
+    import urllib.request
+
+    def network_forbidden(*_a, **_k):  # pragma: no cover - must not run
+        raise AssertionError("KUREK_AUTO_SCREEN=0 must not touch the network")
+
+    monkeypatch.setattr(urllib.request, "urlopen", network_forbidden)
     captured: list = []
     _stub_screen_capture(monkeypatch, captured)
 
