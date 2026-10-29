@@ -235,7 +235,7 @@ def test_tool_loop_runs_tool_then_speaks_answer(monkeypatch, tmp_path):
     assert second[-1] == {"role": "tool", "tool_call_id": "call_0", "content": "Sunny, 20C"}
     assert "It is sunny." in engine.tts.spoken
     assert engine.state == daemon.KurekState.IDLE
-    assert engine.history[-1] == {"role": "assistant", "content": "It is sunny."}
+    assert engine.history[-1] == {"role": "assistant", "content": "It is sunny.", "tools": ['weather_report({"city": "Ljubljana"})']}
 
 
 def test_tool_loop_last_turn_keeps_tools_but_forbids_calls(monkeypatch, tmp_path):

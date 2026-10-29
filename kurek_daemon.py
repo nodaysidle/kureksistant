@@ -444,6 +444,13 @@ _CONFIRM_NEGATIVE = frozenset({
 })
 
 
+def is_fresh_start(text: str) -> bool:
+    """True when the whole utterance asks to drop the recent chat: "fresh start" or
+    "new conversation", optionally after a short lead-in such as "Kurek,"."""
+    words = re.sub(r"[^a-z0-9\s]", "", (text or "").lower()).split()
+    return len(words) <= 3 and " ".join(words[-2:]) in ("fresh start", "new conversation")
+
+
 def classify_confirmation_reply(text: str) -> bool | None:
     """True/False when the WHOLE reply is a yes/no word or phrase, else None.
 
@@ -458,6 +465,17 @@ def classify_confirmation_reply(text: str) -> bool | None:
     if norm in _CONFIRM_NEGATIVE:
         return False
     return None
+
+
+def history_message(turn: dict) -> dict:
+    """A stored turn as a chat message. Assistant turns carry the tools they ran, so a later
+    turn can tell whether it really searched instead of guessing from the reply text."""
+    content = turn.get("content", "")
+    if turn.get("role") == "assistant" and "tools" in turn:  # older turns have no record
+        ran = "; ".join(turn["tools"]) or "none"
+        content = f"{content}\n\n(Tool calls in that turn, recorded by the daemon: {ran}.)"
+    return {"role": turn.get("role", "user"), "content": content}
+
 
 class KurekEngine:
     def __init__(self):
@@ -642,6 +660,27 @@ class KurekEngine:
         except Exception as e:
             print(f"[Kurek Memory] Error reading history: {e}")
         return []
+
+    def _reply_direct(self, reply, callback, mute_speaker, stream_audio):
+        """Answer without the LLM: send the reply to the caller and speak it."""
+        if callback:
+            try:
+                audio_b64 = None
+                if stream_audio:
+                    audio_bytes = self.synthesize_speech_bytes(reply)
+                    if audio_bytes:
+                        audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+                ev_payload = {"type": "sentence", "sentence": reply}
+                if audio_b64:
+                    ev_payload["audio"] = audio_b64
+                callback(ev_payload)
+                callback({"type": "done", "reply": reply})
+            except Exception:
+                pass
+        if not mute_speaker and not self._cancel_requested:
+            self.set_state(KurekState.SPEAKING)
+            self.tts.speak(reply)
+        return reply
 
     def _save_history(self):
         try:
@@ -926,24 +965,16 @@ class KurekEngine:
                 # resolve() runs the action on a worker thread; failures are
                 # reported through the confirm log callback, so don't claim done.
                 reply = "Confirmed, doing it now." if verdict else "Action cancelled."
-                if callback:
-                    try:
-                        audio_b64 = None
-                        if stream_audio:
-                            audio_bytes = self.synthesize_speech_bytes(reply)
-                            if audio_bytes:
-                                audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
-                        ev_payload = {"type": "sentence", "sentence": reply}
-                        if audio_b64:
-                            ev_payload["audio"] = audio_b64
-                        callback(ev_payload)
-                        callback({"type": "done", "reply": reply})
-                    except Exception:
-                        pass
-                if not mute_speaker and not self._cancel_requested:
-                    self.set_state(KurekState.SPEAKING)
-                    self.tts.speak(reply)
-                return reply
+                return self._reply_direct(reply, callback, mute_speaker, stream_audio)
+
+        # Rules, learned memory and daily logs stay; only the rolling chat goes.
+        if is_fresh_start(user_prompt):
+            with self._history_lock:
+                self.history = []
+            self._save_history()
+            print("[Kurek Memory] Fresh start: conversation history cleared.", flush=True)
+            reply = "Fresh start. Rules and memory are kept."
+            return self._reply_direct(reply, callback, mute_speaker, stream_audio)
 
         now_str = datetime.now().strftime("%Y-%m-%d %A, %I:%M %p")
 
@@ -1075,12 +1106,13 @@ class KurekEngine:
         ]
         # Include last 10 conversational turns for continuity
         for turn in self.history[-10:]:
-            messages.append(turn)
+            messages.append(history_message(turn))
         pinned = rules_pinned_block()
         messages.append({"role": "user", "content": f"{effective_user_prompt}\n\n{pinned}" if pinned else effective_user_prompt})
 
         reply_text = ""
         last_tool_output = ""
+        tools_run: list[str] = []
         max_tool_turns = 15
         sentence_count = 0
         stream_error: str | None = None
@@ -1135,6 +1167,7 @@ class KurekEngine:
                             fn_args = {}
 
                         print(f"[Kurek Tool Dispatch] ⚙️ {fn_name}({fn_args})", flush=True)
+                        tools_run.append(f"{fn_name}({json.dumps(fn_args, ensure_ascii=False)[:200]})")
                         try:
                             tool_result = self._run_tool(fn_name, fn_args, remote=remote)
                         except Exception as e:
@@ -1239,6 +1272,7 @@ class KurekEngine:
         reply_text = re.sub(r"</[｜|]{2}DSML[｜|]{2}.*?>", "", reply_text)
         reply_text = re.sub(r"<[｜|].*?[｜|]>", "", reply_text)
         reply_text = re.sub(r"</[｜|].*?[｜|]>", "", reply_text)
+        reply_text = re.sub(r"\(Tool calls in that turn, recorded by the daemon:.*", "", reply_text, flags=re.DOTALL)
         reply_text = reply_text.strip()
         if not reply_text:
             # Successful tool path with no spoken content — not a transport failure.
@@ -1248,7 +1282,7 @@ class KurekEngine:
 
         # Update multi-turn history & persist
         self.history.append({"role": "user", "content": user_prompt})
-        self.history.append({"role": "assistant", "content": reply_text})
+        self.history.append({"role": "assistant", "content": reply_text, "tools": tools_run})
         self._save_history()
 
         # Muse Daily Log & Asynchronous Jev Memory Triage

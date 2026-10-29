@@ -147,7 +147,7 @@ def _launch_macos(app_name: str) -> bool:
 
 
 _LINUX_TERMINAL_FALLBACKS = [
-    "ghostty", "herdr", "alacritty", "kitty", "foot", "wezterm",
+    "velocitty", "ghostty", "herdr", "alacritty", "kitty", "foot", "wezterm",
     "x-terminal-emulator", "gnome-terminal", "konsole", "xfce4-terminal", "xterm",
 ]
 
