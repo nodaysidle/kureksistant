@@ -325,8 +325,8 @@ def open_task_manager():
     if _OS == "Darwin":
         subprocess.Popen(["open", "-a", "Activity Monitor"])
     else:
-        # Check ghostty/herdr terminal monitors first
-        for term in ["ghostty", "herdr", "alacritty", "kitty", "foot"]:
+        # Velocitty is the user's terminal; the rest are fallbacks
+        for term in ["velocitty", "ghostty", "herdr", "alacritty", "kitty", "foot"]:
             if shutil.which(term):
                 for mon in ["btop", "htop"]:
                     if shutil.which(mon):

@@ -30,6 +30,6 @@
 ## Critical Safety & Runtime Constraints
 - **Live Memory DB Isolation**: Never open or mutate `memory/kurek_memory.db` during test runs or ad-hoc test scripts. Tests must use isolated temp SQLite databases.
 - **Concurrency & Loader Lock**: Always export `OPENBLAS_NUM_THREADS=1` before importing `kurek_daemon` in test environments to prevent OpenBLAS / PortAudio dlopen deadlocks.
-- **Desktop Interop**: Hyprland window controls use `hyprctl dispatch`. The terminal is Foot (Ghostty was retired on 2026-10-23); Herdr runs inside Foot.
+- **Desktop Interop**: Hyprland window controls use `hyprctl dispatch`. The terminal is Velocitty since 2026-10-29 (Foot before it, Ghostty retired 2026-10-23); Herdr runs inside Velocitty.
 - **Display & Headless Tests**: PyAutoGUI and mouse actions require a running X/Wayland display or `xvfb-run`.
 - **Port Safety**: Default live daemon port is `8790`. Verification and mock servers must use non-live throwaway ports (e.g. `18791`).

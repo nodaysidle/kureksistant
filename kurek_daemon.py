@@ -444,6 +444,13 @@ _CONFIRM_NEGATIVE = frozenset({
 })
 
 
+def is_fresh_start(text: str) -> bool:
+    """True when the whole utterance asks to drop the recent chat: "fresh start" or
+    "new conversation", optionally after a short lead-in such as "Kurek,"."""
+    words = re.sub(r"[^a-z0-9\s]", "", (text or "").lower()).split()
+    return len(words) <= 3 and " ".join(words[-2:]) in ("fresh start", "new conversation")
+
+
 def classify_confirmation_reply(text: str) -> bool | None:
     """True/False when the WHOLE reply is a yes/no word or phrase, else None.
 
@@ -653,6 +660,27 @@ class KurekEngine:
         except Exception as e:
             print(f"[Kurek Memory] Error reading history: {e}")
         return []
+
+    def _reply_direct(self, reply, callback, mute_speaker, stream_audio):
+        """Answer without the LLM: send the reply to the caller and speak it."""
+        if callback:
+            try:
+                audio_b64 = None
+                if stream_audio:
+                    audio_bytes = self.synthesize_speech_bytes(reply)
+                    if audio_bytes:
+                        audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+                ev_payload = {"type": "sentence", "sentence": reply}
+                if audio_b64:
+                    ev_payload["audio"] = audio_b64
+                callback(ev_payload)
+                callback({"type": "done", "reply": reply})
+            except Exception:
+                pass
+        if not mute_speaker and not self._cancel_requested:
+            self.set_state(KurekState.SPEAKING)
+            self.tts.speak(reply)
+        return reply
 
     def _save_history(self):
         try:
@@ -937,24 +965,16 @@ class KurekEngine:
                 # resolve() runs the action on a worker thread; failures are
                 # reported through the confirm log callback, so don't claim done.
                 reply = "Confirmed, doing it now." if verdict else "Action cancelled."
-                if callback:
-                    try:
-                        audio_b64 = None
-                        if stream_audio:
-                            audio_bytes = self.synthesize_speech_bytes(reply)
-                            if audio_bytes:
-                                audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
-                        ev_payload = {"type": "sentence", "sentence": reply}
-                        if audio_b64:
-                            ev_payload["audio"] = audio_b64
-                        callback(ev_payload)
-                        callback({"type": "done", "reply": reply})
-                    except Exception:
-                        pass
-                if not mute_speaker and not self._cancel_requested:
-                    self.set_state(KurekState.SPEAKING)
-                    self.tts.speak(reply)
-                return reply
+                return self._reply_direct(reply, callback, mute_speaker, stream_audio)
+
+        # Rules, learned memory and daily logs stay; only the rolling chat goes.
+        if is_fresh_start(user_prompt):
+            with self._history_lock:
+                self.history = []
+            self._save_history()
+            print("[Kurek Memory] Fresh start: conversation history cleared.", flush=True)
+            reply = "Fresh start. Rules and memory are kept."
+            return self._reply_direct(reply, callback, mute_speaker, stream_audio)
 
         now_str = datetime.now().strftime("%Y-%m-%d %A, %I:%M %p")
 

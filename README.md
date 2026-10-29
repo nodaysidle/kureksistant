@@ -32,7 +32,7 @@ It is built and tested on **Arch Linux with Omarchy / Hyprland**. The old macOS 
 ## ✨ Features (v0.2.3)
 
 ### Omarchy / Hyprland desktop integration
-- **Terminals and shell:** Foot is the default terminal and Herdr runs inside it, with a Fish shell alias. btop/htop open in a terminal.
+- **Terminals and shell:** Velocitty is the default terminal and Herdr runs inside it, with a Fish shell alias. btop/htop open in a terminal.
 - **Native `hyprctl dispatch` window control:**
   - cycle windows;
   - focus an already-open app (`workspace` + `focuswindow address:`);
@@ -68,6 +68,7 @@ It is built and tested on **Arch Linux with Omarchy / Hyprland**. The old macOS 
 - **Learned memory, an append-only ledger:** what Kurek learns through `manage_memory` and Jev triage goes into a `ledger` table in `memory/kurek_memory.db`. The database refuses updates and deletes, and every row needs a source. A correction is a new row that supersedes the old one (the same key does it automatically, or pass `replaces=<#id>`), so history stays and the prompt carries only entries nothing has replaced. The block is capped by `KUREK_MEMORY_FILE_MAX_CHARS`; if the oldest entries have to be left out, a warning is logged.
 - **Proposals, `~/kurek_proposed_rules.md`:** the nightly dream cycle and Jev's boundary triage only *propose* rules here, with a source and your words verbatim. Nothing reads this file back into a prompt. You promote a proposal by copying it into `rules.toml`.
 - **Everything else:** daily logs in `~/memory/`, a hand-written reference in `~/MEMORY.md`, and `~/ALIGNMENT_SYNTHESIS.md`, which is still read if present but is no longer written by Kurek. Memory files longer than the cap are cut to head and tail, with a warning in the log. Optional Hermes continuity is available via `HERMES_PROFILE` / `HERMES_MEMORIES_DIR`.
+- **Fresh start:** say "Kurek, fresh start" (or "new conversation") to clear only the recent chat in `memory/kurek_history.json`. Rules, learned memory and daily logs stay. Use it when old chat contradicts a correction.
 - **Why it is built this way, and how rule-following is measured:** [docs/ANTI-DRIFT.md](docs/ANTI-DRIFT.md).
 - **Storage:** SQLite in WAL mode with an FTS5 full-text index. On first start the legacy `memory/long_term.json` is imported automatically (a failed import is rolled back, logged and retried; the JSON file is never overwritten before migration completes).
 

@@ -5,10 +5,8 @@ from __future__ import annotations
 from actions import open_app, computer_settings
 
 
-def test_linux_terminal_fallbacks_prioritize_ghostty_and_herdr():
-    assert len(open_app._LINUX_TERMINAL_FALLBACKS) >= 2
-    assert open_app._LINUX_TERMINAL_FALLBACKS[0] == "ghostty"
-    assert open_app._LINUX_TERMINAL_FALLBACKS[1] == "herdr"
+def test_linux_terminal_fallbacks_prioritize_velocitty():
+    assert open_app._LINUX_TERMINAL_FALLBACKS[:3] == ["velocitty", "ghostty", "herdr"]
 
 
 def test_app_aliases_include_ghostty_herdr_fish():
