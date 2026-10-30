@@ -143,26 +143,25 @@ step daemon_auth daemon_and_auth
 grep -q "Listening at http://127.0.0.1:$PORT" "$TMP/daemon.out" || { RES+=("FAIL bind (no loopback bind on $PORT; daemon died or hung at startup -- see $TMP/daemon.out)"); ok=0; }
 grep -Eq "Listening at http://([0-9.]+):" "$TMP/daemon.out" && grep -Eo "Listening at http://[0-9.]+" "$TMP/daemon.out" | grep -qv 127.0.0.1 && { RES+=("FAIL bind (non-loopback host)"); ok=0; }
 
-# 4. memory migration on a temp DB
-migrate(){ "$PYTHON" - <<'PY'
-import json, sqlite3, tempfile, pathlib
-from memory import memory_manager as mm
-d = pathlib.Path(tempfile.mkdtemp())
-mm.DB_PATH = d / "m.db"; mm.MEMORY_PATH = d / "long_term.json"
-mm.MEMORY_PATH.write_text(json.dumps({
-  "preferences": {"pet": {"value": "orange cat", "updated": "2026-01-01"}},
-  "sessions": [{"date": "2026-01-02", "summary": "verify session", "language": "en"}]}))
-mem = mm.load_memory()
-assert mem["preferences"]["pet"]["value"] == "orange cat", mem
-c = sqlite3.connect(mm.DB_PATH)
-assert c.execute("select value from metadata where key='migrated'").fetchone()[0] == "1"
-assert c.execute("select count(*) from sessions").fetchone()[0] == 1
-mm.load_memory()  # idempotent: no duplicate sessions on second open
-assert c.execute("select count(*) from sessions").fetchone()[0] == 1
-print("migration OK")
+# 4. learned memory stays append-only on a temp DB
+ledger_check(){ "$PYTHON" - <<'PY'
+import sqlite3, tempfile, pathlib
+from memory import ledger
+db = pathlib.Path(tempfile.mkdtemp()) / "m.db"
+old = ledger.append("fact", "city: Oslo", "verify", key="city", db_path=db)
+new = ledger.append("fact", "city: Bergen", "verify", key="city", db_path=db)
+assert [r["id"] for r in ledger.active(db)] == [new], "a same-key row must supersede the old one"
+c = sqlite3.connect(db)
+for sql in ("update ledger set text='x'", "delete from ledger"):
+    try:
+        c.execute(sql)
+        raise SystemExit(f"ledger accepted: {sql}")
+    except sqlite3.DatabaseError as e:
+        assert "append-only" in str(e), e
+print("ledger OK")
 PY
 }
-step migration migrate
+step ledger ledger_check
 
 RESULT=$([ $ok = 1 ] && echo PASS || echo FAIL)
 { echo "VERIFY $RESULT sha=$SHA"; printf '  %s\n' "${RES[@]}"; } | tee "${VERIFY_OUT:-/dev/null}"

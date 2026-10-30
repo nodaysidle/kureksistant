@@ -151,22 +151,6 @@ def test_timed_out_tool_is_not_success_and_not_retried():
     assert len(calls) == 2
 
 
-def test_pop_last_session_updates_legacy_json(tmp_path, monkeypatch):
-    import json
-
-    from memory import memory_manager as mm
-    test_json = tmp_path / "long_term.json"
-    test_json.write_text(json.dumps({"sessions": [
-        {"date": "2026-10-01", "summary": "one"},
-        {"date": "2026-10-02", "summary": "two"}]}), encoding="utf-8")
-    monkeypatch.setattr(mm, "DB_PATH", tmp_path / "m.db")
-    monkeypatch.setattr(mm, "MEMORY_PATH", test_json)
-    popped = mm.pop_last_session()
-    assert popped["summary"] == "two"
-    legacy = json.loads(test_json.read_text(encoding="utf-8"))
-    assert [s["summary"] for s in legacy.get("sessions", [])] == ["one"]
-
-
 @pytest.mark.parametrize("side,x", [("left", 0), ("right", 1270)])
 def test_hyprland_snap_is_real_half_screen(monkeypatch, side, x):
     import json

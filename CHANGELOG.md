@@ -17,11 +17,14 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 ### Changed
 - Chat turns from before a memory correction made outside the chat are no longer sent to the model, so the old fact in the chat cannot win (a warning is logged).
 - Ghostty is the default terminal again.
-- `~/Projects` (legacy) dropped from `workstation_radar` and the codebase tool's default roots.
+- `~/Projects` (legacy) dropped from `workstation_radar` and the codebase tool's default roots, and from the vault lookup.
+- Recall ignores filler words ("what did I say about"), which matched nearly every past turn and buried the real hits.
+- **Internal:** the prompt is built in one place, `core/context.py` (`build_messages`), which also holds the who-wins ranking. Hermes and `~/MEMORY.md` are read by `memory/reference.py` for both the prompt and recall. The prompt the model sees is unchanged byte for byte.
 
 ### Removed
 - The Claude Haiku brain (`KUREK_LLM=haiku`, `anthropic` package). DeepSeek-Flash (V4.1) is the only brain.
 - The old personal-context store and `~/memory/bank/` from the prompt and from recall.
+- `memory/memory_manager.py` (the retired store's code; only its DB path was still used). The legacy `memory/long_term.json` import had already stopped running and is gone; the file is left on disk.
 
 ## [0.2.3] - 2026-10-28
 

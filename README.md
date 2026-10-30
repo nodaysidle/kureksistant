@@ -73,7 +73,7 @@ It is built and tested on **Arch Linux with Omarchy / Hyprland**. The old macOS 
 - **Fresh start:** say "Kurek, fresh start" (or "new conversation") to clear only the recent chat in `memory/kurek_history.json`. Rules, learned memory and daily logs stay.
 - **Terms:** [GLOSSARY.md](GLOSSARY.md) names each store.
 - **Why it is built this way, and how rule-following is measured:** [docs/ANTI-DRIFT.md](docs/ANTI-DRIFT.md).
-- **Storage:** SQLite in WAL mode with an FTS5 full-text index. On first start the legacy `memory/long_term.json` is imported automatically (a failed import is rolled back, logged and retried; the JSON file is never overwritten before migration completes).
+- **Storage:** learned memory is the `ledger` table in `memory/kurek_memory.db` (SQLite). The legacy `memory/long_term.json` store is retired: it is no longer read or imported, and is left on disk untouched.
 
 ### Stability: the 600M systemd memory limit
 - `kurek.service` runs with `MemoryHigh=512M` / `MemoryMax=600M` and `Restart=on-failure`.
@@ -251,17 +251,12 @@ Full details and how to report issues: **[SECURITY.md](SECURITY.md)**.
 
 ## ⬆️ Upgrading from v0.2.0
 
-1. **Back up your memory first:**
-   ```bash
-   cp memory/long_term.json memory/long_term.json.bak-$(date +%F)
-   ```
-2. Update the code (`git pull`) and re-run `./install_linux.sh`. This re-renders the unit with `EnvironmentFile` and keeps your `.env`.
-3. Restart at a quiet time:
+1. Update the code (`git pull`) and re-run `./install_linux.sh`. This re-renders the unit with `EnvironmentFile` and keeps your `.env`.
+2. Restart at a quiet time:
    ```bash
    systemctl --user daemon-reload && systemctl --user restart kurek
    ```
-4. Check the log for `Migrated legacy long_term.json into kurek_memory.db`. If you see `Migration error (will retry next start)`, your JSON file is untouched. Fix the cause and restart.
-5. If you use the phone remote, send a test prompt from the app, and check that a wrong token returns `401`.
+3. If you use the phone remote, send a test prompt from the app, and check that a wrong token returns `401`.
 
 ---
 

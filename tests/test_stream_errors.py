@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import core.llm_client as llm_client
 from core.llm_client import stream_deepseek, stream_deepseek_sentences
+from memory import reference
 
 
 class _FakeResponse:
@@ -118,7 +119,7 @@ def _make_lite_engine(monkeypatch):
     monkeypatch.setattr(daemon.KurekEngine, "_notify_state", lambda self, _s: None)
     monkeypatch.setattr(daemon.KurekEngine, "_append_daily_memory", lambda self, *_a, **_k: None)
     monkeypatch.setattr(daemon.KurekEngine, "_consolidate_with_jev", lambda self, *_a, **_k: None)
-    monkeypatch.setattr(daemon, "resolve_hermes_memory_dirs", lambda: [])
+    monkeypatch.setattr(reference, "resolve_hermes_memory_dirs", lambda: [])
     monkeypatch.setattr(daemon, "get_user_name", lambda: "Tester")
 
     engine = daemon.KurekEngine()
