@@ -471,9 +471,9 @@ def history_message(turn: dict) -> dict:
     """A stored turn as a chat message. Assistant turns carry the tools they ran, so a later
     turn can tell whether it really searched instead of guessing from the reply text."""
     content = turn.get("content", "")
-    if turn.get("role") == "assistant" and "tools" in turn:  # older turns have no record
-        ran = "; ".join(turn["tools"]) or "none"
-        content = f"{content}\n\n(Tool calls in that turn, recorded by the daemon: {ran}.)"
+    # Only turns that ran tools get the note: a "none" note on every turn taught the model to copy it.
+    if turn.get("role") == "assistant" and turn.get("tools"):
+        content = f"{content}\n\n(Tool calls in that turn, recorded by the daemon: {'; '.join(turn['tools'])}.)"
     return {"role": turn.get("role", "user"), "content": content}
 
 
@@ -1113,6 +1113,7 @@ class KurekEngine:
         reply_text = ""
         last_tool_output = ""
         tools_run: list[str] = []
+        note_copied = False
         max_tool_turns = 15
         sentence_count = 0
         stream_error: str | None = None
@@ -1192,6 +1193,11 @@ class KurekEngine:
 
                 elif ev_type == "sentence":
                     raw_sentence = ev.get("sentence", "")
+                    # The model copied the history's tool note: speak nothing from there on.
+                    if "Tool calls in that turn" in raw_sentence:
+                        note_copied = True
+                    if note_copied:
+                        continue
                     clean_sentence = self.sanitize_text_for_speech(raw_sentence)
                     if clean_sentence and not self._cancel_requested:
                         self._queue_sentence(
