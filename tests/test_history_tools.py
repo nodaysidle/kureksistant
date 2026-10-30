@@ -51,3 +51,28 @@ def test_copied_tool_note_is_never_spoken(monkeypatch, tmp_path):
     monkeypatch.setattr(daemon, "stream_deepseek_sentences", fake_stream)
     assert engine.handle_text_query("weather?") == "It is sunny."
     assert engine.tts.spoken == ["It is sunny."]
+
+
+def test_turns_from_before_an_outside_memory_correction_are_not_sent(monkeypatch, tmp_path):
+    from tests.test_daemon_pipeline import _make_lite_engine
+
+    engine = _make_lite_engine(monkeypatch)
+    engine.history_file = tmp_path / "hist.json"
+    engine.history = [
+        {"role": "user", "content": "I use Velocitty."},
+        {"role": "assistant", "content": "Noted.", "tools": []},
+        {"role": "user", "content": "hi", "ts": "2026-10-30T12:00:00"},
+        {"role": "assistant", "content": "Hello.", "tools": [], "ts": "2026-10-30T12:00:00"},
+    ]
+    monkeypatch.setattr(daemon.ledger, "outside_correction_ts", lambda: "2026-10-30T11:00:00")
+    seen: list[list[dict]] = []
+
+    def fake_stream(**kwargs):
+        seen.append(kwargs["messages"])
+        yield {"type": "done", "full_content": "Ghostty."}
+
+    monkeypatch.setattr(daemon, "stream_deepseek_sentences", fake_stream)
+    engine.handle_text_query("Which terminal do I use?")
+    sent = [m["content"] for m in seen[0][1:]]
+    assert "I use Velocitty." not in sent and "hi" in sent
+    assert all("ts" in t for t in engine.history[-2:])

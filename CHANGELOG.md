@@ -7,6 +7,22 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Recall over past conversations:** `manage_memory` recall searches the daily logs with several keywords and answers with the date of what was said. Nothing recall finds becomes memory unless you ask.
+- **Who wins:** the prompt ranks rules, your current message, learned memory, `~/MEMORY.md` and Hermes, then earlier chat. Before going against a lasting fact (terminal, city, where files go) Kurek asks whether it changed.
+- **Project-aware file tasks:** projects are the git repos in `~/dev/nodaysidle`. Kurek looks first, asks one question with a grouped plan for files that clearly belong to a project, and leaves files it is unsure about alone.
+- **One-sentence connections** to a project or past conversation when they change the answer.
+- `GLOSSARY.md` names each memory store.
+
+### Changed
+- Chat turns from before a memory correction made outside the chat are no longer sent to the model, so the old fact in the chat cannot win (a warning is logged).
+- Ghostty is the default terminal again.
+- `~/Projects` (legacy) dropped from `workstation_radar` and the codebase tool's default roots.
+
+### Removed
+- The Claude Haiku brain (`KUREK_LLM=haiku`, `anthropic` package). DeepSeek-Flash (V4.1) is the only brain.
+- The old personal-context store and `~/memory/bank/` from the prompt and from recall.
+
 ## [0.2.3] - 2026-10-28
 
 ### Changed

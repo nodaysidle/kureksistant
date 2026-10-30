@@ -15,6 +15,20 @@ Read this before changing anything that reads or writes memory, rules or the pro
 | `~/kurek_proposed_rules.md` | the dream cycle, Jev boundary triage, `manage_memory` | Proposals only. Nothing reads this file into a prompt. The user promotes an entry by copying it into `rules.toml`. |
 | `~/MEMORY.md` | the user, by hand | Reference facts (identity, environment, projects). Kurek never appends to it. |
 | `~/ALIGNMENT_SYNTHESIS.md` | nobody | Legacy. Still read if present, never written by Kurek. |
+| Hermes `USER.md` / `MEMORY.md` | Hermes, and `manage_memory` remember | Read into the prompt. Ranks below learned memory. |
+| `memory/kurek_history.json` | the daemon, each turn | The last 10 turns go to the model. Context, never fact. |
+| `~/memory/YYYY-MM-DD.md` daily logs | the daemon, each turn | Never injected. Read by Jev triage, the dream cycle and `manage_memory` recall. |
+
+Retired: the old personal-context store (`entries` table, `memory/long_term.json` import) and
+`~/memory/bank/`. Nothing reads them into the prompt or into recall. Names for each store are in
+[GLOSSARY.md](../GLOSSARY.md).
+
+**Who wins.** The system prompt ranks the sources: rules, the user's current message, learned
+memory, reference facts and Hermes, then earlier chat and daily logs. Prompt wording alone cannot
+make memory beat the user's own words in the chat (measured 0/4), so the daemon enforces the one
+case that matters in code: when a ledger correction comes from outside the chat (any source other
+than `manage_memory`, `daily/` or `jev`), chat turns stamped before it are no longer sent, and a
+warning names the cut-off. Turns without a timestamp (written before 2026-10-30) count as before.
 
 One fact lives in one store. If the same statement exists in two, one of them will go stale.
 

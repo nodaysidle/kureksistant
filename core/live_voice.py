@@ -28,7 +28,7 @@ OUT_RATE = 24000
 DEFAULT_PORT = 8791
 TOOL_OUTPUT_MAX_CHARS = 4000
 # Names xAI's speech recognition should expect (it hears "Koper" as "Copper").
-KEYTERMS = ["Koper", "Ljubljana", "Kurek", "herdr", "Velocitty", "GrokBot", "Omarchy", "Hyprland"]
+KEYTERMS = ["Koper", "Ljubljana", "Kurek", "herdr", "Ghostty", "GrokBot", "Omarchy", "Hyprland"]
 # Owner's town keeps arriving as an English word; fix it before the weather lookup.
 CITY_FIXES = {"copper": "Koper", "cooper": "Koper"}
 

@@ -6,7 +6,7 @@ Background service with observed ~450MB peak RAM when faster-whisper is loaded.
 Connects with:
   • Linux UDS trigger (kurek-trigger) / Hyprland Middle Click
   • Android remote app over Tailscale (/remote/prompt, SSE)
-  • Brain: DeepSeek API (deepseek-flash), or Claude Haiku when KUREK_LLM=haiku
+  • Brain: DeepSeek API (deepseek-flash, served by DeepSeek-V4.1-Flash)
   • STT: OpenRouter Whisper / Deepgram Nova-2, local faster-whisper fallback
   • xAI Grok TTS (Sol) via persistent mpv PipeWire sink
 """
@@ -39,7 +39,6 @@ sys.path.insert(0, str(BASE_DIR))
 
 import socket
 from memory.config_manager import (
-    get_anthropic_key,
     get_deepgram_key,
     get_deepseek_key,
     get_openrouter_api_key,
@@ -54,7 +53,7 @@ from core.decision_client import (
     auto_screen_enabled,
     query_needs_screen,
 )
-from core.llm_client import brain_name, stream_deepseek_sentences, use_haiku
+from core.llm_client import brain_name, stream_deepseek_sentences
 from core.live_voice import live_voice_enabled, start_live_servers
 from core.tts import create_tts_player
 from core.stt import DeepgramSTT, FallbackSTT, OpenRouterSTT, STTError, WhisperSTT
@@ -68,7 +67,6 @@ from core.rules import pinned_block as rules_pinned_block
 from core.rules import prompt_block as rules_prompt_block
 from memory import ledger
 from memory.atomic_io import atomic_write_text
-from memory.memory_manager import load_memory, format_memory_for_prompt
 
 # Audio recording configuration
 SAMPLE_RATE = 16000
@@ -168,11 +166,8 @@ _warned_truncated: set[tuple[Path, int]] = set()
 
 
 def brain_key_problem() -> str | None:
-    """Why the active brain cannot answer, or None when its API key is present."""
-    if use_haiku():
-        if not get_anthropic_key():
-            return "ANTHROPIC_API_KEY (or HAIKU_API_KEY) missing — Kurek cannot answer."
-    elif not get_deepseek_key():
+    """Why the brain cannot answer, or None when its API key is present."""
+    if not get_deepseek_key():
         return "DEEPSEEK_API_KEY missing — Kurek cannot answer."
     return None
 
@@ -467,6 +462,17 @@ def classify_confirmation_reply(text: str) -> bool | None:
     return None
 
 
+PROJECTS_DIR = Path.home() / "dev" / "nodaysidle"
+
+
+def project_names() -> list[str]:
+    """The user's projects: every git repo directly inside PROJECTS_DIR."""
+    try:
+        return sorted(p.name for p in PROJECTS_DIR.iterdir() if (p / ".git").exists())
+    except OSError:
+        return []
+
+
 def history_message(turn: dict) -> dict:
     """A stored turn as a chat message. Assistant turns carry the tools they ran, so a later
     turn can tell whether it really searched instead of guessing from the reply text."""
@@ -516,6 +522,7 @@ class KurekEngine:
         # Multi-turn conversational memory & persistence
         self.history_file = BASE_DIR / "memory" / "kurek_history.json"
         self.history = self._load_history()
+        self._warned_history_cutoff = ""
         print(f"[Kurek Memory] Loaded {len(self.history)} prior conversation turns.")
 
         # STT engine: cloud (OpenRouter multilingual Whisper, then Deepgram) when a
@@ -978,13 +985,7 @@ class KurekEngine:
 
         now_str = datetime.now().strftime("%Y-%m-%d %A, %I:%M %p")
 
-        # Load long-term user memories & context
         mem_block = ""
-        try:
-            mem_data = load_memory()
-            mem_block = format_memory_for_prompt(mem_data)
-        except Exception as e:
-            print(f"[Kurek Memory] Error reading memory context: {e}")
 
         # Inject Hermes memory from configured / default candidate locations
         hermes_dir = next(
@@ -1060,7 +1061,7 @@ class KurekEngine:
             "• system_monitor: hardware diagnostics and 5-minute sustained CPU/RAM watcher. Use action='status' when asked about system resources, CPU, RAM, or temperature. "
             "• process_sentinel: watch long-running compile, build, test, or training jobs (cargo, npm, python, rustc, make). Use action='watch' with a process name, command, or PID. When the job finishes, Kurek alerts verbally and sends a notification. "
             "• draft_to_clipboard: format dictated text into conventional commits, GitHub PR descriptions, issues, docstrings, or markdown notes and copies immediately to the Wayland system clipboard (wl-copy) for instant pasting with Ctrl+V. "
-            "• workstation_radar: parallel health scan across repositories in ~/Projects and similar project roots. Use action='actionable' to report dirty working trees, untracked files, and unpushed commits ahead of upstream. "
+            "• workstation_radar: parallel health scan across the git repositories under ~/dev. Use action='actionable' to report dirty working trees, untracked files, and unpushed commits ahead of upstream. "
             "• dream_tool: executes the Muse Memory reflection cycle. Synthesizes today's daily log into an atmospheric dream journal (~/dreams/YYYY-MM-DD.md) and writes rule proposals to ~/kurek_proposed_rules.md for the user to review. "
             + _run_tool_prompt_line() +
             "• vault_knowledge: access the nodaysidle-knowledge llm-wiki and Obsidian vault. Use action='list_projects' when asked about what projects exist in the nodaysidle portfolio, what is done, active projects, or releases. Use action='read' with note_name (e.g. 'x-promo-strategy', 'cascade-v3-overview', 'nodaysrammar-overview', 'kureksistant-overview', 'nodaysidle-sonora-overview') to read architecture specs, project PRDs, roadmaps, or social media promotion plans. Use action='search' with a query to look up anything across all notes in the vault. Use action='add_inbox' to capture quick ideas or tasks directly into the vault inbox. "
@@ -1075,18 +1076,27 @@ class KurekEngine:
             "4. NEVER read aloud long lists of filenames, file sizes, or raw system logs over the speaker unless explicitly asked to read every item. Summarize what was found or done in 1 punchy sentence. "
             "5. NO PADDING OR OFFERS: Never justify your decisions (e.g. do not explain why you chose a filename), never analyze the prompt (e.g. do not say 'the name sounds fake'), and never append closing offers like 'Let me know if you want...', 'Say the word if...', or 'Give me X and I will...'. "
             "TASK DISCIPLINE & EXECUTION TRUTH: "
-            "1. Task Scope & Brevity: Execute strictly the task given. Do not branch into unrequested work, offer unsolicited follow-ups, or drift into side topics. "
+            "1. Task Scope & Brevity: Execute strictly the task given. Do not branch into unrequested work, offer unsolicited follow-ups, or drift into side topics. A one-sentence connection that changes the answer (see CONNECTIONS) is not a side topic. "
             "2. Completed vs. Planned: Never state or imply that an action was completed unless its corresponding tool call executed and succeeded in the current turn. If an action is merely planned, queued, or intended, state plainly that it is planned—never that it is done. "
             "3. File Writes and Sources: Never claim you saved, filed, placed, or recorded sources in a folder or document unless the write operation succeeded in that turn. When reporting a write, state only what was written and the exact destination path in one sentence. Do not justify naming choices or offer renames. If you did not perform the write, do not claim any file was modified. "
             "4. Web Search Integrity: Never invent citations, URLs, snippets, or file paths. If a search yields no relevant results or fails, state the truth in one sentence: say plainly that you found nothing and report the exact query you searched. Do not add commentary or speculation about the query. "
             "5. No Apology Deflections: Apologies are never an acceptable substitute for results or honest reporting. Do not use 'Sorry, Master Alan.' or any variant to close a turn, gloss over an unperformed task, or mask a failure. Report facts, tool outcomes, and errors directly. "
-            "6. Clarify Instead of Guessing: If a prompt is ambiguous, blocked, or missing parameters required to act, ask exactly one direct, brief question to resolve the blocker. Do not fabricate missing information or guess."
+            "6. Clarify Instead of Guessing: If a prompt is ambiguous, blocked, or missing parameters required to act, ask exactly one direct, brief question to resolve the blocker. Do not fabricate missing information or guess. "
+            "WHO WINS WHEN SOURCES DISAGREE (highest first): "
+            "1. [USER RULES]. "
+            "2. The user's current message. If it goes against a lasting fact in [LEARNED MEMORY] (their terminal, name, city, where files go), do not act at all this turn (no tool calls, not even with the remembered value): say what memory holds, ask once whether it changed, and wait for the answer. Save the change with manage_memory (replaces=<#id>) only after they confirm. Something said only for now ('I'm in Koper today', 'use the phone tonight') you simply follow and never save. "
+            "3. [LEARNED MEMORY]. "
+            "4. [MUSE_CORE_MEMORY] reference facts and Hermes [USER] / [MEMORY]. If one disagrees with learned memory, follow learned memory and tell the user in one sentence so they can fix it. "
+            "5. Earlier chat turns and past conversations found by recall: what was said, never proof of what is true now. "
+            "RECALL: When the user refers to a past conversation ('two days ago', 'last week', 'what did I say about...') or asks about anything personal you cannot see above, call manage_memory(action='recall') BEFORE saying you don't know. Put several keywords and synonyms in one query (e.g. 'phone apk android crash rotate'). Answer with the date and what was said ('On Tuesday you said...'). What recall finds stays what was said: save it only if the user asks you to remember it. "
+            "CONNECTIONS: When you notice a clear link to one of the user's projects or to something said before, and it changes the answer, mention it in one sentence. Never phrase it as an offer. "
+            "FILE TASKS: Only when the user asks you to sort, clean up, move, rename or delete files: look first (list the files). A file is connected to a project only when its name or folder clearly names one of the projects listed below. Before moving, renaming or deleting connected files, ask ONE question with the grouped plan (e.g. '3 files look like Kurek Remote builds and 2 like Sonora notes: move them to those projects and keep only the newest APK?'), then act on the answer. Leave any file you are not sure about where it is, and say so. Files with no project link: do what was asked; deletion still needs confirmation."
         )
 
         vault_anchor = (
             "[NODAYSIDLE PORTFOLIO & KNOWLEDGE VAULT]\n"
             "Vault: nodaysidle-knowledge (Obsidian llm-wiki)\n"
-            "Key Portfolio Projects: Cascade v3, Sonora, WhisperBar, Browser for Linux, nodaysrammar, Kurek (Kureksistant), ShareGuard, Synapse Notes.\n"
+            f"The user's projects (git repos in ~/dev/nodaysidle): {', '.join(project_names()) or 'none found'}.\n"
             "Social Media / X Strategy: wiki/concepts/x-promo-strategy.md, moc-x-promo.md, reel-clip-workflow.md.\n"
             "Whenever asked about portfolio projects, roadmap, what must be done, what is done, or social media strategy, ALWAYS call vault_knowledge(action='read'|'list_projects'|'search') to retrieve ground truth."
         )
@@ -1104,8 +1114,15 @@ class KurekEngine:
         messages = [
             {"role": "system", "content": sys_prompt},
         ]
-        # Include last 10 conversational turns for continuity
-        for turn in self.history[-10:]:
+        # Last 10 turns for continuity. Turns from before a memory correction made outside the
+        # chat may repeat the old fact, and the model believes the chat over memory, so they go.
+        cutoff = ledger.outside_correction_ts()
+        recent = [t for t in self.history if t.get("ts", "") > cutoff] if cutoff else self.history
+        if len(recent) < len(self.history) and cutoff != self._warned_history_cutoff:
+            self._warned_history_cutoff = cutoff
+            print(f"[Kurek Memory] WARNING: {len(self.history) - len(recent)} chat turns from before "
+                  f"the memory correction of {cutoff} are no longer sent to the model.", flush=True)
+        for turn in recent[-10:]:
             messages.append(history_message(turn))
         pinned = rules_pinned_block()
         messages.append({"role": "user", "content": f"{effective_user_prompt}\n\n{pinned}" if pinned else effective_user_prompt})
@@ -1127,8 +1144,7 @@ class KurekEngine:
 
             for ev in stream_deepseek_sentences(
                 messages=messages,
-                # Final round: keep the tool list and forbid calls instead of
-                # dropping tools, or Haiku rejects this round's thinking blocks.
+                # Final round: forbid tool calls so the model has to answer.
                 tools=self.openai_tools or None,
                 tool_choice="none" if turn_idx == max_tool_turns - 1 else None,
                 model="deepseek-flash",
@@ -1287,8 +1303,9 @@ class KurekEngine:
         print(f"[Kurek Reply] 💬 \"{reply_text}\"", flush=True)
 
         # Update multi-turn history & persist
-        self.history.append({"role": "user", "content": user_prompt})
-        self.history.append({"role": "assistant", "content": reply_text, "tools": tools_run})
+        ts = datetime.now().isoformat(timespec="seconds")
+        self.history.append({"role": "user", "content": user_prompt, "ts": ts})
+        self.history.append({"role": "assistant", "content": reply_text, "tools": tools_run, "ts": ts})
         self._save_history()
 
         # Muse Daily Log & Asynchronous Jev Memory Triage

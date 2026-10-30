@@ -1,15 +1,43 @@
 """
 Memory tool for Kurek.
 Allows storing and recalling long-term user facts, preferences, identity, and notes.
-Synchronizes with local memory and optional Hermes memories (see HERMES_* in .env).
+Recall searches learned memory, reference facts, Hermes memories (see HERMES_* in .env)
+and the daily logs of past conversations.
 """
+import re
 from datetime import datetime
 from pathlib import Path
 
 from core.proposals import propose
 from memory import ledger
 from memory.config_manager import resolve_hermes_memory_dirs
-from memory.memory_manager import search_memory
+
+
+def _keywords(query: str) -> set[str]:
+    return {w for w in re.findall(r"\w+", query.casefold()) if len(w) > 1}
+
+
+def _score(text: str, words: set[str]) -> int:
+    """How many of the query's keywords the text contains."""
+    text = text.casefold()
+    return sum(w in text for w in words)
+
+
+def _search_daily_logs(words: set[str], limit: int = 5) -> list[str]:
+    """Past turns from the daily logs that best match the keywords, best match first.
+
+    A daily log is what was said, not what is true, so each hit carries its date."""
+    hits = []
+    for log in (Path.home() / "memory").glob("????-??-??.md"):
+        try:
+            turns = log.read_text(encoding="utf-8").split("\n### ")[1:]
+        except OSError:
+            continue
+        for turn in turns:
+            if score := _score(turn, words):
+                hits.append((score, log.stem, " ".join(turn.split())))
+    hits.sort(key=lambda h: (h[0], h[1]), reverse=True)
+    return [f"• [Said on {day}] {text[:400]}" for _, day, text in hits[:limit]]
 
 
 def _resolve_hermes_dir() -> Path | None:
@@ -25,60 +53,45 @@ def manage_memory(parameters: dict, **kwargs) -> str:
     hermes_dir = _resolve_hermes_dir()
 
     if action == "recall":
-        query = params.get("query", "").strip()
-        if not query:
+        words = _keywords(params.get("query", ""))
+        if not words:
             return "No search query provided."
 
-        found_lines = []
+        found: list[tuple[int, str]] = []
 
-        # 1. Search Hermes memory files
+        # 1. Hermes memory files
         if hermes_dir and hermes_dir.exists():
             for filename in ("USER.md", "MEMORY.md"):
                 file_path = hermes_dir / filename
                 if file_path.exists():
                     try:
-                        content = file_path.read_text(encoding="utf-8")
-                        for block in content.split("§"):
-                            if query.lower() in block.lower():
-                                clean_block = " ".join(block.split()).strip()
-                                if clean_block:
-                                    found_lines.append(f"• [Hermes {filename}] {clean_block}")
+                        for block in file_path.read_text(encoding="utf-8").split("§"):
+                            clean_block = " ".join(block.split())
+                            if score := _score(clean_block, words):
+                                found.append((score, f"• [Hermes {filename}] {clean_block}"))
                     except Exception:
                         pass
 
-        # 2. Search Muse Memory files (~/MEMORY.md and ~/memory/bank/)
-        muse_core = Path.home() / "MEMORY.md"
-        if muse_core.exists():
+        # 2. Reference facts (~/MEMORY.md)
+        reference = Path.home() / "MEMORY.md"
+        if reference.exists():
             try:
-                for line in muse_core.read_text(encoding="utf-8").splitlines():
-                    if query.lower() in line.lower() and line.strip().startswith("-"):
-                        found_lines.append(f"• [Muse Core] {line.strip()}")
+                for line in reference.read_text(encoding="utf-8").splitlines():
+                    if line.strip().startswith("-") and (score := _score(line, words)):
+                        found.append((score, f"• [Reference facts] {line.strip()}"))
             except Exception:
                 pass
 
-        muse_bank = Path.home() / "memory" / "bank"
-        if muse_bank.exists():
-            try:
-                for bfile in muse_bank.glob("*.md"):
-                    for line in bfile.read_text(encoding="utf-8").splitlines():
-                        if query.lower() in line.lower() and line.strip().startswith("-"):
-                            found_lines.append(f"• [Muse {bfile.stem}] {line.strip()}")
-            except Exception:
-                pass
+        # 3. The learned-memory ledger
+        for row in ledger.active():
+            if score := _score(row["text"], words):
+                found.append((score, f"• [Learned #{row['id']}] {row['text']}"))
 
-        # 3. Search the learned-memory ledger
-        for row in ledger.search(query):
-            found_lines.append(f"• [Learned #{row['id']}] {row['text']}")
-
-        # 4. Search local memory
-        local_results = search_memory(query)
-        if local_results and "Nothing stored" not in local_results and "I have not stored" not in local_results:
-            found_lines.append(f"• [Local Memory]\n{local_results}")
-
-        if not found_lines:
-            return f"No memories found matching '{query}'."
-
-        return f"Found {len(found_lines)} matching memories:\n" + "\n".join(found_lines[:6])
+        found.sort(key=lambda f: f[0], reverse=True)
+        lines = [line for _, line in found[:6]] + _search_daily_logs(words)
+        if not lines:
+            return f"No memories or past conversations found matching '{params.get('query', '')}'."
+        return f"Found {len(lines)} matches:\n" + "\n".join(lines)
 
     # Default: remember
     key = params.get("key", "").strip()
@@ -179,7 +192,7 @@ def _triage_with_jev(key: str, value: str) -> dict | None:
 
 TOOL = {
     "name": "manage_memory",
-    "description": "Store or recall persistent facts, personal identity, user preferences, projects, relationships, or notes. Use action='remember' to save something about the user, or action='recall' to search stored knowledge (including Hermes memories).",
+    "description": "Store or recall persistent facts, personal identity, user preferences, projects, relationships, or notes. Use action='remember' to save something about the user. Use action='recall' to search learned memory, reference facts, Hermes memories and the daily logs of past conversations (each past-conversation hit carries its date).",
     "parameters": {
         "type": "OBJECT",
         "properties": {
@@ -207,7 +220,7 @@ TOOL = {
             },
             "query": {
                 "type": "STRING",
-                "description": "Keyword to search for when action is 'recall'"
+                "description": "For recall: several keywords and synonyms separated by spaces, e.g. 'phone apk android crash rotate'. Any keyword can match; more matches rank higher."
             }
         },
         "required": ["action"]

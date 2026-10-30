@@ -14,13 +14,13 @@ import pytest
 
 _LIVE_ENV = (
     "DEEPSEEK_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY",
-    "DEEPGRAM_API_KEY", "TYPESAFE_API_KEY", "ANTHROPIC_API_KEY", "HAIKU_API_KEY",
+    "DEEPGRAM_API_KEY", "TYPESAFE_API_KEY",
 )
 
 
 @pytest.fixture(autouse=True)
 def _clean_kurek_env(monkeypatch):
-    """A shell that exports the live .env (KUREK_LLM, KUREK_REMOTE_ALLOW_EXEC, keys)
+    """A shell that exports the live .env (KUREK_REMOTE_ALLOW_EXEC, keys)
     must not change test outcomes; tests opt in with monkeypatch.setenv."""
     for name in list(os.environ):
         if name.startswith("KUREK_") or name in _LIVE_ENV:
@@ -36,3 +36,11 @@ def _no_desktop_toasts(tmp_path_factory, monkeypatch):
     stub.write_text("#!/bin/sh\nexit 0\n")
     stub.chmod(0o755)
     monkeypatch.setenv("PATH", f"{stub_dir}:{os.environ['PATH']}")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_memory_db(tmp_path, monkeypatch):
+    """No test may open the live memory/kurek_memory.db; tests that need a DB set their own."""
+    from memory import memory_manager
+
+    monkeypatch.setattr(memory_manager, "DB_PATH", tmp_path / "kurek_memory.db")

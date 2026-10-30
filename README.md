@@ -5,10 +5,10 @@
 <h1 align="center">Kureksistant (Kurek)</h1>
 
 <p align="center">
-  <strong>A voice assistant daemon for an Omarchy / Hyprland Linux desktop, with an optional phone remote over Tailscale.</strong>
+  <strong>Autonomous voice assistant daemon for Arch Linux (Omarchy / Hyprland), paired with Kurek Remote Android over Tailscale.</strong>
 </p>
 
-<p align="center"><strong>Headless Linux daemon, summoned via middle-click. No GUI on purpose.</strong></p>
+<p align="center"><strong>Headless Linux daemon (~333MB RAM), summoned via middle-click. No GUI on purpose.</strong></p>
 
 <p align="center">
   <a href="https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.3"><img src="https://img.shields.io/badge/Release-v0.2.3-blue.svg?style=flat-square" alt="Release v0.2.3"></a>
@@ -21,7 +21,7 @@
 
 **A headless voice assistant daemon on Linux — no GUI on purpose.**
 
-Kurek is a headless Python daemon (`kurek_daemon.py`) with no GUI that runs as a systemd user service on your Linux desktop. You summon it with a mouse middle-click, a hotkey or the `kurek` CLI. It listens, thinks with DeepSeek-Flash (or Claude Haiku 5.5 when you set `KUREK_LLM=haiku`), talks back with xAI Grok TTS (voice **Sol**), and can act on your desktop through 27 tool modules in [`actions/`](actions/), including windows, apps, the browser, files, the clipboard, screen vision and memory.
+Kurek is a headless Python daemon (`kurek_daemon.py`) with no GUI that runs as a systemd user service on your Linux desktop. You summon it with a mouse middle-click, a hotkey or the `kurek` CLI. It listens, thinks with DeepSeek-Flash (DeepSeek-V4.1-Flash), talks back with xAI Grok TTS (voice **Sol**), and can act on your desktop through 27 tool modules in [`actions/`](actions/), including windows, apps, the browser, files, the clipboard, screen vision and memory.
 
 It is built and tested on **Arch Linux with Omarchy / Hyprland**. The old macOS menu-bar client and PyQt6 GUI were removed in v0.2.2.
 
@@ -32,7 +32,7 @@ It is built and tested on **Arch Linux with Omarchy / Hyprland**. The old macOS 
 ## ✨ Features (v0.2.3)
 
 ### Omarchy / Hyprland desktop integration
-- **Terminals and shell:** Velocitty is the default terminal and Herdr runs inside it, with a Fish shell alias. btop/htop open in a terminal.
+- **Terminals and shell:** Ghostty is the default terminal and Herdr runs inside it, with a Fish shell alias. btop/htop open in a terminal.
 - **Native `hyprctl dispatch` window control:**
   - cycle windows;
   - focus an already-open app (`workspace` + `focuswindow address:`);
@@ -68,7 +68,10 @@ It is built and tested on **Arch Linux with Omarchy / Hyprland**. The old macOS 
 - **Learned memory, an append-only ledger:** what Kurek learns through `manage_memory` and Jev triage goes into a `ledger` table in `memory/kurek_memory.db`. The database refuses updates and deletes, and every row needs a source. A correction is a new row that supersedes the old one (the same key does it automatically, or pass `replaces=<#id>`), so history stays and the prompt carries only entries nothing has replaced. The block is capped by `KUREK_MEMORY_FILE_MAX_CHARS`; if the oldest entries have to be left out, a warning is logged.
 - **Proposals, `~/kurek_proposed_rules.md`:** the nightly dream cycle and Jev's boundary triage only *propose* rules here, with a source and your words verbatim. Nothing reads this file back into a prompt. You promote a proposal by copying it into `rules.toml`.
 - **Everything else:** daily logs in `~/memory/`, a hand-written reference in `~/MEMORY.md`, and `~/ALIGNMENT_SYNTHESIS.md`, which is still read if present but is no longer written by Kurek. Memory files longer than the cap are cut to head and tail, with a warning in the log. Optional Hermes continuity is available via `HERMES_PROFILE` / `HERMES_MEMORIES_DIR`.
-- **Fresh start:** say "Kurek, fresh start" (or "new conversation") to clear only the recent chat in `memory/kurek_history.json`. Rules, learned memory and daily logs stay. Use it when old chat contradicts a correction.
+- **Recall:** ask about a past conversation ("what did I say about the phone app two days ago?") and Kurek searches the daily logs with several keywords, then answers with the date and what was said. What recall finds is never saved as memory unless you ask.
+- **Who wins:** rules, then what you say now, then learned memory, then `~/MEMORY.md` and Hermes, then earlier chat and daily logs. If you say something that goes against a lasting fact (your terminal, city, where files go), Kurek asks whether it changed before acting and saves the change only after your yes. When you correct learned memory outside the chat (by hand or with another agent), chat turns from before the correction stop going to the model, with a warning in the log.
+- **Fresh start:** say "Kurek, fresh start" (or "new conversation") to clear only the recent chat in `memory/kurek_history.json`. Rules, learned memory and daily logs stay.
+- **Terms:** [GLOSSARY.md](GLOSSARY.md) names each store.
 - **Why it is built this way, and how rule-following is measured:** [docs/ANTI-DRIFT.md](docs/ANTI-DRIFT.md).
 - **Storage:** SQLite in WAL mode with an FTS5 full-text index. On first start the legacy `memory/long_term.json` is imported automatically (a failed import is rolled back, logged and retried; the JSON file is never overwritten before migration completes).
 
@@ -84,7 +87,7 @@ It is built and tested on **Arch Linux with Omarchy / Hyprland**. The old macOS 
 ### Other tools (unchanged)
 - `process_sentinel`: announces when long builds or tests finish.
 - `draft_to_clipboard`: dictate commit messages and PR text into `wl-copy`.
-- `workstation_radar`: git status across `~/Projects` and `~/dev`.
+- `workstation_radar`: git status across the repos under `~/dev`.
 - `vault_knowledge`: queries the nodaysidle-knowledge Obsidian vault. Set `KUREK_VAULT_DIR`, or it looks in `~/dev/nodaysidle/nodaysidle-knowledge`.
 - `open_app`: launches desktop apps by name, including the Grok Bot app (`grok-bot`).
 - `dream_tool`: nightly reflection journal.
@@ -131,10 +134,7 @@ nano .env
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `DEEPSEEK_API_KEY` | **Yes**, unless `KUREK_LLM=haiku` | Reasoning and tool dispatch (DeepSeek-Flash). |
-| `KUREK_LLM` | Optional | `haiku` switches the brain to Claude Haiku 5.5. Unset keeps DeepSeek-Flash. |
-| `ANTHROPIC_API_KEY` / `HAIKU_API_KEY` | With `KUREK_LLM=haiku` | Anthropic key for the Haiku brain. |
-| `KUREK_HAIKU_MODEL` / `KUREK_HAIKU_EFFORT` / `KUREK_HAIKU_THINKING` | Optional | Haiku model (default `claude-haiku-5-5`), effort (default `low`), and `off` to turn thinking off. |
+| `DEEPSEEK_API_KEY` | **Yes** | Reasoning and tool dispatch (DeepSeek-Flash). |
 | `XAI_API_KEY` | **Yes** | Speech (xAI Grok TTS, voice Sol). |
 | `GEMINI_API_KEY` | Optional | Screen vision and Gemini-backed tools. |
 | `DEEPGRAM_API_KEY` | Optional | Deepgram Nova-2 STT (voice audio is sent to Deepgram). |
@@ -277,7 +277,7 @@ The older `KUREK_UNRESTRICTED_SHELL` / `KUREK_ALLOW_SHELL` variables no longer e
 
 ## ⚠️ Known limits
 
-- **Not offline:** reasoning (DeepSeek-Flash or Claude Haiku) needs internet. Speech-to-text falls back to local `faster-whisper`, and voice falls back to the robotic `spd-say` when xAI is unreachable.
+- **Not offline:** reasoning (DeepSeek-Flash) needs internet. Speech-to-text falls back to local `faster-whisper`, and voice falls back to the robotic `spd-say` when xAI is unreachable.
 - **Desktop scope:** Hyprland/Omarchy comes first. Other Wayland compositors need their own keybinds, and the Hyprland-specific window actions won't apply there.
 - **Timed-out tools keep running:** they can't be killed. After 120 s Kurek reports the timeout, but the tool may finish in the background.
 - **Confirmation wording:** after a "yes", Kurek replies "Confirmed, doing it now." as the action starts; a failure is logged and shown as a notification.

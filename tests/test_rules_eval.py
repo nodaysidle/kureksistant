@@ -32,6 +32,11 @@ def test_each_expectation_reports_why_it_failed(case, reply, tools, needle) -> N
     assert len(failures) == 1 and needle in failures[0]
 
 
+def test_numbered_list_markers_are_not_sentences() -> None:
+    assert check({"max_sentences": 2}, "Steps:\n1. Hash it.\n2. Store it.", []) == []
+    assert check({"max_sentences": 2}, "Steps:\n**1. Hash** it.\n**2. Store** it.", []) == []
+
+
 def test_tool_names_ignore_arguments() -> None:
     assert check({"must_call": ["web_search"]}, "ok", ['web_search({"query": "f1"})']) == []
 

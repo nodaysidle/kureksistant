@@ -235,12 +235,11 @@ def test_tool_loop_runs_tool_then_speaks_answer(monkeypatch, tmp_path):
     assert second[-1] == {"role": "tool", "tool_call_id": "call_0", "content": "Sunny, 20C"}
     assert "It is sunny." in engine.tts.spoken
     assert engine.state == daemon.KurekState.IDLE
-    assert engine.history[-1] == {"role": "assistant", "content": "It is sunny.", "tools": ['weather_report({"city": "Ljubljana"})']}
+    assert {k: v for k, v in engine.history[-1].items() if k != "ts"} == {"role": "assistant", "content": "It is sunny.", "tools": ['weather_report({"city": "Ljubljana"})']}
 
 
 def test_tool_loop_last_turn_keeps_tools_but_forbids_calls(monkeypatch, tmp_path):
-    # Haiku thinking blocks are bound to the tool list, so the last round keeps the
-    # tools and ends the loop with tool_choice="none" instead of dropping them.
+    # The last round ends the loop with tool_choice="none" so the model has to answer.
     engine = _make_lite_engine(monkeypatch)
     engine.history_file = tmp_path / "hist.json"
     engine.openai_tools = [{"type": "function", "function": {"name": "noop"}}]
@@ -282,17 +281,10 @@ def test_remote_stream_audio_emits_sentence_before_done(monkeypatch, tmp_path):
     assert engine.tts.spoken == []
 
 
-def test_brain_key_problem_follows_the_active_brain(monkeypatch):
+def test_brain_key_problem_needs_the_deepseek_key(monkeypatch):
     monkeypatch.setattr(daemon, "get_deepseek_key", lambda: None)
-    monkeypatch.setattr(daemon, "get_anthropic_key", lambda: None)
-
-    monkeypatch.delenv("KUREK_LLM", raising=False)
     assert "DEEPSEEK_API_KEY" in daemon.brain_key_problem()
-
-    monkeypatch.setenv("KUREK_LLM", "haiku")
-    assert "ANTHROPIC_API_KEY" in daemon.brain_key_problem()
-
-    monkeypatch.setattr(daemon, "get_anthropic_key", lambda: "sk-test-not-real")
+    monkeypatch.setattr(daemon, "get_deepseek_key", lambda: "sk-test-not-real")
     assert daemon.brain_key_problem() is None
 
 
@@ -321,7 +313,7 @@ def test_pinned_rule_follows_the_user_message_but_not_the_history(monkeypatch, t
     last = messages[-1]
     assert last["role"] == "user" and last["content"].startswith("hello\n\n[PINNED USER RULES")
     assert last["content"].endswith("- [brief] Two sentences at most.")
-    assert engine.history[-2] == {"role": "user", "content": "hello"}
+    assert {k: v for k, v in engine.history[-2].items() if k != "ts"} == {"role": "user", "content": "hello"}
 
 
 def test_no_pinned_rules_leaves_the_user_message_unchanged(monkeypatch, tmp_path):

@@ -33,7 +33,6 @@ from typing import Any
 
 # Default allowed project roots if ~/.config/kurek/codebase_roots is missing
 DEFAULT_ROOTS = [
-    Path.home() / "Projects",
     Path.home() / "dev",
 ]
 
@@ -114,7 +113,6 @@ def get_allowed_roots() -> list[Path]:
             try:
                 cfg_file.write_text(
                     "# Kurek Codebase Allowed Project Roots\n"
-                    "~/Projects\n"
                     "~/dev\n",
                     encoding="utf-8",
                 )
