@@ -73,3 +73,7 @@ HANDOFF.md
 
 # Local Claude memory
 CLAUDE.local.md
+
+# Eval run output
+rules_eval.json
+llm_ab.json
