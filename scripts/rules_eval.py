@@ -85,7 +85,7 @@ def main() -> int:
             rules.RULES_PATH = path
             runs = []
             for _ in range(args.reps):
-                rec = run_one(engine, "haiku", case["prompt"])
+                rec = run_one(engine, case["prompt"])
                 fails = check(case, rec["reply"], rec["tools"])
                 runs.append({"reply": rec["reply"], "tools": rec["tools"], "failures": fails,
                              "first_sentence_s": rec["first_sentence_s"], "total_s": rec["total_s"]})

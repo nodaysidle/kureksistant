@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Side-by-side run of Kurek's real prompt + tool loop on DeepSeek and Claude Haiku.
+"""Run Kurek's real prompt + tool loop on DeepSeek-Flash over a fixed set of prompts.
 
-    .venv/bin/python scripts/llm_ab.py [--only deepseek|haiku] [--out FILE]
+    .venv/bin/python scripts/llm_ab.py [--out FILE]
 
 Read-only tools (web_search, weather, vault reads, system status) really run, so
 search answers are real. Every other tool is recorded, not executed: nothing on the
@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 from pathlib import Path
@@ -21,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 PROMPTS = [
     ("web", "who won the last Formula 1 race?"),
-    ("web", "what's the latest news about Anthropic's Claude Haiku 5.5?"),
+    ("web", "what's the latest news about DeepSeek-V4.1-Flash?"),
     ("web", "kdaj igra Olimpija naslednjo tekmo?"),
     ("web", "is it going to rain in Ljubljana tomorrow?"),
     ("computer", "turn the volume down to 30 percent"),
@@ -88,8 +87,7 @@ def build_engine():
     return engine
 
 
-def run_one(engine, provider: str, prompt: str) -> dict:
-    os.environ["KUREK_LLM"] = provider
+def run_one(engine, prompt: str) -> dict:
     engine.history = []
     engine.calls = []
     engine._cancel_requested = False
@@ -110,19 +108,15 @@ def run_one(engine, provider: str, prompt: str) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--only", choices=["deepseek", "haiku"])
     ap.add_argument("--out", default="llm_ab.json")
     args = ap.parse_args()
-    providers = [args.only] if args.only else ["deepseek", "haiku"]
 
     engine = build_engine()
     results = []
     for kind, prompt in PROMPTS:
-        row = {"kind": kind, "prompt": prompt}
-        for p in providers:
-            row[p] = run_one(engine, p, prompt)
-            print(f"[{p:8}] {prompt[:40]:40} {row[p]['total_s']:5}s  {row[p]['tools']}  -> {row[p]['reply'][:80]}", flush=True)
-        results.append(row)
+        rec = run_one(engine, prompt)
+        print(f"{prompt[:40]:40} {rec['total_s']:5}s  {rec['tools']}  -> {rec['reply'][:80]}", flush=True)
+        results.append({"kind": kind, "prompt": prompt, **rec})
     Path(args.out).write_text(json.dumps(results, indent=2, ensure_ascii=False))
     print(f"wrote {args.out}")
 

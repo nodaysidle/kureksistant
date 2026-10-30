@@ -14,9 +14,6 @@ faster-whisper
 # HTTP clients for DeepSeek / xAI / OpenRouter / Deepgram
 requests
 
-# Claude Haiku brain (KUREK_LLM=haiku)
-anthropic
-
 # Phone live voice: WebSocket server for the app and client to xAI realtime
 websockets
 

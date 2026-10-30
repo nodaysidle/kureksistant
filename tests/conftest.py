@@ -14,13 +14,13 @@ import pytest
 
 _LIVE_ENV = (
     "DEEPSEEK_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY",
-    "DEEPGRAM_API_KEY", "TYPESAFE_API_KEY", "ANTHROPIC_API_KEY", "HAIKU_API_KEY",
+    "DEEPGRAM_API_KEY", "TYPESAFE_API_KEY",
 )
 
 
 @pytest.fixture(autouse=True)
 def _clean_kurek_env(monkeypatch):
-    """A shell that exports the live .env (KUREK_LLM, KUREK_REMOTE_ALLOW_EXEC, keys)
+    """A shell that exports the live .env (KUREK_REMOTE_ALLOW_EXEC, keys)
     must not change test outcomes; tests opt in with monkeypatch.setenv."""
     for name in list(os.environ):
         if name.startswith("KUREK_") or name in _LIVE_ENV:

@@ -21,7 +21,7 @@
 
 **A headless voice assistant daemon on Linux — no GUI on purpose.**
 
-Kurek is a headless Python daemon (`kurek_daemon.py`) with no GUI that runs as a systemd user service on your Linux desktop. You summon it with a mouse middle-click, a hotkey or the `kurek` CLI. It listens, thinks with DeepSeek-Flash (or Claude Haiku 5.5 when you set `KUREK_LLM=haiku`), talks back with xAI Grok TTS (voice **Sol**), and can act on your desktop through 27 tool modules in [`actions/`](actions/), including windows, apps, the browser, files, the clipboard, screen vision and memory.
+Kurek is a headless Python daemon (`kurek_daemon.py`) with no GUI that runs as a systemd user service on your Linux desktop. You summon it with a mouse middle-click, a hotkey or the `kurek` CLI. It listens, thinks with DeepSeek-Flash (DeepSeek-V4.1-Flash), talks back with xAI Grok TTS (voice **Sol**), and can act on your desktop through 27 tool modules in [`actions/`](actions/), including windows, apps, the browser, files, the clipboard, screen vision and memory.
 
 It is built and tested on **Arch Linux with Omarchy / Hyprland**. The old macOS menu-bar client and PyQt6 GUI were removed in v0.2.2.
 
@@ -131,10 +131,7 @@ nano .env
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `DEEPSEEK_API_KEY` | **Yes**, unless `KUREK_LLM=haiku` | Reasoning and tool dispatch (DeepSeek-Flash). |
-| `KUREK_LLM` | Optional | `haiku` switches the brain to Claude Haiku 5.5. Unset keeps DeepSeek-Flash. |
-| `ANTHROPIC_API_KEY` / `HAIKU_API_KEY` | With `KUREK_LLM=haiku` | Anthropic key for the Haiku brain. |
-| `KUREK_HAIKU_MODEL` / `KUREK_HAIKU_EFFORT` / `KUREK_HAIKU_THINKING` | Optional | Haiku model (default `claude-haiku-5-5`), effort (default `low`), and `off` to turn thinking off. |
+| `DEEPSEEK_API_KEY` | **Yes** | Reasoning and tool dispatch (DeepSeek-Flash). |
 | `XAI_API_KEY` | **Yes** | Speech (xAI Grok TTS, voice Sol). |
 | `GEMINI_API_KEY` | Optional | Screen vision and Gemini-backed tools. |
 | `DEEPGRAM_API_KEY` | Optional | Deepgram Nova-2 STT (voice audio is sent to Deepgram). |
@@ -277,7 +274,7 @@ The older `KUREK_UNRESTRICTED_SHELL` / `KUREK_ALLOW_SHELL` variables no longer e
 
 ## ⚠️ Known limits
 
-- **Not offline:** reasoning (DeepSeek-Flash or Claude Haiku) needs internet. Speech-to-text falls back to local `faster-whisper`, and voice falls back to the robotic `spd-say` when xAI is unreachable.
+- **Not offline:** reasoning (DeepSeek-Flash) needs internet. Speech-to-text falls back to local `faster-whisper`, and voice falls back to the robotic `spd-say` when xAI is unreachable.
 - **Desktop scope:** Hyprland/Omarchy comes first. Other Wayland compositors need their own keybinds, and the Hyprland-specific window actions won't apply there.
 - **Timed-out tools keep running:** they can't be killed. After 120 s Kurek reports the timeout, but the tool may finish in the background.
 - **Confirmation wording:** after a "yes", Kurek replies "Confirmed, doing it now." as the action starts; a failure is logged and shown as a notification.

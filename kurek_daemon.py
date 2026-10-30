@@ -6,7 +6,7 @@ Background service with observed ~450MB peak RAM when faster-whisper is loaded.
 Connects with:
   • Linux UDS trigger (kurek-trigger) / Hyprland Middle Click
   • Android remote app over Tailscale (/remote/prompt, SSE)
-  • Brain: DeepSeek API (deepseek-flash), or Claude Haiku when KUREK_LLM=haiku
+  • Brain: DeepSeek API (deepseek-flash, served by DeepSeek-V4.1-Flash)
   • STT: OpenRouter Whisper / Deepgram Nova-2, local faster-whisper fallback
   • xAI Grok TTS (Sol) via persistent mpv PipeWire sink
 """
@@ -39,7 +39,6 @@ sys.path.insert(0, str(BASE_DIR))
 
 import socket
 from memory.config_manager import (
-    get_anthropic_key,
     get_deepgram_key,
     get_deepseek_key,
     get_openrouter_api_key,
@@ -54,7 +53,7 @@ from core.decision_client import (
     auto_screen_enabled,
     query_needs_screen,
 )
-from core.llm_client import brain_name, stream_deepseek_sentences, use_haiku
+from core.llm_client import brain_name, stream_deepseek_sentences
 from core.live_voice import live_voice_enabled, start_live_servers
 from core.tts import create_tts_player
 from core.stt import DeepgramSTT, FallbackSTT, OpenRouterSTT, STTError, WhisperSTT
@@ -168,11 +167,8 @@ _warned_truncated: set[tuple[Path, int]] = set()
 
 
 def brain_key_problem() -> str | None:
-    """Why the active brain cannot answer, or None when its API key is present."""
-    if use_haiku():
-        if not get_anthropic_key():
-            return "ANTHROPIC_API_KEY (or HAIKU_API_KEY) missing — Kurek cannot answer."
-    elif not get_deepseek_key():
+    """Why the brain cannot answer, or None when its API key is present."""
+    if not get_deepseek_key():
         return "DEEPSEEK_API_KEY missing — Kurek cannot answer."
     return None
 
@@ -1127,8 +1123,7 @@ class KurekEngine:
 
             for ev in stream_deepseek_sentences(
                 messages=messages,
-                # Final round: keep the tool list and forbid calls instead of
-                # dropping tools, or Haiku rejects this round's thinking blocks.
+                # Final round: forbid tool calls so the model has to answer.
                 tools=self.openai_tools or None,
                 tool_choice="none" if turn_idx == max_tool_turns - 1 else None,
                 model="deepseek-flash",
