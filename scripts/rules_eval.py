@@ -32,7 +32,9 @@ LOCAL_CASES = Path(os.environ.get("KUREK_RULES_EVAL_FILE") or Path.home() / ".co
 def check(case: dict, reply: str, tools: list[str]) -> list[str]:
     """Why the reply breaks the case's expectations; an empty list means it passed."""
     failures = []
-    sentences = [s for s in re.split(r"(?<=[.!?])\s+", reply.strip()) if s]
+    # "1. " and "**1." list markers end in a period but are not sentences
+    prose = re.sub(r"(?m)^\s*\**\d+\.\s*", "", reply.strip())
+    sentences = [s for s in re.split(r"(?<=[.!?])\s+", prose) if s]
     if "max_words" in case and len(reply.split()) > case["max_words"]:
         failures.append(f"{len(reply.split())} words, limit {case['max_words']}")
     if "max_sentences" in case and len(sentences) > case["max_sentences"]:

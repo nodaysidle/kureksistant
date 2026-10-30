@@ -32,7 +32,7 @@ It is built and tested on **Arch Linux with Omarchy / Hyprland**. The old macOS 
 ## ✨ Features (v0.2.3)
 
 ### Omarchy / Hyprland desktop integration
-- **Terminals and shell:** Velocitty is the default terminal and Herdr runs inside it, with a Fish shell alias. btop/htop open in a terminal.
+- **Terminals and shell:** Ghostty is the default terminal and Herdr runs inside it, with a Fish shell alias. btop/htop open in a terminal.
 - **Native `hyprctl dispatch` window control:**
   - cycle windows;
   - focus an already-open app (`workspace` + `focuswindow address:`);
