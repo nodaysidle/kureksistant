@@ -110,9 +110,24 @@ def active(db_path: Path | None = None) -> list[sqlite3.Row]:
             conn.close()
 
 
-def search(query: str, db_path: Path | None = None) -> list[sqlite3.Row]:
-    q = query.casefold()
-    return [r for r in active(db_path) if q in r["text"].casefold()]
+# Sources Kurek writes during a chat. A correction from any other source was made outside it.
+_CHAT_SOURCES = ("manage_memory", "daily/", "jev")
+
+
+def outside_correction_ts(db_path: Path | None = None) -> str:
+    """When memory was last corrected outside the chat (by hand or by another agent), or "".
+
+    Chat turns from before then may still repeat what was corrected, and the model
+    believes the chat over the memory block, so those turns stop going to the model."""
+    with _lock:
+        conn = _connect(db_path)
+        try:
+            rows = conn.execute(
+                "SELECT ts, source FROM ledger WHERE supersedes IS NOT NULL ORDER BY id DESC"
+            ).fetchall()
+        finally:
+            conn.close()
+    return next((r["ts"] for r in rows if not r["source"].startswith(_CHAT_SOURCES)), "")
 
 
 def prompt_block(limit: int, db_path: Path | None = None) -> str:

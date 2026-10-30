@@ -36,3 +36,11 @@ def _no_desktop_toasts(tmp_path_factory, monkeypatch):
     stub.write_text("#!/bin/sh\nexit 0\n")
     stub.chmod(0o755)
     monkeypatch.setenv("PATH", f"{stub_dir}:{os.environ['PATH']}")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_memory_db(tmp_path, monkeypatch):
+    """No test may open the live memory/kurek_memory.db; tests that need a DB set their own."""
+    from memory import memory_manager
+
+    monkeypatch.setattr(memory_manager, "DB_PATH", tmp_path / "kurek_memory.db")

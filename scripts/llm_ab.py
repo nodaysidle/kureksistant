@@ -41,6 +41,7 @@ READ_ONLY = {
     "weather_report": None,
     "vault_knowledge": {"read", "search", "list_projects"},
     "system_monitor": {"status"},
+    "manage_memory": {"recall"},
 }
 
 

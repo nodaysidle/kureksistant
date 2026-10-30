@@ -68,7 +68,10 @@ It is built and tested on **Arch Linux with Omarchy / Hyprland**. The old macOS 
 - **Learned memory, an append-only ledger:** what Kurek learns through `manage_memory` and Jev triage goes into a `ledger` table in `memory/kurek_memory.db`. The database refuses updates and deletes, and every row needs a source. A correction is a new row that supersedes the old one (the same key does it automatically, or pass `replaces=<#id>`), so history stays and the prompt carries only entries nothing has replaced. The block is capped by `KUREK_MEMORY_FILE_MAX_CHARS`; if the oldest entries have to be left out, a warning is logged.
 - **Proposals, `~/kurek_proposed_rules.md`:** the nightly dream cycle and Jev's boundary triage only *propose* rules here, with a source and your words verbatim. Nothing reads this file back into a prompt. You promote a proposal by copying it into `rules.toml`.
 - **Everything else:** daily logs in `~/memory/`, a hand-written reference in `~/MEMORY.md`, and `~/ALIGNMENT_SYNTHESIS.md`, which is still read if present but is no longer written by Kurek. Memory files longer than the cap are cut to head and tail, with a warning in the log. Optional Hermes continuity is available via `HERMES_PROFILE` / `HERMES_MEMORIES_DIR`.
-- **Fresh start:** say "Kurek, fresh start" (or "new conversation") to clear only the recent chat in `memory/kurek_history.json`. Rules, learned memory and daily logs stay. Use it when old chat contradicts a correction.
+- **Recall:** ask about a past conversation ("what did I say about the phone app two days ago?") and Kurek searches the daily logs with several keywords, then answers with the date and what was said. What recall finds is never saved as memory unless you ask.
+- **Who wins:** rules, then what you say now, then learned memory, then `~/MEMORY.md` and Hermes, then earlier chat and daily logs. If you say something that goes against a lasting fact (your terminal, city, where files go), Kurek asks whether it changed before acting and saves the change only after your yes. When you correct learned memory outside the chat (by hand or with another agent), chat turns from before the correction stop going to the model, with a warning in the log.
+- **Fresh start:** say "Kurek, fresh start" (or "new conversation") to clear only the recent chat in `memory/kurek_history.json`. Rules, learned memory and daily logs stay.
+- **Terms:** [GLOSSARY.md](GLOSSARY.md) names each store.
 - **Why it is built this way, and how rule-following is measured:** [docs/ANTI-DRIFT.md](docs/ANTI-DRIFT.md).
 - **Storage:** SQLite in WAL mode with an FTS5 full-text index. On first start the legacy `memory/long_term.json` is imported automatically (a failed import is rolled back, logged and retried; the JSON file is never overwritten before migration completes).
 
@@ -84,7 +87,7 @@ It is built and tested on **Arch Linux with Omarchy / Hyprland**. The old macOS 
 ### Other tools (unchanged)
 - `process_sentinel`: announces when long builds or tests finish.
 - `draft_to_clipboard`: dictate commit messages and PR text into `wl-copy`.
-- `workstation_radar`: git status across `~/Projects` and `~/dev`.
+- `workstation_radar`: git status across the repos under `~/dev`.
 - `vault_knowledge`: queries the nodaysidle-knowledge Obsidian vault. Set `KUREK_VAULT_DIR`, or it looks in `~/dev/nodaysidle/nodaysidle-knowledge`.
 - `open_app`: launches desktop apps by name, including the Grok Bot app (`grok-bot`).
 - `dream_tool`: nightly reflection journal.

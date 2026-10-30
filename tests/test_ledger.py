@@ -57,11 +57,17 @@ def test_replacing_a_missing_row_is_refused(db: Path) -> None:
     assert ledger.active(db) == []
 
 
-def test_prompt_block_empty_and_search(db: Path) -> None:
+def test_prompt_block_empty(db: Path) -> None:
     assert ledger.prompt_block(1000, db) == ""
-    append("fact", "Sam lives in Oslo", "s", db_path=db)
-    assert [r["text"] for r in ledger.search("OSLO", db)] == ["Sam lives in Oslo"]
-    assert ledger.search("paris", db) == []
+
+
+def test_only_corrections_made_outside_the_chat_count(db: Path) -> None:
+    assert ledger.outside_correction_ts(db) == ""
+    append("fact", "terminal: foot", "manage_memory call 2026-10-01", key="terminal", db_path=db)
+    append("fact", "terminal: kitty", "manage_memory call 2026-10-02", key="terminal", db_path=db)
+    assert ledger.outside_correction_ts(db) == ""  # a correction made in the chat agrees with the chat
+    append("fact", "terminal: ghostty", "owner's correction by hand", key="terminal", db_path=db)
+    assert ledger.outside_correction_ts(db) == ledger.active(db)[-1]["ts"]
 
 
 def test_prompt_block_over_limit_keeps_newest_and_warns_once(db: Path, capsys) -> None:
@@ -99,6 +105,19 @@ def test_remember_replaces_by_id_and_recall_sees_only_the_new_one(tool: Path) ->
     found = memory_tool.manage_memory({"action": "recall", "query": "Mr"})
     assert "Mr Smith" in found and "Learned #2" in found
     assert "Learned #1" not in found
+
+
+def test_recall_finds_past_conversations_by_any_keyword_with_their_date(tool: Path) -> None:
+    logs = tool / "memory"
+    logs.mkdir()
+    (logs / "2026-10-28.md").write_text(
+        "\n### [10:00:00] turn\n**User:** the phone app loses the chat when I rotate it\n**Kurek:** Noted.\n"
+        "\n### [10:05:00] turn\n**User:** what's the weather\n**Kurek:** Sunny.\n",
+        encoding="utf-8",
+    )
+    found = memory_tool.manage_memory({"action": "recall", "query": "android apk rotate crash"})
+    assert "[Said on 2026-10-28]" in found and "rotate" in found
+    assert "weather" not in found
 
 
 def test_remember_with_unknown_replaces_saves_nothing(tool: Path) -> None:

@@ -107,8 +107,6 @@ def _make_lite_engine(monkeypatch):
         daemon.KurekEngine, "_hourly_consolidation_loop", lambda self: None
     )
     monkeypatch.setattr(daemon.KurekEngine, "_notify_state", lambda self, _s: None)
-    monkeypatch.setattr(daemon, "load_memory", lambda: {})
-    monkeypatch.setattr(daemon, "format_memory_for_prompt", lambda *_a, **_k: "")
     monkeypatch.setattr(daemon, "resolve_hermes_memory_dirs", lambda: [])
     monkeypatch.setattr(daemon, "get_user_name", lambda: "Tester")
 
