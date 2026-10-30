@@ -120,6 +120,18 @@ def test_recall_finds_past_conversations_by_any_keyword_with_their_date(tool: Pa
     assert "weather" not in found
 
 
+def test_recall_ignores_filler_words(tool: Path) -> None:
+    logs = tool / "memory"
+    logs.mkdir()
+    (logs / "2026-10-28.md").write_text(
+        "\n### [10:00:00] turn\n**User:** what did you say about the weather\n**Kurek:** Sunny.\n"
+        "\n### [10:05:00] turn\n**User:** the phone app crashes\n**Kurek:** Noted.\n",
+        encoding="utf-8",
+    )
+    found = memory_tool.manage_memory({"action": "recall", "query": "what did I say about the phone app"})
+    assert "crashes" in found and "weather" not in found
+
+
 def test_remember_with_unknown_replaces_saves_nothing(tool: Path) -> None:
     out = memory_tool.manage_memory({"action": "remember", "key": "k", "value": "v", "replaces": 42})
     assert out.startswith("Nothing was saved")

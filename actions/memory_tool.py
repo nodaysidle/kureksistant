@@ -13,8 +13,17 @@ from memory import ledger
 from memory.config_manager import resolve_hermes_memory_dirs
 
 
+# Words that appear in nearly every turn; scoring them buries the real hits.
+_FILLER = frozenset(
+    "about after again all also and any are ask asked before but can could did does done for from "
+    "had has have how into its just last let like me more my not now of off on or our out over said "
+    "say says so some tell than that the their them then there these they this told to too was we "
+    "were what when where which who why will with would you your".split()
+)
+
+
 def _keywords(query: str) -> set[str]:
-    return {w for w in re.findall(r"\w+", query.casefold()) if len(w) > 1}
+    return {w for w in re.findall(r"\w+", query.casefold()) if len(w) > 1 and w not in _FILLER}
 
 
 def _score(text: str, words: set[str]) -> int:

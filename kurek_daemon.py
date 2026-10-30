@@ -473,13 +473,17 @@ def project_names() -> list[str]:
         return []
 
 
+# Marks the history tool note; the speech guard and the reply clean-up match on it.
+TOOL_NOTE = "Tool calls in that turn"
+
+
 def history_message(turn: dict) -> dict:
     """A stored turn as a chat message. Assistant turns carry the tools they ran, so a later
     turn can tell whether it really searched instead of guessing from the reply text."""
     content = turn.get("content", "")
     # Only turns that ran tools get the note: a "none" note on every turn taught the model to copy it.
     if turn.get("role") == "assistant" and turn.get("tools"):
-        content = f"{content}\n\n(Tool calls in that turn, recorded by the daemon: {'; '.join(turn['tools'])}.)"
+        content = f"{content}\n\n({TOOL_NOTE}, recorded by the daemon: {'; '.join(turn['tools'])}.)"
     return {"role": turn.get("role", "user"), "content": content}
 
 
@@ -1210,7 +1214,7 @@ class KurekEngine:
                 elif ev_type == "sentence":
                     raw_sentence = ev.get("sentence", "")
                     # The model copied the history's tool note: speak nothing from there on.
-                    if "Tool calls in that turn" in raw_sentence:
+                    if TOOL_NOTE in raw_sentence:
                         note_copied = True
                     if note_copied:
                         continue
@@ -1294,7 +1298,7 @@ class KurekEngine:
         reply_text = re.sub(r"</[｜|]{2}DSML[｜|]{2}.*?>", "", reply_text)
         reply_text = re.sub(r"<[｜|].*?[｜|]>", "", reply_text)
         reply_text = re.sub(r"</[｜|].*?[｜|]>", "", reply_text)
-        reply_text = re.sub(r"\(Tool calls in that turn, recorded by the daemon:.*", "", reply_text, flags=re.DOTALL)
+        reply_text = re.sub(rf"\({TOOL_NOTE}.*", "", reply_text, flags=re.DOTALL)
         reply_text = reply_text.strip()
         if not reply_text:
             # Successful tool path with no spoken content — not a transport failure.
