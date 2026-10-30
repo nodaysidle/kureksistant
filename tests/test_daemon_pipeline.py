@@ -10,6 +10,7 @@ import pytest
 
 import kurek_daemon as daemon
 from core import tts as tts_mod
+from memory import reference
 from tests.test_stream_errors import _make_lite_engine
 
 
@@ -64,7 +65,7 @@ def test_silence_stop_reasons():
 def test_read_capped_keeps_head_and_tail(tmp_path):
     f = tmp_path / "MEMORY.md"
     f.write_text("HEAD" + "x" * 10_000 + "TAIL", encoding="utf-8")
-    out = daemon.read_capped(f, limit=300)
+    out = reference.read_capped(f, limit=300)
     assert out.startswith("HEAD")
     assert out.endswith("TAIL")
     assert "omitted" in out
@@ -74,8 +75,8 @@ def test_read_capped_keeps_head_and_tail(tmp_path):
 def test_read_capped_warns_once_when_truncating(tmp_path, capsys):
     f = tmp_path / "m.md"
     f.write_text("x" * 500, encoding="utf-8")
-    daemon.read_capped(f, limit=300)
-    daemon.read_capped(f, limit=300)
+    reference.read_capped(f, limit=300)
+    reference.read_capped(f, limit=300)
     out = capsys.readouterr().out
     assert out.count("WARNING") == 1 and str(f) in out
 
@@ -83,7 +84,7 @@ def test_read_capped_warns_once_when_truncating(tmp_path, capsys):
 def test_read_capped_small_file_unchanged(tmp_path):
     f = tmp_path / "a.md"
     f.write_text("  short\n", encoding="utf-8")
-    assert daemon.read_capped(f) == "short"
+    assert reference.read_capped(f) == "short"
 
 
 def test_history_save_is_atomic_and_private(monkeypatch, tmp_path):

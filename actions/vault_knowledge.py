@@ -38,7 +38,6 @@ def _resolve_vault_dir() -> Path | None:
     # 3. Expanduser fallbacks (no hardcoded absolute home paths)
     candidates = [
         Path.home() / "dev" / "nodaysidle" / "nodaysidle-knowledge",
-        Path.home() / "Projects" / "nodaysidle-knowledge",
     ]
     for cand in candidates:
         if cand.exists() and cand.is_dir():

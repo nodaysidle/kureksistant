@@ -9,12 +9,20 @@ from datetime import datetime
 from pathlib import Path
 
 from core.proposals import propose
-from memory import ledger
-from memory.config_manager import resolve_hermes_memory_dirs
+from memory import ledger, reference
+
+
+# Words that appear in nearly every turn; scoring them buries the real hits.
+_FILLER = frozenset(
+    "about after again all also and any are ask asked before but can could did does done for from "
+    "had has have how into its just last let like me more my not now of off on or our out over said "
+    "say says so some tell than that the their them then there these they this told to too was we "
+    "were what when where which who why will with would you your".split()
+)
 
 
 def _keywords(query: str) -> set[str]:
-    return {w for w in re.findall(r"\w+", query.casefold()) if len(w) > 1}
+    return {w for w in re.findall(r"\w+", query.casefold()) if len(w) > 1 and w not in _FILLER}
 
 
 def _score(text: str, words: set[str]) -> int:
@@ -40,17 +48,9 @@ def _search_daily_logs(words: set[str], limit: int = 5) -> list[str]:
     return [f"• [Said on {day}] {text[:400]}" for _, day, text in hits[:limit]]
 
 
-def _resolve_hermes_dir() -> Path | None:
-    for candidate in resolve_hermes_memory_dirs():
-        if candidate.exists() and candidate.is_dir():
-            return candidate
-    return None
-
-
 def manage_memory(parameters: dict, **kwargs) -> str:
     params = parameters or {}
     action = params.get("action", "remember").lower()
-    hermes_dir = _resolve_hermes_dir()
 
     if action == "recall":
         words = _keywords(params.get("query", ""))
@@ -59,30 +59,12 @@ def manage_memory(parameters: dict, **kwargs) -> str:
 
         found: list[tuple[int, str]] = []
 
-        # 1. Hermes memory files
-        if hermes_dir and hermes_dir.exists():
-            for filename in ("USER.md", "MEMORY.md"):
-                file_path = hermes_dir / filename
-                if file_path.exists():
-                    try:
-                        for block in file_path.read_text(encoding="utf-8").split("§"):
-                            clean_block = " ".join(block.split())
-                            if score := _score(clean_block, words):
-                                found.append((score, f"• [Hermes {filename}] {clean_block}"))
-                    except Exception:
-                        pass
+        # 1. Hermes memories and reference facts (~/MEMORY.md)
+        for label, text in reference.entries():
+            if score := _score(text, words):
+                found.append((score, f"• [{label}] {text}"))
 
-        # 2. Reference facts (~/MEMORY.md)
-        reference = Path.home() / "MEMORY.md"
-        if reference.exists():
-            try:
-                for line in reference.read_text(encoding="utf-8").splitlines():
-                    if line.strip().startswith("-") and (score := _score(line, words)):
-                        found.append((score, f"• [Reference facts] {line.strip()}"))
-            except Exception:
-                pass
-
-        # 3. The learned-memory ledger
+        # 2. The learned-memory ledger
         for row in ledger.active():
             if score := _score(row["text"], words):
                 found.append((score, f"• [Learned #{row['id']}] {row['text']}"))
@@ -120,7 +102,7 @@ def manage_memory(parameters: dict, **kwargs) -> str:
 
     # 1. Sync to Hermes MEMORY.md if available
     try:
-        if hermes_dir:
+        if hermes_dir := reference.hermes_dir():
             mem_file = hermes_dir / "MEMORY.md"
             if mem_file.exists() and mem_file.is_file():
                 entry = f"\n§\n**[{category.upper()}] {key}:** {value}{salience_tag}\n"

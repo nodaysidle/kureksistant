@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from actions import memory_tool
-from memory import ledger, memory_manager
+from memory import ledger, reference
 from memory.ledger import LedgerError, append
 
 
@@ -83,10 +83,9 @@ def test_prompt_block_over_limit_keeps_newest_and_warns_once(db: Path, capsys) -
 
 @pytest.fixture
 def tool(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(memory_manager, "DB_PATH", tmp_path / "kurek_memory.db")
-    monkeypatch.setattr(memory_manager, "MEMORY_PATH", tmp_path / "long_term.json")
+    monkeypatch.setattr(ledger, "DB_PATH", tmp_path / "kurek_memory.db")
     monkeypatch.setattr(memory_tool.Path, "home", lambda: tmp_path)
-    monkeypatch.setattr(memory_tool, "resolve_hermes_memory_dirs", lambda: [])
+    monkeypatch.setattr(reference, "resolve_hermes_memory_dirs", lambda: [])
     monkeypatch.setattr(memory_tool, "_triage_with_jev", lambda k, v: None)
     (tmp_path / "MEMORY.md").write_text("# Memory\n", encoding="utf-8")
     return tmp_path
@@ -118,6 +117,18 @@ def test_recall_finds_past_conversations_by_any_keyword_with_their_date(tool: Pa
     found = memory_tool.manage_memory({"action": "recall", "query": "android apk rotate crash"})
     assert "[Said on 2026-10-28]" in found and "rotate" in found
     assert "weather" not in found
+
+
+def test_recall_ignores_filler_words(tool: Path) -> None:
+    logs = tool / "memory"
+    logs.mkdir()
+    (logs / "2026-10-28.md").write_text(
+        "\n### [10:00:00] turn\n**User:** what did you say about the weather\n**Kurek:** Sunny.\n"
+        "\n### [10:05:00] turn\n**User:** the phone app crashes\n**Kurek:** Noted.\n",
+        encoding="utf-8",
+    )
+    found = memory_tool.manage_memory({"action": "recall", "query": "what did I say about the phone app"})
+    assert "crashes" in found and "weather" not in found
 
 
 def test_remember_with_unknown_replaces_saves_nothing(tool: Path) -> None:

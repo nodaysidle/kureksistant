@@ -13,7 +13,9 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from memory import memory_manager
+from memory.atomic_io import chmod_private
+
+DB_PATH = Path(__file__).resolve().parent / "kurek_memory.db"
 
 _lock = threading.Lock()
 
@@ -51,9 +53,10 @@ class LedgerError(Exception):
 
 
 def _connect(db_path: Path | None) -> sqlite3.Connection:
-    path = db_path or memory_manager.DB_PATH
+    path = db_path or DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), timeout=10.0, isolation_level=None)
+    chmod_private(path, f"{path}-wal", f"{path}-shm")
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA)
     return conn

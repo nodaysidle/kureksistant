@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 import kurek_daemon as daemon
+from core import rules
 from tests.test_stream_errors import _make_lite_engine
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,8 +19,8 @@ LANGUAGE_POLICY = re.compile(r"reply in (?:english|slovenian|italian)\b|\b(?:eng
 def _system_prompt(monkeypatch, tmp_path) -> str:
     engine = _make_lite_engine(monkeypatch)
     engine.history_file = tmp_path / "hist.json"
-    monkeypatch.setattr(daemon, "rules_prompt_block", lambda: "")
-    monkeypatch.setattr(daemon, "rules_pinned_block", lambda: "")
+    monkeypatch.setattr(rules, "prompt_block", lambda: "")
+    monkeypatch.setattr(rules, "pinned_block", lambda: "")
     seen: list[list[dict]] = []
 
     def fake_stream(**kwargs):

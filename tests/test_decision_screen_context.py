@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 import core.decision_client as decision_client
+from memory import reference
 
 # Deliberately not an sk-/xai-/AIza-shaped token — packaging deny-list scans tests.
 SECRET_KEY = "or-test-secret-DO-NOT-LEAK-9f82d28"
@@ -107,7 +108,7 @@ def _make_lite_engine(monkeypatch):
         daemon.KurekEngine, "_hourly_consolidation_loop", lambda self: None
     )
     monkeypatch.setattr(daemon.KurekEngine, "_notify_state", lambda self, _s: None)
-    monkeypatch.setattr(daemon, "resolve_hermes_memory_dirs", lambda: [])
+    monkeypatch.setattr(reference, "resolve_hermes_memory_dirs", lambda: [])
     monkeypatch.setattr(daemon, "get_user_name", lambda: "Tester")
 
     engine = daemon.KurekEngine()

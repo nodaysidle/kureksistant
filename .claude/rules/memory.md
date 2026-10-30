@@ -10,5 +10,5 @@ paths:
    - Never duplicate session logs or preferences across reload/re-migration cycles.
 
 2. **Database Isolation**:
-   - Automated tests touching memory must always re-point `memory_manager.DB_PATH` and `memory_manager.MEMORY_PATH` to temporary directories.
+   - Automated tests touching memory must always re-point `memory.ledger.DB_PATH` to a temporary directory (`tests/conftest.py` does it for every test).
    - Never run tests against the working tree `memory/kurek_memory.db`.

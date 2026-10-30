@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import kurek_daemon as daemon
+from core import context
 
 
 def test_assistant_turn_lists_its_tools():
-    msg = daemon.history_message(
+    msg = context.history_message(
         {
             "role": "assistant",
             "content": "Released Oct 27.",
@@ -20,16 +21,16 @@ def test_assistant_turn_lists_its_tools():
 
 
 def test_turn_without_tools_has_no_note():
-    msg = daemon.history_message({"role": "assistant", "content": "Hi.", "tools": []})
+    msg = context.history_message({"role": "assistant", "content": "Hi.", "tools": []})
     assert msg["content"] == "Hi."
 
 
 def test_old_turns_and_user_turns_are_unchanged():
-    assert daemon.history_message({"role": "assistant", "content": "Hi."}) == {
+    assert context.history_message({"role": "assistant", "content": "Hi."}) == {
         "role": "assistant",
         "content": "Hi.",
     }
-    assert daemon.history_message({"role": "user", "content": "q", "tools": []}) == {
+    assert context.history_message({"role": "user", "content": "q", "tools": []}) == {
         "role": "user",
         "content": "q",
     }

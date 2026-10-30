@@ -46,7 +46,6 @@ from memory.config_manager import (
     get_xai_key,
     load_api_keys,
     get_remote_token,
-    resolve_hermes_memory_dirs,
 )
 from core.decision_client import (
     SCREEN_CONTEXT_THRESHOLD,
@@ -63,8 +62,7 @@ from core.mpv_sink import get_mpv_sink
 from core.timing import begin_query, end_query
 from core import confirm
 from core.proposals import propose
-from core.rules import pinned_block as rules_pinned_block
-from core.rules import prompt_block as rules_prompt_block
+from core.context import TOOL_NOTE, WHO_WINS, build_messages
 from memory import ledger
 from memory.atomic_io import atomic_write_text
 
@@ -78,10 +76,6 @@ SILENCE_GROWTH = float(os.environ.get("KUREK_SILENCE_GROWTH", "0.6"))       # Ex
 SILENCE_MAX_EXTRA = float(os.environ.get("KUREK_SILENCE_MAX_EXTRA", "10.0")) # Cap on that adaptive extra pause
 MAX_RECORD_SECONDS = float(os.environ.get("KUREK_MAX_RECORD_SECONDS", "180.0")) # Hard ceiling for one dictation
 INITIAL_SILENCE_TIMEOUT = float(os.environ.get("KUREK_INITIAL_SILENCE_TIMEOUT", "30.0")) # Give up if no speech at all
-
-# Upper bound on each memory markdown file injected into the system prompt.
-MEMORY_FILE_MAX_CHARS = int(os.environ.get("KUREK_MEMORY_FILE_MAX_CHARS", "6000"))
-
 
 def vad_update(
     noise_floor: float,
@@ -162,9 +156,6 @@ def silence_stop_reason(now: float, has_speech: bool, last_sound_time: float, re
     return None
 
 
-_warned_truncated: set[tuple[Path, int]] = set()
-
-
 def brain_key_problem() -> str | None:
     """Why the brain cannot answer, or None when its API key is present."""
     if not get_deepseek_key():
@@ -172,18 +163,6 @@ def brain_key_problem() -> str | None:
     return None
 
 
-def read_capped(path: Path, limit: int = MEMORY_FILE_MAX_CHARS) -> str:
-    """Read a markdown memory file, keeping its head and newest tail within limit."""
-    text = path.read_text(encoding="utf-8").strip()
-    if len(text) <= limit:
-        return text
-    if (path, len(text)) not in _warned_truncated:
-        _warned_truncated.add((path, len(text)))
-        print(f"[Kurek Memory] WARNING: {path} is {len(text)} chars, over the {limit} cap; "
-              f"the middle is hidden from the model. Raise KUREK_MEMORY_FILE_MAX_CHARS.", flush=True)
-    head = limit // 3
-    tail = limit - head
-    return f"{text[:head]}\n[… older entries omitted …]\n{text[-tail:]}"
 
 
 
@@ -462,27 +441,6 @@ def classify_confirmation_reply(text: str) -> bool | None:
     return None
 
 
-PROJECTS_DIR = Path.home() / "dev" / "nodaysidle"
-
-
-def project_names() -> list[str]:
-    """The user's projects: every git repo directly inside PROJECTS_DIR."""
-    try:
-        return sorted(p.name for p in PROJECTS_DIR.iterdir() if (p / ".git").exists())
-    except OSError:
-        return []
-
-
-def history_message(turn: dict) -> dict:
-    """A stored turn as a chat message. Assistant turns carry the tools they ran, so a later
-    turn can tell whether it really searched instead of guessing from the reply text."""
-    content = turn.get("content", "")
-    # Only turns that ran tools get the note: a "none" note on every turn taught the model to copy it.
-    if turn.get("role") == "assistant" and turn.get("tools"):
-        content = f"{content}\n\n(Tool calls in that turn, recorded by the daemon: {'; '.join(turn['tools'])}.)"
-    return {"role": turn.get("role", "user"), "content": content}
-
-
 class KurekEngine:
     def __init__(self):
         self.state = KurekState.IDLE
@@ -522,7 +480,6 @@ class KurekEngine:
         # Multi-turn conversational memory & persistence
         self.history_file = BASE_DIR / "memory" / "kurek_history.json"
         self.history = self._load_history()
-        self._warned_history_cutoff = ""
         print(f"[Kurek Memory] Loaded {len(self.history)} prior conversation turns.")
 
         # STT engine: cloud (OpenRouter multilingual Whisper, then Deepgram) when a
@@ -985,51 +942,6 @@ class KurekEngine:
 
         now_str = datetime.now().strftime("%Y-%m-%d %A, %I:%M %p")
 
-        mem_block = ""
-
-        # Inject Hermes memory from configured / default candidate locations
-        hermes_dir = next(
-            (d for d in resolve_hermes_memory_dirs() if d.exists() and d.is_dir()),
-            None,
-        )
-        if hermes_dir:
-            hermes_snippets = []
-            for fname in ("USER.md", "MEMORY.md"):
-                fpath = hermes_dir / fname
-                if fpath.exists():
-                    try:
-                        raw = read_capped(fpath)
-                        clean = "\n".join(b.strip() for b in raw.split("§") if b.strip())
-                        if clean:
-                            hermes_snippets.append(f"[{fname.replace('.md', '')}]\n{clean}")
-                    except Exception as e:
-                        print(f"[Kurek Hermes] Error reading {fname}: {e}")
-            if hermes_snippets:
-                h_text = "\n\n".join(hermes_snippets)
-                mem_block = (mem_block + "\n\n" + h_text).strip()
-
-        # Inject Muse Memory (~/MEMORY.md and ~/ALIGNMENT_SYNTHESIS.md)
-        muse_parts = []
-        muse_core = Path.home() / "MEMORY.md"
-        if muse_core.exists():
-            try:
-                muse_parts.append(f"[MUSE_CORE_MEMORY]\n{read_capped(muse_core)}")
-            except Exception as e:
-                print(f"[Kurek Muse] Error reading ~/MEMORY.md: {e}")
-
-        muse_align = Path.home() / "ALIGNMENT_SYNTHESIS.md"
-        if muse_align.exists():
-            try:
-                muse_parts.append(f"[MUSE_ALIGNMENT_SYNTHESIS]\n{read_capped(muse_align)}")
-            except Exception as e:
-                print(f"[Kurek Muse] Error reading ~/ALIGNMENT_SYNTHESIS.md: {e}")
-
-        if learned := ledger.prompt_block(MEMORY_FILE_MAX_CHARS):
-            muse_parts.append(learned)
-
-        if muse_parts:
-            mem_block = (mem_block + "\n\n" + "\n\n".join(muse_parts)).strip()
-
         user_name = (get_user_name() or "the user").strip()
         sys_prompt = (
             f"You are Kurek, an ultra-fast, terse, hyper-competent personal AI assistant. "
@@ -1082,50 +994,17 @@ class KurekEngine:
             "4. Web Search Integrity: Never invent citations, URLs, snippets, or file paths. If a search yields no relevant results or fails, state the truth in one sentence: say plainly that you found nothing and report the exact query you searched. Do not add commentary or speculation about the query. "
             "5. No Apology Deflections: Apologies are never an acceptable substitute for results or honest reporting. Do not use 'Sorry, Master Alan.' or any variant to close a turn, gloss over an unperformed task, or mask a failure. Report facts, tool outcomes, and errors directly. "
             "6. Clarify Instead of Guessing: If a prompt is ambiguous, blocked, or missing parameters required to act, ask exactly one direct, brief question to resolve the blocker. Do not fabricate missing information or guess. "
-            "WHO WINS WHEN SOURCES DISAGREE (highest first): "
-            "1. [USER RULES]. "
-            "2. The user's current message. If it goes against a lasting fact in [LEARNED MEMORY] (their terminal, name, city, where files go), do not act at all this turn (no tool calls, not even with the remembered value): say what memory holds, ask once whether it changed, and wait for the answer. Save the change with manage_memory (replaces=<#id>) only after they confirm. Something said only for now ('I'm in Koper today', 'use the phone tonight') you simply follow and never save. "
-            "3. [LEARNED MEMORY]. "
-            "4. [MUSE_CORE_MEMORY] reference facts and Hermes [USER] / [MEMORY]. If one disagrees with learned memory, follow learned memory and tell the user in one sentence so they can fix it. "
-            "5. Earlier chat turns and past conversations found by recall: what was said, never proof of what is true now. "
+            + WHO_WINS +
             "RECALL: When the user refers to a past conversation ('two days ago', 'last week', 'what did I say about...') or asks about anything personal you cannot see above, call manage_memory(action='recall') BEFORE saying you don't know. Put several keywords and synonyms in one query (e.g. 'phone apk android crash rotate'). Answer with the date and what was said ('On Tuesday you said...'). What recall finds stays what was said: save it only if the user asks you to remember it. "
             "CONNECTIONS: When you notice a clear link to one of the user's projects or to something said before, and it changes the answer, mention it in one sentence. Never phrase it as an offer. "
             "FILE TASKS: Only when the user asks you to sort, clean up, move, rename or delete files: look first (list the files). A file is connected to a project only when its name or folder clearly names one of the projects listed below. Before moving, renaming or deleting connected files, ask ONE question with the grouped plan (e.g. '3 files look like Kurek Remote builds and 2 like Sonora notes: move them to those projects and keep only the newest APK?'), then act on the answer. Leave any file you are not sure about where it is, and say so. Files with no project link: do what was asked; deletion still needs confirmation."
         )
 
-        vault_anchor = (
-            "[NODAYSIDLE PORTFOLIO & KNOWLEDGE VAULT]\n"
-            "Vault: nodaysidle-knowledge (Obsidian llm-wiki)\n"
-            f"The user's projects (git repos in ~/dev/nodaysidle): {', '.join(project_names()) or 'none found'}.\n"
-            "Social Media / X Strategy: wiki/concepts/x-promo-strategy.md, moc-x-promo.md, reel-clip-workflow.md.\n"
-            "Whenever asked about portfolio projects, roadmap, what must be done, what is done, or social media strategy, ALWAYS call vault_knowledge(action='read'|'list_projects'|'search') to retrieve ground truth."
-        )
-        if rules_block := rules_prompt_block():
-            sys_prompt += f"\n\n{rules_block}"
-        sys_prompt += f"\n\n{vault_anchor}"
-
-        if mem_block:
-            sys_prompt += f"\n\n[USER MEMORY & PREFERENCES]\n{mem_block}"
-
         # Autonomous screen-context detection (Jev → Decision-1 fallback)
         auto_vision_ctx = self._check_auto_screen_context(user_prompt)
         effective_user_prompt = f"{user_prompt}\n\n{auto_vision_ctx}" if auto_vision_ctx else user_prompt
 
-        messages = [
-            {"role": "system", "content": sys_prompt},
-        ]
-        # Last 10 turns for continuity. Turns from before a memory correction made outside the
-        # chat may repeat the old fact, and the model believes the chat over memory, so they go.
-        cutoff = ledger.outside_correction_ts()
-        recent = [t for t in self.history if t.get("ts", "") > cutoff] if cutoff else self.history
-        if len(recent) < len(self.history) and cutoff != self._warned_history_cutoff:
-            self._warned_history_cutoff = cutoff
-            print(f"[Kurek Memory] WARNING: {len(self.history) - len(recent)} chat turns from before "
-                  f"the memory correction of {cutoff} are no longer sent to the model.", flush=True)
-        for turn in recent[-10:]:
-            messages.append(history_message(turn))
-        pinned = rules_pinned_block()
-        messages.append({"role": "user", "content": f"{effective_user_prompt}\n\n{pinned}" if pinned else effective_user_prompt})
+        messages = build_messages(sys_prompt, effective_user_prompt, self.history)
 
         reply_text = ""
         last_tool_output = ""
@@ -1210,7 +1089,7 @@ class KurekEngine:
                 elif ev_type == "sentence":
                     raw_sentence = ev.get("sentence", "")
                     # The model copied the history's tool note: speak nothing from there on.
-                    if "Tool calls in that turn" in raw_sentence:
+                    if TOOL_NOTE in raw_sentence:
                         note_copied = True
                     if note_copied:
                         continue
@@ -1294,7 +1173,7 @@ class KurekEngine:
         reply_text = re.sub(r"</[｜|]{2}DSML[｜|]{2}.*?>", "", reply_text)
         reply_text = re.sub(r"<[｜|].*?[｜|]>", "", reply_text)
         reply_text = re.sub(r"</[｜|].*?[｜|]>", "", reply_text)
-        reply_text = re.sub(r"\(Tool calls in that turn, recorded by the daemon:.*", "", reply_text, flags=re.DOTALL)
+        reply_text = re.sub(rf"\({TOOL_NOTE}.*", "", reply_text, flags=re.DOTALL)
         reply_text = reply_text.strip()
         if not reply_text:
             # Successful tool path with no spoken content — not a transport failure.
