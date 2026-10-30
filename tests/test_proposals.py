@@ -30,6 +30,14 @@ def test_duplicates_rejected_and_ids_increment(tmp_path: Path) -> None:
     assert [pid[-2:] for pid, _ in proposals._ENTRY.findall(p.read_text())] == ["01", "02"]
 
 
+def test_status_note_still_counts_toward_todays_ids(tmp_path: Path) -> None:
+    p = tmp_path / "p.md"
+    today = datetime.now().strftime("%Y-%m-%d")
+    p.write_text(f"## P-{today}-01 · rejected (duplicate of never-lie, {today})\n\n", encoding="utf-8")
+    assert propose("a", "rule two", source="s", path=p)
+    assert f"## P-{today}-02 · pending" in p.read_text(encoding="utf-8")
+
+
 def test_empty_rule_ignored_and_queue_is_capped(tmp_path: Path) -> None:
     p = tmp_path / "p.md"
     assert not propose("a", "  - ", source="s", path=p)

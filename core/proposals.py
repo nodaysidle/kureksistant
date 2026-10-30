@@ -18,7 +18,8 @@ MAX_PENDING = 50
 MAX_TEXT_CHARS = 300
 
 _lock = threading.Lock()
-_ENTRY = re.compile(r"^## (P-\d{4}-\d{2}-\d{2}-\d{2}) · (\w+)$", re.MULTILINE)
+# The status may carry a note, e.g. "rejected (duplicate of never-lie, 2026-10-28)".
+_ENTRY = re.compile(r"^## (P-\d{4}-\d{2}-\d{2}-\d{2}) · (\w+)\b.*$", re.MULTILINE)
 
 
 def _one_line(text: str) -> str:
