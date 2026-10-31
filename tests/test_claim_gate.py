@@ -48,6 +48,9 @@ def test_classify(result, outcome):
     ("I created the file.", [_entry("file_controller", "timed_out", action="create_file")],
      [("CREATED", "timed_out")]),
     ("Thank you, I deleted it.", [], [("DELETED", "no_tool_call")]),
+    # "written" as an adjective is not a claim; as a perfect tense it is
+    ("He issued a written message as Speaker.", [], []),
+    ("I have written the file.", [], [("CREATED", "no_tool_call")]),
     # a hedge or negation after the claim does not excuse it
     ("Saved it, no problems.", [], [("CREATED", "no_tool_call")]),
     ("Deleted it, and I would do it again.", [], [("DELETED", "no_tool_call")]),

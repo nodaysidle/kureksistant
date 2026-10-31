@@ -25,6 +25,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
 
+# Eval replies are not Kurek's real speech: keep them out of the claim-gate log.
+os.environ["KUREK_CLAIM_GATE"] = "off"
+
 DEFAULT_CASES = HERE / "rules_eval.toml"
 LOCAL_CASES = Path(os.environ.get("KUREK_RULES_EVAL_FILE") or Path.home() / ".config" / "kurek" / "rules_eval.toml")
 

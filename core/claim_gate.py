@@ -45,7 +45,7 @@ CLAIMS: dict[str, tuple[re.Pattern, dict[str, frozenset | None]]] = {
         {"send_message": None, "run": _RUN_EXEC},
     ),
     "CREATED": (
-        re.compile(r"\b(saved|wrote|written|created)\b", re.I),
+        re.compile(r"\b(saved|wrote|created)\b|\b(?:have|'ve|has|was|been)\s+written\b", re.I),
         {"file_controller": _FILE_MAKE, "run": _RUN_EXEC, "dev_agent": None, "code_helper": _CODE_WRITE,
          "manage_memory": _REMEMBER, "draft_to_clipboard": None},
     ),
