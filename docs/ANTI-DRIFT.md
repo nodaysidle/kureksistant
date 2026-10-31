@@ -11,13 +11,13 @@ Read this before changing anything that reads or writes memory, rules or the pro
 | Store | Who writes | Rule |
 |---|---|---|
 | `~/.config/kurek/rules.toml` | the user, by hand | Verbatim. Injected into every prompt as `[USER RULES]`. No code writes it. |
-| `ledger` table in `memory/kurek_memory.db` | `manage_memory`, Jev triage | Append-only: triggers abort `UPDATE` and `DELETE`. Every row needs a source. A correction is a new row with `supersedes`. |
-| `~/kurek_proposed_rules.md` | the dream cycle, Jev boundary triage, `manage_memory` | Proposals only. Nothing reads this file into a prompt. The user promotes an entry by copying it into `rules.toml`. |
+| `ledger` table in `memory/kurek_memory.db` | `manage_memory` only | Append-only: triggers abort `UPDATE` and `DELETE`. Every row needs a source. Kinds are `fact`, `preference`, `boundary` and `note`. A correction is a new row with `supersedes`. A retraction is a `kind='retract'` row that supersedes its target. |
+| `~/kurek_proposed_rules.md` | the dream cycle, Jev triage, `manage_memory` boundary | Proposals only. Nothing reads this file into a prompt. Each entry is a `rule` or a `fact`. The user promotes a rule by copying it into `rules.toml`, and a fact by saving it to the ledger. The dream cycle is shown current learned memory and rules first, so it does not propose what is already known or was since corrected. |
 | `~/MEMORY.md` | the user, by hand | Reference facts (identity, environment, projects). Kurek never appends to it. |
 | `~/ALIGNMENT_SYNTHESIS.md` | nobody | Legacy. Still read if present, never written by Kurek. |
-| Hermes `USER.md` / `MEMORY.md` | Hermes, and `manage_memory` remember | Read into the prompt. Ranks below learned memory. |
+| Hermes `USER.md` / `MEMORY.md` | Hermes only | Read into the prompt. Kurek never writes them. Ranks below learned memory. |
 | `memory/kurek_history.json` | the daemon, each turn | The last 10 turns go to the model. Context, never fact. |
-| `~/memory/YYYY-MM-DD.md` daily logs | the daemon, each turn | Never injected. Read by Jev triage, the dream cycle and `manage_memory` recall. |
+| `~/memory/YYYY-MM-DD.md` daily logs | the daemon, each turn | Never in the system prompt. When the user's message points at the past ("yesterday", "two days ago", "what did I say about…"), `core/auto_recall.py` attaches matching turns to that message, labelled as what was said, not what is true, capped at 3000 chars with a logged warning. Also read by Jev triage, the dream cycle and `manage_memory` recall. Also indexed for recall in `memory/kurek_memory.db` (FTS5, tables `daily_fts` / `daily_files`); the log files stay the source of truth. |
 
 Retired: the old personal-context store (`entries` table, `memory/long_term.json` import) and
 `~/memory/bank/`. Nothing reads them into the prompt or into recall. Names for each store are in
@@ -102,6 +102,9 @@ cp -p ~/.config/kurek/rules.toml ~/rules.toml.$(date +%F)
   `approved` (or `rejected`) in `~/kurek_proposed_rules.md`.
 - **Correct a memory:** save the corrected fact with the same key, or call `manage_memory` with
   `replaces=<#id>`. The old row stays in the table and leaves the prompt.
+- **Forget a memory:** say "forget #id", or call `manage_memory` with `action='forget'`. That
+  appends a `kind='retract'` row which supersedes the target. The row stays in the table and leaves
+  the prompt; nothing is deleted. Recall still lists both as `[Retracted #id]`.
 - **Read the warnings:** `journalctl --user -u kurek | grep WARNING`. A memory file or the ledger
   block over `KUREK_MEMORY_FILE_MAX_CHARS` is reported there.
 - **A malformed `rules.toml`** does not stop Kurek. The prompt carries a visible notice that no

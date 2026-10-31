@@ -27,7 +27,6 @@ def test_execute_dream_cycle_handles_str_dict_none(monkeypatch, tmp_path: Path) 
     monkeypatch.setattr(dream_cycle, "MEMORY_DIR", memory)
     monkeypatch.setattr("core.proposals.PROPOSALS_PATH", tmp_path / "kurek_proposed_rules.md")
     monkeypatch.setattr(dream_cycle, "STATE_FILE", tmp_path / "ALIGNMENT_STATE.yaml")
-    monkeypatch.setattr(dream_cycle, "REPAIRS_FILE", tmp_path / "REPAIR_THREADS.yaml")
 
     # Pin the target day explicitly (default is yesterday).
     from datetime import datetime
@@ -66,7 +65,6 @@ def test_execute_dream_cycle_align_none_no_attribute_error(monkeypatch, tmp_path
     monkeypatch.setattr(dream_cycle, "MEMORY_DIR", memory)
     monkeypatch.setattr("core.proposals.PROPOSALS_PATH", tmp_path / "kurek_proposed_rules.md")
     monkeypatch.setattr(dream_cycle, "STATE_FILE", tmp_path / "ALIGNMENT_STATE.yaml")
-    monkeypatch.setattr(dream_cycle, "REPAIRS_FILE", tmp_path / "REPAIR_THREADS.yaml")
 
     from datetime import datetime
 

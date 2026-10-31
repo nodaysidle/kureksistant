@@ -20,6 +20,8 @@ import requests
 
 from core.timing import mark as timing_mark
 
+_HTTP = requests.Session()  # reuses the TLS connection across turns and tool rounds
+
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 DEFAULT_MODEL = "deepseek-flash"
 
@@ -179,7 +181,7 @@ def query_deepseek(
         if tools:
             payload["tools"] = tools
 
-        resp = requests.post(
+        resp = _HTTP.post(
             DEEPSEEK_URL,
             headers={
                 "Authorization": f"Bearer {key}",
@@ -219,7 +221,7 @@ def query_deepseek(
 def _open_deepseek_stream(key: str, payload: dict):
     """POST a streaming request. Returns (resp, error, retryable)."""
     try:
-        resp = requests.post(
+        resp = _HTTP.post(
             DEEPSEEK_URL,
             headers={
                 "Authorization": f"Bearer {key}",

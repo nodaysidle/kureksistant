@@ -20,7 +20,8 @@ def home(monkeypatch, tmp_path: Path) -> Path:
     monkeypatch.setattr(proposals, "PROPOSALS_PATH", tmp_path / "kurek_proposed_rules.md")
     monkeypatch.setattr("core.rules.RULES_PATH", tmp_path / "rules.toml")
     monkeypatch.setattr(dream_cycle, "STATE_FILE", tmp_path / "ALIGNMENT_STATE.yaml")
-    monkeypatch.setattr(dream_cycle, "REPAIRS_FILE", tmp_path / "REPAIR_THREADS.yaml")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("memory.reference.resolve_hermes_memory_dirs", lambda: [])
     return tmp_path
 
 
@@ -117,4 +118,4 @@ def test_prompt_shows_existing_rules_and_allows_none(monkeypatch, home: Path) ->
 def test_none_bullets_are_not_proposals() -> None:
     text = ("## Boundaries\n- NONE\n- (none)\n- None.\n- None new beyond existing rules.\n"
             "- No explicit negative boundaries were stated.\n- Nothing new.\n- keep replies short\n- Noted names are spelled out")
-    assert dream_cycle.guidance_bullets(text) == ["keep replies short", "Noted names are spelled out"]
+    assert [b for _, b in dream_cycle.guidance_items(text)] == ["keep replies short", "Noted names are spelled out"]

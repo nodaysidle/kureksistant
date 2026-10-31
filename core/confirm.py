@@ -18,12 +18,13 @@ THE DESIGN HERE
     The confirmation token is issued by the *interface*, never by the model:
 
       1. An action calls `request(...)` with a callable that does the real work.
-      2. This module hands the UI a banner with CONFIRM / CANCEL and returns
-         IMMEDIATELY with a sentence for the model to say out loud.
-      3. If — and only if — the user presses CONFIRM, the UI calls `resolve()`,
-         which runs the stored callable off the Qt thread.
+      2. This module shows a desktop notification through the bound callback and
+         returns IMMEDIATELY with a sentence for the model to say out loud.
+      3. If — and only if — the user answers yes (by voice, CLI or the phone app),
+         the daemon calls `resolve()`, which runs the stored callable on a worker
+         thread.
 
-    Nothing blocks. The model keeps talking while the banner is up, so this
+    Nothing blocks. The model keeps talking while the confirmation waits, so this
     costs no latency at all; in fact it is cheaper than the old gate, which
     burned two tool round trips (reject, then re-call) on every shutdown.
 
@@ -42,7 +43,7 @@ from typing import Callable, Optional
 
 # A pending confirmation is abandoned after this long. Chosen to outlast a
 # normal "hang on, let me look at the screen" pause without leaving a live
-# shutdown button sitting on the HUD for the rest of the day.
+# shutdown waiting for a stray "yes" for the rest of the day.
 TIMEOUT_SECONDS = 90.0
 
 
@@ -58,15 +59,15 @@ class _Pending:
 _pending: Optional[_Pending] = None
 _lock = threading.Lock()
 
-# Set once at startup by main.py. Signature: (title, detail) -> None for show,
-# and () -> None for hide. Both are marshalled onto the Qt thread by the UI.
+# Set once at startup by the daemon (kurek_daemon.py). Signature: (title, detail) -> None
+# for show, and () -> None for hide.
 _show_cb: Optional[Callable[[str, str], None]] = None
 _hide_cb: Optional[Callable[[], None]] = None
 _log_cb:  Optional[Callable[[str], None]] = None
 
 
 def bind(show, hide, log=None) -> None:
-    """Wire this module to the HUD. Called once from main.py at startup."""
+    """Wire this module to the daemon's notifications. Called once at startup."""
     global _show_cb, _hide_cb, _log_cb
     _show_cb, _hide_cb, _log_cb = show, hide, log
 
@@ -112,18 +113,17 @@ def request(key: str, title: str, detail: str, run: Callable[[], str]) -> str:
 
     _log(f"SYS: Awaiting confirmation — {title}")
     return (
-        f"[CONFIRMATION_PENDING] I have put a confirmation on screen for: {title}. "
-        f"Say ONE short sentence in the user's own language telling them you need "
-        f"them to confirm it on the HUD before you do it. Do not claim it is done."
+        f"[CONFIRMATION_PENDING] A confirmation is waiting for: {title}. "
+        f"Say ONE short sentence in the user's own language asking them to answer "
+        f"yes or no before you do it. Do not claim it is done."
     )
 
 
 def resolve(accepted: bool) -> None:
-    """Called by the UI when the user presses CONFIRM or CANCEL.
+    """Called by the daemon when the user answers yes or no.
 
-    Runs the stored callable on a worker thread — this is invoked from the Qt
-    thread, and shutting the machine down from inside a button handler would
-    freeze the interface on its way out."""
+    Runs the stored callable on a worker thread, so a slow or machine-stopping
+    action never blocks the turn that resolved it."""
     global _pending
 
     with _lock:

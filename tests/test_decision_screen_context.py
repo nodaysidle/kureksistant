@@ -40,6 +40,8 @@ def test_auto_screen_opt_out(monkeypatch) -> None:
     monkeypatch.setenv("KUREK_AUTO_SCREEN", "false")
     assert decision_client.auto_screen_enabled() is False
     monkeypatch.delenv("KUREK_AUTO_SCREEN", raising=False)
+    assert decision_client.auto_screen_enabled() is False
+    monkeypatch.setenv("KUREK_AUTO_SCREEN", "1")
     assert decision_client.auto_screen_enabled() is True
 
 

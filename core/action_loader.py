@@ -2,7 +2,7 @@
 Action discovery, validation, and dispatch — the built-in twin of plugin_loader.
 
 Every actions/*.py that exposes a module-level ``TOOL`` dict is auto-discovered
-here, exactly like a drop-in plugin, so main.py never has to hardcode a tool
+here, exactly like a drop-in plugin, so the daemon never has to hardcode a tool
 declaration or a dispatch branch for it. Adding a new bundled action is then the
 same one-file operation as writing a plugin: define ``TOOL`` and a handler.
 
@@ -56,7 +56,7 @@ class ActionRegistry:
         self._all_records: list[ActionRecord] = []
         self._logger = logger
 
-    # -- called by main.py at LiveConnectConfig build time --
+    # -- called by kurek_daemon.py when it builds the tool list --
     def get_tool_declarations(self) -> list[dict]:
         return [
             {"name": rec.name, "description": rec.description, "parameters": rec.parameters}
@@ -69,7 +69,7 @@ class ActionRegistry:
     def names(self) -> set[str]:
         return set(self._actions.keys())
 
-    # -- called by main.py from _execute_tool --
+    # -- called by kurek_daemon.py for each tool call --
     def run(self, name: str, parameters: dict, ctx: dict | None = None, timeout: float = 120.0) -> str:
         rec = self._actions.get(name)
         if rec is None or not rec.valid:

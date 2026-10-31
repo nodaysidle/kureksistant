@@ -27,7 +27,7 @@ def test_stream_deepseek_yields_error_on_connection_error(monkeypatch) -> None:
     def boom(*_a, **_k):
         raise ConnectionError("network down")
 
-    monkeypatch.setattr(llm_client.requests, "post", boom)
+    monkeypatch.setattr(llm_client._HTTP, "post", boom)
 
     events = list(stream_deepseek(messages=[{"role": "user", "content": "hi"}]))
     assert len(events) == 1

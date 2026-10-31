@@ -4,6 +4,8 @@ memory/ledger.py — append-only memory with provenance.
 Rows are only ever added: triggers abort UPDATE and DELETE. Every row carries a
 source, and a correction is a new row whose `supersedes` points at the one it
 replaces, so history stays and the prompt sees only rows nothing has replaced.
+A retraction is a kind='retract' row marked the same way; it is bookkeeping and
+never reaches the prompt.
 """
 
 from __future__ import annotations
@@ -41,8 +43,9 @@ _ACTIVE = "SELECT * FROM ledger l WHERE NOT EXISTS (SELECT 1 FROM ledger n WHERE
 PROMPT_HEADER = (
     "[LEARNED MEMORY]\n"
     "Learned from conversations, newest wins: an entry replaces the one it supersedes. "
-    "[USER RULES] outrank all of it. To correct an entry, call manage_memory with "
-    "replaces=<its #id>."
+    "[USER RULES] outrank all of it. Entries marked 'set by the user' were confirmed by the "
+    "user outside the chat: treat them as current, over older chat turns and recalled logs, "
+    "without asking again. To correct an entry, call manage_memory with replaces=<its #id>."
 )
 
 _warned_cut: set[int] = set()
@@ -103,6 +106,39 @@ def append(kind: str, text: str, source: str, *, key: str | None = None,
             conn.close()
 
 
+def retract(target_id: int, reason: str, source: str, *, db_path: Path | None = None) -> int:
+    """Withdraw memory #target_id, keeping the row, and return the retraction's id.
+
+    History stays: the target is superseded by a kind='retract' row that records
+    why. The target leaves the prompt block; `active()` still lists both."""
+    reason, source = " ".join(str(reason).split()), " ".join(str(source).split())
+    if not reason or not source:
+        raise LedgerError("a retraction needs a reason and a source")
+
+    with _lock:
+        conn = _connect(db_path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            if not conn.execute("SELECT 1 FROM ledger WHERE id = ?", (target_id,)).fetchone():
+                raise LedgerError(f"no memory #{target_id} to forget")
+            if conn.execute("SELECT 1 FROM ledger WHERE supersedes = ?",
+                            (target_id,)).fetchone():
+                raise LedgerError(f"memory #{target_id} was already replaced or forgotten")
+            cur = conn.execute(
+                "INSERT INTO ledger (ts, kind, key, text, heard, source, supersedes) VALUES (?,?,?,?,?,?,?)",
+                (datetime.now().isoformat(timespec="seconds"), "retract", None, reason, None,
+                 source, int(target_id)),
+            )
+            conn.execute("COMMIT")
+            return cur.lastrowid
+        except BaseException:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+        finally:
+            conn.close()
+
+
 def active(db_path: Path | None = None) -> list[sqlite3.Row]:
     """Rows nothing has replaced, oldest first."""
     with _lock:
@@ -115,6 +151,15 @@ def active(db_path: Path | None = None) -> list[sqlite3.Row]:
 
 # Sources Kurek writes during a chat. A correction from any other source was made outside it.
 _CHAT_SOURCES = ("manage_memory", "daily/", "jev")
+
+
+def origin(source: str) -> str:
+    """Where an entry came from, in the words the prompt shows."""
+    if source.startswith("manage_memory"):
+        return "said in chat"
+    if source.startswith(_CHAT_SOURCES):
+        return "inferred from chat"
+    return "set by the user"
 
 
 def outside_correction_ts(db_path: Path | None = None) -> str:
@@ -137,10 +182,10 @@ def prompt_block(limit: int, db_path: Path | None = None) -> str:
     """The learned-memory section of the system prompt, or "" when empty.
 
     Over `limit` the oldest rows are left out, with a warning once per row count."""
-    rows = active(db_path)
+    rows = [r for r in active(db_path) if r["kind"] != "retract"]
     if not rows:
         return ""
-    lines = [f"- [#{r['id']}] ({r['kind']}, {r['ts'][:10]}) {r['text']}" for r in rows]
+    lines = [f"- [#{r['id']}] ({r['kind']}, {r['ts'][:10]}, {origin(r['source'])}) {r['text']}" for r in rows]
     kept = len(lines)
     while kept > 1 and len(PROMPT_HEADER) + sum(len(ln) + 1 for ln in lines[-kept:]) > limit:
         kept -= 1

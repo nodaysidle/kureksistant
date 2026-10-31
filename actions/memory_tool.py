@@ -1,15 +1,14 @@
 """
 Memory tool for Kurek.
-Allows storing and recalling long-term user facts, preferences, identity, and notes.
+Allows storing, recalling and forgetting long-term user facts, preferences, identity, and notes.
 Recall searches learned memory, reference facts, Hermes memories (see HERMES_* in .env)
-and the daily logs of past conversations.
+and the daily logs of past conversations. Hermes files are read only, never written here.
 """
 import re
 from datetime import datetime
-from pathlib import Path
 
 from core.proposals import propose
-from memory import ledger, reference
+from memory import ledger, recall_index, reference
 
 
 # Words that appear in nearly every turn; scoring them buries the real hits.
@@ -20,32 +19,53 @@ _FILLER = frozenset(
     "were what when where which who why will with would you your".split()
 )
 
+# The model names a category; the ledger stores one of four kinds.
+_KINDS = {
+    "identity": "fact",
+    "preferences": "preference",
+    "projects": "fact",
+    "relationships": "fact",
+    "wishes": "preference",
+    "notes": "note",
+}
+
 
 def _keywords(query: str) -> set[str]:
     return {w for w in re.findall(r"\w+", query.casefold()) if len(w) > 1 and w not in _FILLER}
 
 
 def _score(text: str, words: set[str]) -> int:
-    """How many of the query's keywords the text contains."""
+    """How many of the query's keywords begin some word in the text.
+
+    Matching whole-word prefixes keeps "crash" on "crashed" without letting
+    "art" hit "start"."""
     text = text.casefold()
-    return sum(w in text for w in words)
+    return sum(bool(re.search(rf"\b{re.escape(w)}", text)) for w in words)
 
 
 def _search_daily_logs(words: set[str], limit: int = 5) -> list[str]:
     """Past turns from the daily logs that best match the keywords, best match first.
 
     A daily log is what was said, not what is true, so each hit carries its date."""
-    hits = []
-    for log in (Path.home() / "memory").glob("????-??-??.md"):
-        try:
-            turns = log.read_text(encoding="utf-8").split("\n### ")[1:]
-        except OSError:
-            continue
-        for turn in turns:
-            if score := _score(turn, words):
-                hits.append((score, log.stem, " ".join(turn.split())))
-    hits.sort(key=lambda h: (h[0], h[1]), reverse=True)
-    return [f"• [Said on {day}] {text[:400]}" for _, day, text in hits[:limit]]
+    return [f"• [Said on {day}] {text[:400]}" for day, text in recall_index.search(words, limit=limit)]
+
+
+def _recall_line(row) -> str:
+    if row["kind"] == "retract":
+        return f"• [Retracted #{row['supersedes']}] {row['text']}"
+    return f"• [Learned #{row['id']}] {row['text']}"
+
+
+def _forget(params: dict) -> str:
+    target = _as_int(params.get("replaces"))
+    if target is None:
+        return "Say which memory to forget: pass its #id as replaces."
+    reason = params.get("value", "").strip() or "forgotten by the user"
+    try:
+        ledger.retract(target, reason, f"manage_memory call {datetime.now():%Y-%m-%d}")
+    except ledger.LedgerError as e:
+        return f"Nothing was forgotten: {e}."
+    return f"Forgot memory #{target}."
 
 
 def manage_memory(parameters: dict, **kwargs) -> str:
@@ -64,10 +84,10 @@ def manage_memory(parameters: dict, **kwargs) -> str:
             if score := _score(text, words):
                 found.append((score, f"• [{label}] {text}"))
 
-        # 2. The learned-memory ledger
+        # 2. The learned-memory ledger, retractions included so recall shows what was withdrawn
         for row in ledger.active():
             if score := _score(row["text"], words):
-                found.append((score, f"• [Learned #{row['id']}] {row['text']}"))
+                found.append((score, _recall_line(row)))
 
         found.sort(key=lambda f: f[0], reverse=True)
         lines = [line for _, line in found[:6]] + _search_daily_logs(words)
@@ -75,48 +95,39 @@ def manage_memory(parameters: dict, **kwargs) -> str:
             return f"No memories or past conversations found matching '{params.get('query', '')}'."
         return f"Found {len(lines)} matches:\n" + "\n".join(lines)
 
+    if action == "forget":
+        return _forget(params)
+
     # Default: remember
     key = params.get("key", "").strip()
     value = params.get("value", "").strip()
     category = params.get("category", "notes").strip().lower()
+    kind = _KINDS.get(category, "note")
 
     if not key or not value:
         return "Please provide both a key and a value to remember."
 
     # Jev System One Triage (calibrated snap judgment)
     jev_meta = _triage_with_jev(key, value)
-    salience_tag = ""
     if jev_meta:
-        inferred_kind = jev_meta.get("kind", category)
+        inferred_kind = jev_meta.get("kind", kind)
         if inferred_kind in ("preference", "boundary", "fact"):
-            category = inferred_kind
-        salience_tag = f" [salience:{jev_meta['salience']:.1f}|conf:{jev_meta['confidence']:.2f}]"
+            kind = inferred_kind
 
     try:
         memory_id = ledger.append(
-            category, f"{key}: {value}", f"manage_memory call {datetime.now():%Y-%m-%d}",
+            kind, f"{key}: {value}", f"manage_memory call {datetime.now():%Y-%m-%d}",
             key=key, supersedes=_as_int(params.get("replaces")),
         )
     except ledger.LedgerError as e:
         return f"Nothing was saved: {e}."
 
-    # 1. Sync to Hermes MEMORY.md if available
-    try:
-        if hermes_dir := reference.hermes_dir():
-            mem_file = hermes_dir / "MEMORY.md"
-            if mem_file.exists() and mem_file.is_file():
-                entry = f"\n§\n**[{category.upper()}] {key}:** {value}{salience_tag}\n"
-                with open(mem_file, "a", encoding="utf-8") as f:
-                    f.write(entry)
-    except Exception as e:
-        print(f"[Memory Tool] Hermes sync notice: {e}")
-
-    # 2. A hard boundary is only proposed; the user promotes it to rules.toml
+    # A hard boundary is only proposed; the user promotes it to rules.toml
     if jev_meta and jev_meta.get("kind") == "boundary":
         if propose("manage_memory (jev boundary)", f"{key}: {value}", source="manage_memory tool call"):
             print("[Memory Tool] Boundary proposed in kurek_proposed_rules.md.")
 
-    return f"Remembered: {category}/{key} = {value} (saved as memory #{memory_id}{salience_tag})."
+    return f"Remembered: {kind}/{key} = {value} (saved as memory #{memory_id})."
 
 
 def _as_int(value) -> int | None:
@@ -133,14 +144,11 @@ def _triage_with_jev(key: str, value: str) -> dict | None:
         load_api_keys()
         if not os.environ.get("TYPESAFE_API_KEY"):
             return None
-        from typesafe_sdk import TypeSafeClient, Noul, Choice, Score
+        from typesafe_sdk import TypeSafeClient, Choice, Score
         client = TypeSafeClient()
         resp = client.system_one(
             state={"key": key, "value": value},
             questions={
-                "is_durable": Noul(
-                    instructions="Does `value` assert a permanent personal preference, identity detail, system rule, or boundary that should be kept indefinitely?"
-                ),
                 "kind": Choice(
                     instructions="What category best describes this information?",
                     criteria={
@@ -162,7 +170,6 @@ def _triage_with_jev(key: str, value: str) -> dict | None:
             }
         )
         return {
-            "is_durable": resp.answers["is_durable"].noul > 0.65,
             "kind": resp.answers["kind"].choice,
             "salience": resp.answers["salience"].score,
             "confidence": resp.answers["salience"].confidence
@@ -174,14 +181,14 @@ def _triage_with_jev(key: str, value: str) -> dict | None:
 
 TOOL = {
     "name": "manage_memory",
-    "description": "Store or recall persistent facts, personal identity, user preferences, projects, relationships, or notes. Use action='remember' to save something about the user. Use action='recall' to search learned memory, reference facts, Hermes memories and the daily logs of past conversations (each past-conversation hit carries its date).",
+    "description": "Store, recall or forget persistent facts, personal identity, user preferences, projects, relationships, or notes. Use action='remember' to save something about the user. Use action='recall' to search learned memory, reference facts, Hermes memories and the daily logs of past conversations (each past-conversation hit carries its date). Use action='forget' with the #id of a learned memory to withdraw it, keeping the reason. Pass replaces=<#id> to correct an earlier learned memory.",
     "parameters": {
         "type": "OBJECT",
         "properties": {
             "action": {
                 "type": "STRING",
-                "description": "'remember' to save a new fact, or 'recall' to search stored facts",
-                "enum": ["remember", "recall"]
+                "description": "'remember' to save a new fact, 'recall' to search stored facts, or 'forget' to withdraw a memory by #id",
+                "enum": ["remember", "recall", "forget"]
             },
             "category": {
                 "type": "STRING",
@@ -194,11 +201,11 @@ TOOL = {
             },
             "value": {
                 "type": "STRING",
-                "description": "The fact or detail to remember"
+                "description": "The fact or detail to remember; for forget, why it is being withdrawn"
             },
             "replaces": {
                 "type": "INTEGER",
-                "description": "For remember: the #id of an earlier learned memory this one corrects or replaces"
+                "description": "For remember: the #id of an earlier learned memory this one corrects or replaces. For forget: the #id of the memory to withdraw"
             },
             "query": {
                 "type": "STRING",

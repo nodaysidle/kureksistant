@@ -12,6 +12,7 @@ def get_base_dir():
 
 from memory.config_manager import get_gemini_key
 from core.decision_client import classify_intent, intent_routing_enabled
+from actions import _safe_paths
 BASE_DIR           = get_base_dir()
 DESKTOP            = Path.home() / "Desktop"
 MAX_BUILD_ATTEMPTS = 3
@@ -51,10 +52,23 @@ def _resolve_save_path(output_path: str, language: str) -> Path:
         "sql": ".sql", "json": ".json", "rust": ".rs", "go": ".go",
     }
     if output_path:
-        p = Path(output_path)
+        p = Path(output_path).expanduser()
         return p if p.is_absolute() else DESKTOP / p
     ext = ext_map.get((language or "python").lower(), ".py")
     return DESKTOP / f"jarvis_code{ext}"
+
+
+def _save_path_refusal(path: Path) -> str | None:
+    """Generated code may only land in the user's home, never on a secret and
+    never on rules.toml (only the user writes that)."""
+    p = _safe_paths.resolve(str(path))
+    if _safe_paths.is_rules_file(p):
+        return f"Refused: {p.name} is edited only by the user, so I will not write it."
+    if not _safe_paths.is_within_home(p):
+        return f"Refused: {p} is outside your home directory, so I will not save code there."
+    if _safe_paths.is_sensitive(p):
+        return f"Refused: {p} is a sensitive path (keys, shell config, secrets), so I will not write it."
+    return None
 
 
 def _read_file(file_path: str) -> tuple[str, str]:
@@ -70,6 +84,9 @@ def _read_file(file_path: str) -> tuple[str, str]:
 
 
 def _save_file(path: Path, content: str) -> str:
+    refusal = _save_path_refusal(path)
+    if refusal:
+        return refusal
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
@@ -104,11 +121,6 @@ def _take_screenshot() -> Path | None:
         return None
 
 
-def _image_to_base64(path: Path) -> str:
-    import base64
-    return base64.b64encode(path.read_bytes()).decode("utf-8")
-
-
 _VALID_INTENTS = {"write", "edit", "explain", "run", "build", "screen_debug", "optimize"}
 
 
@@ -139,6 +151,10 @@ def _detect_intent(description: str, file_path: str, code: str) -> str:
 
 def _write(description: str, language: str, output_path: str, player=None) -> tuple[str, Path]:
     lang  = language or "python"
+    path  = _resolve_save_path(output_path, lang)
+    refusal = _save_path_refusal(path)
+    if refusal:
+        raise ValueError(refusal)
     model = _get_gemini()
 
     prompt = f"""You are an expert {lang} developer.
@@ -156,7 +172,6 @@ Code:"""
 
     response = model.generate_content(prompt)
     code     = _clean_code(response.text)
-    path     = _resolve_save_path(output_path, lang)
     _save_file(path, code)
     return code, path
 
@@ -274,6 +289,9 @@ def _write_action(description, language, output_path, player, code: str = "") ->
     if code:
         try:
             target = _resolve_save_path(output_path, language)
+            refusal = _save_path_refusal(target)
+            if refusal:
+                return refusal
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(code, encoding="utf-8")
             print(f"[Code] ✅ Written directly: {target}")
@@ -450,7 +468,6 @@ def _screen_debug_action(description, file_path, player, speak=None) -> str:
         client = genai.Client(api_key=_get_api_key(), http_options={"timeout": 60_000})
 
         image_bytes  = screenshot_path.read_bytes()
-        image_base64 = _image_to_base64(screenshot_path)
 
         user_question = description or "What error or problem do you see on the screen? How can it be fixed?"
 
@@ -517,7 +534,7 @@ def code_helper(
     speak=None
 ) -> str:
     """
-    Called from main.py.
+    Dispatched by core/action_loader.py.
 
     parameters:
         action      : write | edit | explain | run | build | screen_debug | optimize | auto
