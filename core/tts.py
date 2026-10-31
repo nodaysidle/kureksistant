@@ -101,7 +101,6 @@ class SystemSpeechEngine:
 
 
 # Backwards-compatible name used by older callers.
-MacSayEngine = SystemSpeechEngine
 
 
 _XAI_VOICE_MAP = {
@@ -225,24 +224,6 @@ class TTSPlayer:
                 self._playing = False
             if on_done:
                 on_done()
-
-    def speak_chunk(self, text: str, append: bool = False) -> None:
-        """Synthesise and play a single sentence chunk (blocking)."""
-        if not text.strip():
-            return
-        try:
-            timing_mark("first_speak_chunk", once=True)
-            with self._lock:
-                self._playing = True
-            try:
-                self._engine.speak(text, append=append)
-            except TypeError:
-                self._engine.speak(text)
-        except Exception as e:
-            print(f"[TTS Chunk] Error: {e}")
-        finally:
-            with self._lock:
-                self._playing = False
 
     # -- streaming queue ----------------------------------------------------
 

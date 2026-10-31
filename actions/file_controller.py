@@ -185,7 +185,7 @@ def _safe_trash(target: Path) -> str:
     return f"Moved to Trash: {target.name}"
 
 
-_PENDING_ALREADY = ("There is already a confirmation waiting on screen. "
+_PENDING_ALREADY = ("There is already a confirmation waiting. "
                     "Ask the user to answer that one first.")
 
 

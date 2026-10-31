@@ -31,7 +31,6 @@ HOME = Path.home()
 DREAMS_DIR = HOME / "dreams"
 MEMORY_DIR = HOME / "memory"
 STATE_FILE = HOME / "ALIGNMENT_STATE.yaml"
-REPAIRS_FILE = HOME / "REPAIR_THREADS.yaml"
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
@@ -67,11 +66,6 @@ def text_from_llm_response(resp, default: str = "") -> str:
 
 
 _NOTHING_NEW = re.compile(r"^\W*(none|nothing|no (new|explicit|standing|additional)\b)", re.IGNORECASE)
-
-
-def guidance_bullets(text: str) -> list[str]:
-    """Bullet lines of an LLM guidance block; headings, prose and "none" answers are dropped."""
-    return [b for _, b in guidance_items(text)]
 
 
 def guidance_items(text: str) -> list[tuple[str, str]]:

@@ -17,7 +17,8 @@ from memory import recall_index
 
 MAX_CHARS = 3000
 TURN_CHARS = 400
-HEADER = ("[RECALLED FROM DAILY LOGS: what was said then, not proof of what is true now. "
+HEADER = ("[RECALLED FROM DAILY LOGS: this is already the recall search for this message, so do not "
+          "search past conversations again. It is what was said then, not proof of what is true now. "
           "Where it disagrees with [LEARNED MEMORY], memory is newer and wins: say what was said then and what is true now.]")
 
 _NUMBERS = {
@@ -44,12 +45,15 @@ _CUES = re.compile(
     r"|last time we|you said|kaj sem (rekel|povedal)|ti povedal|cosa ho detto|ti ho detto)\b"
 )
 
-# Words that place the question in time but say nothing about its subject.
-_TIME_WORDS = frozenset(
+# Words that place the question in time, or are Slovenian/Italian filler, and say nothing
+# about its subject (English filler is already dropped by memory_tool._keywords).
+_NOT_SUBJECT = frozenset(
     "yesterday days day ago last past week weeks today earlier morning this time remember talked "
     "spoke said say tell told mention mentioned ask asked discuss discussed conversation "
     "talk talking speak chat chatted work worked working do doing done "
     "pogovarjala pogovarjali pogovor sva smo delal delala "
+    "kaj se si sem je so ste in na za da ne ali ki mi ti to ta tem tega dan dneva dnevoma dnevom dneve "
+    "che cosa di il la lo le gli un una ho hai ha abbiamo del della per con su giorno parlato "
     "včeraj pred dnevi teden zjutraj danes rekel povedal ieri giorni fa settimana scorsa oggi detto".split()
     + list(_NUMBERS) + list(_WEEKDAYS)
 )
@@ -80,7 +84,7 @@ def window(prompt: str, today: date | None = None) -> list[str] | None:
 
 def _subject_words(prompt: str) -> set[str]:
     from actions.memory_tool import _keywords
-    return {w for w in _keywords(prompt) if w not in _TIME_WORDS}
+    return {w for w in _keywords(prompt) if w not in _NOT_SUBJECT}
 
 
 def recall_block(prompt: str, today: date | None = None) -> str | None:

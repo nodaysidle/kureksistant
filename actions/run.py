@@ -474,7 +474,7 @@ def _validate_command(cmd_str: str, human_confirmed: bool = False) -> tuple[bool
     Returns (is_allowed, parsed_tokens, refusal_reason).
 
     human_confirmed is never taken from the model: _action_exec only passes True to
-    ask "would this be allowed once a human confirms it on the HUD?".
+    ask "would this be allowed once a human confirms it?".
     """
     confirm = human_confirmed
     cmd_str = (cmd_str or "").strip()
@@ -485,8 +485,8 @@ def _validate_command(cmd_str: str, human_confirmed: bool = False) -> tuple[bool
         if confirm:
             return True, tokens, ""
         return False, [], (
-            f"Refused: '{what}' runs code from the repository, so it needs your confirmation on the HUD "
-            "(or a yes/no reply)."
+            f"Refused: '{what}' runs code from the repository, so it needs your confirmation "
+            "(answer yes or no)."
         )
     if not cmd_str:
         return False, [], "Refused: Command string is empty."
@@ -711,7 +711,7 @@ def _validate_command(cmd_str: str, human_confirmed: bool = False) -> tuple[bool
                 return _needs_human(f"{binary} run {target}")
             return False, [], (
                 f"Refused: Script target '{target}' is not in the safe build/test allowlist "
-                f"({', '.join(sorted(ALLOWED_BUILD_TARGETS))}). Custom targets need your confirmation on the HUD."
+                f"({', '.join(sorted(ALLOWED_BUILD_TARGETS))}). Custom targets need your confirmation (yes or no)."
             )
         else:
             return False, [], (
@@ -766,7 +766,7 @@ def _validate_command(cmd_str: str, human_confirmed: bool = False) -> tuple[bool
                     continue
                 return False, [], (
                     f"Refused: 'make {t}' is not in the safe targets allowlist "
-                    f"({', '.join(sorted(ALLOWED_BUILD_TARGETS))}). Custom targets need your confirmation on the HUD."
+                    f"({', '.join(sorted(ALLOWED_BUILD_TARGETS))}). Custom targets need your confirmation (yes or no)."
                 )
         return _needs_human("make " + " ".join(t for t in tokens[1:] if not t.startswith("-")))
 
@@ -792,7 +792,7 @@ def _validate_command(cmd_str: str, human_confirmed: bool = False) -> tuple[bool
                     continue
                 return False, [], (
                     f"Refused: 'just {t}' is not in the safe recipes allowlist "
-                    f"({', '.join(sorted(ALLOWED_BUILD_TARGETS))}). Custom recipes need your confirmation on the HUD."
+                    f"({', '.join(sorted(ALLOWED_BUILD_TARGETS))}). Custom recipes need your confirmation (yes or no)."
                 )
         if listing:
             return True, tokens, ""
@@ -984,7 +984,7 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any) -> str:
     needs_confirmation = False
     if not is_allowed:
         # Test runners, build tools and custom targets run only after a human confirms
-        # (HUD button or the daemon's yes/no reply); the model cannot approve them.
+        # (the daemon's yes/no reply); the model cannot approve them.
         ok_if_confirmed, confirmed_tokens, _ = _validate_command(cmd_str, human_confirmed=True)
         if ok_if_confirmed:
             is_allowed, tokens, needs_confirmation = True, confirmed_tokens, True
@@ -1222,8 +1222,8 @@ def _touched_secret_files(tokens: list[str], cwd_path: Path) -> list[str]:
 def _request_human_confirmation(run_id: str, cmd_str: str, tokens: list[str], cwd_path: Path, timeout_arg: Any) -> str:
     """Park a custom build/test target behind core.confirm (the daemon's yes/no gate).
 
-    The command runs only when a person answers yes (HUD button, or a bare yes/no
-    reply that kurek_daemon resolves via confirm.resolve()). The model has no
+    The command runs only when a person answers yes (a bare yes/no reply that
+    kurek_daemon resolves via confirm.resolve()). The model has no
     parameter that can approve it."""
     if _confirm.pending_title():
         reason = (

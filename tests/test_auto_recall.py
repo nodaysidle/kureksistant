@@ -64,6 +64,15 @@ def test_dated_question_without_subject_gets_that_days_turns(logs):
     assert "pizza" in block and "rotate" in block
 
 
+@pytest.mark.parametrize("prompt", [
+    "Kaj sva se pogovarjala včeraj?",
+    "Di cosa abbiamo parlato ieri?",
+])
+def test_slovenian_and_italian_questions_get_that_days_turns(logs, prompt):
+    block = auto_recall.recall_block(prompt, TODAY)
+    assert block and "pizza" in block
+
+
 def test_undated_question_searches_every_day(logs):
     block = auto_recall.recall_block("what did I say about the phone app?", TODAY)
     assert "dark theme" in block and "rotate" in block

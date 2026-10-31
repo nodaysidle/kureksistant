@@ -132,6 +132,8 @@ Rules and learned memory live outside those files:
 
 Supporting stores:
 - `memory/kurek_history.json` keeps the rolling conversation context between turns.
+- **Recall:** when a message points at the past ("yesterday", "two days ago", "what did I say about…", also Slovenian and Italian), `core/auto_recall.py` searches the daily-log index (`memory/recall_index.py`) and attaches the matching turns to that message.
+- **Learned-memory sources:** each ledger line in the prompt says whether it was set by the user, said in chat, or inferred; entries set by the user are treated as current without asking again.
 - **Hermes continuity:** When configured, Kurek reads Hermes `USER.md` / `MEMORY.md` into its system prompt. It never writes them.
 
 ---

@@ -68,7 +68,6 @@ from memory.atomic_io import atomic_write_text
 # Audio recording configuration
 SAMPLE_RATE = 16000
 CHANNELS = 1
-SILENCE_THRESHOLD = 0.003  # Sensitive threshold for USB/desk mics
 VAD_WARMUP_S = float(os.environ.get("KUREK_VAD_WARMUP_S", "0.3"))  # fast room calibration at the start
 SILENCE_DURATION = float(os.environ.get("KUREK_SILENCE_DURATION", "2.2"))   # Base pause after speech before auto-submit
 SILENCE_GROWTH = float(os.environ.get("KUREK_SILENCE_GROWTH", "0.3"))       # Extra pause granted per second already spoken

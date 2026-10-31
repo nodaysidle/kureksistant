@@ -6,7 +6,6 @@ and the daily logs of past conversations. Hermes files are read only, never writ
 """
 import re
 from datetime import datetime
-from pathlib import Path
 
 from core.proposals import propose
 from memory import ledger, recall_index, reference
@@ -48,27 +47,7 @@ def _search_daily_logs(words: set[str], limit: int = 5) -> list[str]:
     """Past turns from the daily logs that best match the keywords, best match first.
 
     A daily log is what was said, not what is true, so each hit carries its date."""
-    try:
-        hits = recall_index.search(words, limit=limit)
-    except Exception as e:
-        print(f"[Memory Tool] daily-log index unavailable ({e}); scanning the logs.", flush=True)
-        return _scan_daily_logs(words, limit)
-    return [f"• [Said on {day}] {text[:400]}" for day, text in hits]
-
-
-def _scan_daily_logs(words: set[str], limit: int = 5) -> list[str]:
-    """The pre-index fallback: read every daily log and score it in Python."""
-    hits = []
-    for log in (Path.home() / "memory").glob("????-??-??.md"):
-        try:
-            turns = log.read_text(encoding="utf-8").split("\n### ")[1:]
-        except OSError:
-            continue
-        for turn in turns:
-            if score := _score(turn, words):
-                hits.append((score, log.stem, " ".join(turn.split())))
-    hits.sort(key=lambda h: (h[0], h[1]), reverse=True)
-    return [f"• [Said on {day}] {text[:400]}" for _, day, text in hits[:limit]]
+    return [f"• [Said on {day}] {text[:400]}" for day, text in recall_index.search(words, limit=limit)]
 
 
 def _recall_line(row) -> str:

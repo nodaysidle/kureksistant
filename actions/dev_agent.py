@@ -335,7 +335,7 @@ def _open_vscode(project_dir: Path) -> bool:
     return False
 
 _PENDING_MARKER = "[CONFIRMATION_PENDING]"
-_ALREADY_PENDING = ("There is already a confirmation waiting on screen. "
+_ALREADY_PENDING = ("There is already a confirmation waiting. "
                     "Ask the user to answer that one first.")
 
 
@@ -386,7 +386,7 @@ def _run_project(run_command: str, project_dir: Path, timeout: int = 30) -> str:
 
     The model wrote run_command, so it is checked against the allowlist exactly
     as a `run` call would be; anything outside it parks behind core.confirm and
-    executes only after a person answers yes on the HUD."""
+    executes only after a person answers yes."""
     allowed, _tokens, _reason = _validate_command(run_command or "")
     if allowed:
         return _run_project_now(run_command, project_dir, timeout)

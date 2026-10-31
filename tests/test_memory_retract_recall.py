@@ -179,3 +179,14 @@ def test_recall_reindexes_changed_and_deleted_logs(logs):
 def test_recall_query_cannot_inject_fts_syntax(logs):
     for nasty in ['" OR * NEAR(', 'crash"', "NOT AND", "col:crash", "^crash*"]:
         memory_tool._search_daily_logs(memory_tool._keywords(nasty) | {nasty})
+
+
+def test_prompt_shows_where_each_memory_came_from():
+    ledger.append("fact", "terminal: Ghostty", "Alan's correction via Claude Code 2026-10-30", key="terminal")
+    ledger.append("preference", "coffee: black", "manage_memory call 2026-10-31", key="coffee")
+    ledger.append("fact", "city: Koper", "daily/2026-10-01.md (jev:2.0)", key="city")
+    block = ledger.prompt_block(6000)
+    assert "set by the user) terminal: Ghostty" in block
+    assert "said in chat) coffee: black" in block
+    assert "inferred from chat) city: Koper" in block
+    assert "'set by the user' were confirmed by the user outside the chat" in block

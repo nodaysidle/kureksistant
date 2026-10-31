@@ -43,8 +43,9 @@ _ACTIVE = "SELECT * FROM ledger l WHERE NOT EXISTS (SELECT 1 FROM ledger n WHERE
 PROMPT_HEADER = (
     "[LEARNED MEMORY]\n"
     "Learned from conversations, newest wins: an entry replaces the one it supersedes. "
-    "[USER RULES] outrank all of it. To correct an entry, call manage_memory with "
-    "replaces=<its #id>."
+    "[USER RULES] outrank all of it. Entries marked 'set by the user' were confirmed by the "
+    "user outside the chat: treat them as current, over older chat turns and recalled logs, "
+    "without asking again. To correct an entry, call manage_memory with replaces=<its #id>."
 )
 
 _warned_cut: set[int] = set()
@@ -152,6 +153,15 @@ def active(db_path: Path | None = None) -> list[sqlite3.Row]:
 _CHAT_SOURCES = ("manage_memory", "daily/", "jev")
 
 
+def origin(source: str) -> str:
+    """Where an entry came from, in the words the prompt shows."""
+    if source.startswith("manage_memory"):
+        return "said in chat"
+    if source.startswith(_CHAT_SOURCES):
+        return "inferred from chat"
+    return "set by the user"
+
+
 def outside_correction_ts(db_path: Path | None = None) -> str:
     """When memory was last corrected outside the chat (by hand or by another agent), or "".
 
@@ -175,7 +185,7 @@ def prompt_block(limit: int, db_path: Path | None = None) -> str:
     rows = [r for r in active(db_path) if r["kind"] != "retract"]
     if not rows:
         return ""
-    lines = [f"- [#{r['id']}] ({r['kind']}, {r['ts'][:10]}) {r['text']}" for r in rows]
+    lines = [f"- [#{r['id']}] ({r['kind']}, {r['ts'][:10]}, {origin(r['source'])}) {r['text']}" for r in rows]
     kept = len(lines)
     while kept > 1 and len(PROMPT_HEADER) + sum(len(ln) + 1 for ln in lines[-kept:]) > limit:
         kept -= 1

@@ -6,7 +6,7 @@
 id = "brevity"
 rule = "extreme-brevity"
 prompt = "Explain how a hash map works."
-must_not_match = "let me know|say the word|want me to|anything else|feel free|happy to|great question"
+must_not_match = "let me know|say the word|want me to|anything else (i can|you)|feel free to|happy to help|great question"
 
 [[case]]
 id = "brevity-fact"
@@ -19,13 +19,13 @@ max_words = 150
 id = "brevity-howto"
 rule = "extreme-brevity"
 prompt = "How do I undo my last git commit?"
-must_not_match = "let me know|say the word|want me to|anything else|feel free|happy to|great question"
+must_not_match = "let me know|say the word|want me to|anything else (i can|you)|feel free to|happy to help|great question"
 
 [[case]]
 id = "brevity-dns"
 rule = "extreme-brevity"
 prompt = "How does DNS work?"
-must_not_match = "let me know|say the word|want me to|anything else|feel free|happy to|great question"
+must_not_match = "let me know|say the word|want me to|anything else (i can|you)|feel free to|happy to help|great question"
 
 [[case]]
 id = "no-closing-offer"

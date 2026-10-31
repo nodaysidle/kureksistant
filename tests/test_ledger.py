@@ -84,7 +84,7 @@ def test_prompt_block_over_limit_keeps_newest_and_warns_once(db: Path, capsys) -
 @pytest.fixture
 def tool(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(ledger, "DB_PATH", tmp_path / "kurek_memory.db")
-    monkeypatch.setattr(memory_tool.Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(reference, "resolve_hermes_memory_dirs", lambda: [])
     monkeypatch.setattr(memory_tool, "_triage_with_jev", lambda k, v: None)
     (tmp_path / "MEMORY.md").write_text("# Memory\n", encoding="utf-8")

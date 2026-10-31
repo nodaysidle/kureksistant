@@ -229,3 +229,11 @@ def test_rules_toml_cannot_be_renamed_or_deleted(home: Path, hud) -> None:
     assert fc.delete_file(path=str(rules)).startswith("Refused")
     assert rules.read_text() == "original"
     assert not confirm.is_pending()
+
+
+def test_confirmation_asks_for_yes_or_no_not_a_screen(home: Path, hud) -> None:
+    f = home / "Downloads" / "x.txt"
+    f.write_text("x")
+    res = fc.delete_file(path=str(f))
+    assert "yes or no" in res
+    assert "HUD" not in res and "on screen" not in res
