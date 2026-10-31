@@ -142,7 +142,7 @@ nano .env
 | `OPENROUTER_API_KEY` | Optional | **Primary STT** (your voice audio is sent to OpenRouter Whisper) and typed decisions (Jev, then Decision-1) for auto screen-context and code intent (prompt text is sent). |
 | `KUREK_STT_PROVIDER` / `OPENROUTER_STT_MODEL` | Optional | Prefer `openrouter` (default) or `deepgram`; OpenRouter STT model. |
 | `KUREK_WHISPER_MODEL` | Optional | Local faster-whisper model (default `base.en`, English-only; `base`/`small` are multilingual). Used with no cloud STT key, and as the fallback when cloud STT fails. |
-| `KUREK_SILENCE_DURATION` / `KUREK_INITIAL_SILENCE_TIMEOUT` / `KUREK_MAX_RECORD_SECONDS` | Optional | Listening window: 2.2 s / 6 s / 30 s. |
+| `KUREK_SILENCE_DURATION` / `KUREK_INITIAL_SILENCE_TIMEOUT` / `KUREK_MAX_RECORD_SECONDS` | Optional | Listening window: 3.0 s (+0.3 s per second spoken, up to 2 s more) / 30 s / 180 s. |
 | `KUREK_STATE_NOTIFY` | Optional | `minimal` (default), `all` or `off` state toasts. |
 | `KUREK_MEMORY_FILE_MAX_CHARS` | Optional | Cap per memory file, and for the learned-memory block, injected into each prompt (default 6000). A warning is logged when something is cut. |
 | `KUREK_RULES_FILE` | Optional | Path to `rules.toml` (default `~/.config/kurek/rules.toml`). |

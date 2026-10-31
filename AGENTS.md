@@ -107,7 +107,7 @@ On Linux, real-time feedback is displayed through in-place desktop notifications
 | State | Notification Badge | Trigger / Meaning |
 |-------|--------------------|-------------------|
 | **IDLE** | `● Idle` | Ready and waiting for user input. |
-| **LISTENING** | `🟢 Listening... (Speak now)` | Mic recording active. Auto-submits after 2.2s of silence following speech (plus 0.3s per second already spoken, up to 2s more), stops after 30s if no speech starts, hard cap 180s (`KUREK_SILENCE_DURATION`, `KUREK_INITIAL_SILENCE_TIMEOUT`, `KUREK_MAX_RECORD_SECONDS`). |
+| **LISTENING** | `🟢 Listening... (Speak now)` | Mic recording active. Auto-submits after 3.0s of silence following speech (plus 0.3s per second already spoken, up to 2s more), stops after 30s if no speech starts, hard cap 180s (`KUREK_SILENCE_DURATION`, `KUREK_INITIAL_SILENCE_TIMEOUT`, `KUREK_MAX_RECORD_SECONDS`). |
 | **THINKING** | `🟡 Thinking...` | Transcribing audio, querying DeepSeek-Flash, or executing tools. |
 | **SPEAKING** | `🔵 Speaking...` | Streaming speech audio via xAI Grok TTS (**Sol** voice). |
 

@@ -69,7 +69,7 @@ from memory.atomic_io import atomic_write_text
 SAMPLE_RATE = 16000
 CHANNELS = 1
 VAD_WARMUP_S = float(os.environ.get("KUREK_VAD_WARMUP_S", "0.3"))  # fast room calibration at the start
-SILENCE_DURATION = float(os.environ.get("KUREK_SILENCE_DURATION", "2.2"))   # Base pause after speech before auto-submit
+SILENCE_DURATION = float(os.environ.get("KUREK_SILENCE_DURATION", "3.0"))   # Base pause after speech before auto-submit
 SILENCE_GROWTH = float(os.environ.get("KUREK_SILENCE_GROWTH", "0.3"))       # Extra pause granted per second already spoken
 SILENCE_MAX_EXTRA = float(os.environ.get("KUREK_SILENCE_MAX_EXTRA", "2.0")) # Cap on that adaptive extra pause
 MAX_RECORD_SECONDS = float(os.environ.get("KUREK_MAX_RECORD_SECONDS", "180.0")) # Hard ceiling for one dictation

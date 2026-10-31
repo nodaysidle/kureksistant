@@ -13,7 +13,7 @@ from core.decision_client import auto_screen_enabled
 from tests.test_stream_errors import _FakeResponse, _make_lite_engine
 
 
-@pytest.mark.parametrize("spoken,window", [(0, 2.2), (5, 3.7), (60, 4.2)])
+@pytest.mark.parametrize("spoken,window", [(0, 3.0), (5, 4.5), (60, 5.0)])
 def test_silence_window(spoken, window):
     assert daemon.effective_silence_window(100.0 + spoken, 100.0) == pytest.approx(window)
 
