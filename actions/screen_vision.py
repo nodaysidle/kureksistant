@@ -305,6 +305,7 @@ TOOL = {
         "Use 'inspect' when asked what is on screen, to read text, diagnose errors, or review code. "
         "Use 'start_watch' when asked to continuously watch the screen till told to stop (e.g. 'watch the screen and tell me what you think'). "
         "Use 'stop_watch' when asked to stop watching the screen."
+        " Call action='inspect' first whenever the user refers to something on their screen ('this error', 'this window', 'what am I looking at')."
     ),
     "parameters": {
         "type": "OBJECT",

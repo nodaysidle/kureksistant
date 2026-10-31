@@ -21,6 +21,8 @@ def home(monkeypatch, tmp_path: Path) -> Path:
     monkeypatch.setattr("core.rules.RULES_PATH", tmp_path / "rules.toml")
     monkeypatch.setattr(dream_cycle, "STATE_FILE", tmp_path / "ALIGNMENT_STATE.yaml")
     monkeypatch.setattr(dream_cycle, "REPAIRS_FILE", tmp_path / "REPAIR_THREADS.yaml")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("memory.reference.resolve_hermes_memory_dirs", lambda: [])
     return tmp_path
 
 

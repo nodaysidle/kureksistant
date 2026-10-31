@@ -1,6 +1,6 @@
 # AGENTS.md — Developer & AI Agent Guide for Kurek (Kureksistant)
 
-> **Kurek** is a headless personal AI assistant for **Arch Linux / Omarchy Quattro (Hyprland)** — a headless daemon with no GUI on purpose (~450MB peak RAM with faster-whisper loaded, observed). Features Middle Click mouse summon (C trigger; `scripts/bench_trigger.py` is an informational, machine-dependent mock-daemon benchmark, not end-to-end latency), native desktop launcher, DeepSeek-Flash reasoning, xAI Grok speech (**Sol** voice), Hermes bidirectional memory continuity, and 27 tool modules in `actions/`. Latest release: v0.2.3.
+> **Kurek** is a headless personal AI assistant for **Arch Linux / Omarchy Quattro (Hyprland)** — a headless daemon with no GUI on purpose (~450MB peak RAM with faster-whisper loaded, observed). Features Middle Click mouse summon (C trigger; `scripts/bench_trigger.py` is an informational, machine-dependent mock-daemon benchmark, not end-to-end latency), native desktop launcher, DeepSeek-Flash reasoning, xAI Grok speech (**Sol** voice), Hermes memory continuity (read-only), and 27 tool modules in `actions/`. Latest release: v0.2.3.
 
 ---
 
@@ -42,7 +42,7 @@
 │  │                             Persistent Memory System                             │  │
 │  │  • Muse Memory: ~/memory/YYYY-MM-DD.md · ~/MEMORY.md · ~/ALIGNMENT_SYNTHESIS.md │  │
 │  │  • Hermes Continuity Sync: HERMES_PROFILE / HERMES_MEMORIES_DIR / ~/.hermes/…  │  │
-│  │    (reads full USER.md & MEMORY.md, syncs bidirectional remember calls)          │  │
+│  │    (reads USER.md & MEMORY.md; never writes them)                               │  │
 │  │  • Conversation context: memory/kurek_history.json                              │  │
 │  └──────────────────────────────────────────────────────────────────────────────────┘  │
 └────────────────────────────────────────────────────────────────────────────────────────┘
@@ -65,7 +65,7 @@
 | **LLM Client** | [`core/llm_client.py`](core/llm_client.py) | Direct `api.deepseek.com` client with sentence-buffered streaming pipeline (`stream_deepseek_sentences`). |
 | **TTS Engine** | [`core/tts.py`](core/tts.py) | Implements `XAITTSEngine` (Grok Cloud TTS, voice: **Sol** / `sal`) with chunk streaming into `MpvPipeWireSink`. |
 | **STT Engine** | [`core/stt.py`](core/stt.py) | `OpenRouterSTT` (multilingual `openai/whisper-large-v3-turbo`), `DeepgramSTT` (Nova-2), `WhisperSTT` (local `faster-whisper`, model via `KUREK_WHISPER_MODEL`). Order: OpenRouter → Deepgram → local. Cloud failures raise `STTError`; `FallbackSTT` retries the utterance on local Whisper. |
-| **Memory Tool** | [`actions/memory_tool.py`](actions/memory_tool.py) | `manage_memory(action='remember'|'recall')`. Bidirectionally syncs with Hermes `USER.md` & `MEMORY.md`. |
+| **Memory Tool** | [`actions/memory_tool.py`](actions/memory_tool.py) | `manage_memory(action='remember'|'recall'|'forget')`. Reads Hermes `USER.md` & `MEMORY.md`; never writes them. |
 | **External Memory** | `HERMES_PROFILE` / `HERMES_MEMORIES_DIR` / `~/.hermes/memories` | Optional Hermes `USER.md` + `MEMORY.md` continuity. |
 | **Knowledge Vault** | [`actions/vault_knowledge.py`](actions/vault_knowledge.py) | `vault_knowledge(action='list_projects'\|'read'\|'search'\|'add_inbox')`. Accesses nodaysidle-knowledge Obsidian vault notes, PRDs, roadmaps, and social media plans. |
 | **Codebase Tool** | [`actions/codebase.py`](actions/codebase.py) | `codebase(action='search'\|'tree'\|'read'\|'find'\|'outline'\|'index'\|'status')`. Ground-truth repo-aware code inspection across allowed project roots. |
@@ -87,7 +87,7 @@ DEEPGRAM_API_KEY=...      # Deepgram Nova-2 STT (used when no OpenRouter key; vo
 OPENROUTER_API_KEY=       # Optional: primary STT (voice audio sent) + Jev/Decision-1 typed decisions (prompt text sent)
 GEMINI_API_KEY=           # Gemini-backed tools and screen vision
 TYPESAFE_API_KEY=         # Optional: Jev memory triage (direct SDK)
-KUREK_AUTO_SCREEN=1       # Set 0 to disable auto screen-context detection
+KUREK_AUTO_SCREEN=0       # Set 1 to enable auto screen-context detection (adds a decision call before every answer)
 # KUREK_DECISION_TIMEOUT=1.5
 KUREK_REMOTE_TOKEN=       # openssl rand -hex 32 — required for any non-loopback HTTP bind
 KUREK_REMOTE_BIND=        # empty=loopback only; "tailscale" binds 127.0.0.1 + Tailscale IPv4
@@ -107,7 +107,7 @@ On Linux, real-time feedback is displayed through in-place desktop notifications
 | State | Notification Badge | Trigger / Meaning |
 |-------|--------------------|-------------------|
 | **IDLE** | `● Idle` | Ready and waiting for user input. |
-| **LISTENING** | `🟢 Listening... (Speak now)` | Mic recording active. Auto-submits after 2.2s of silence following speech, stops after 6s if no speech starts, hard cap 30s (`KUREK_SILENCE_DURATION`, `KUREK_INITIAL_SILENCE_TIMEOUT`, `KUREK_MAX_RECORD_SECONDS`). |
+| **LISTENING** | `🟢 Listening... (Speak now)` | Mic recording active. Auto-submits after 2.2s of silence following speech (plus 0.3s per second already spoken, up to 2s more), stops after 30s if no speech starts, hard cap 180s (`KUREK_SILENCE_DURATION`, `KUREK_INITIAL_SILENCE_TIMEOUT`, `KUREK_MAX_RECORD_SECONDS`). |
 | **THINKING** | `🟡 Thinking...` | Transcribing audio, querying DeepSeek-Flash, or executing tools. |
 | **SPEAKING** | `🔵 Speaking...` | Streaming speech audio via xAI Grok TTS (**Sol** voice). |
 
@@ -117,7 +117,7 @@ By default only Listening and Thinking show a toast (`KUREK_STATE_NOTIFY=minimal
 
 ## 5. Memory System & Hermes Continuity
 
-Kurek uses the **Muse Memory** three-tier markdown memory plane, triaged by TypeSafe Jev. Auto screen-context detection (`KurekEngine._check_auto_screen_context`) asks `typesafe/jev-1.14` on OpenRouter Decisions first (`core/decision_client.py`), then `microsoft/microsoft-decision-1`; with no `OPENROUTER_API_KEY`—or with `KUREK_AUTO_SCREEN=0`—no screen context is injected.
+Kurek uses the **Muse Memory** three-tier markdown memory plane, triaged by TypeSafe Jev. Auto screen-context detection (`KurekEngine._check_auto_screen_context`) asks `typesafe/jev-1.14` on OpenRouter Decisions first (`core/decision_client.py`), then `microsoft/microsoft-decision-1`; it is off by default; with `KUREK_AUTO_SCREEN=1` and an `OPENROUTER_API_KEY` set, screen context is injected when the decision says so.
 
 1. **Daily logs:** `~/memory/YYYY-MM-DD.md`, the day's captured context.
 2. **Reference facts:** `~/MEMORY.md`, hand-written identity, environment and projects. Kurek never appends to it.
@@ -125,14 +125,14 @@ Kurek uses the **Muse Memory** three-tier markdown memory plane, triaged by Type
 
 Rules and learned memory live outside those files:
 - **User rules:** `~/.config/kurek/rules.toml`, verbatim, injected as `[USER RULES]`; only the user edits it (`core/rules.py`).
-- **Learned memory:** the append-only `ledger` table in `memory/kurek_memory.db`, written by `manage_memory` and Jev (`memory/ledger.py`).
-- **Proposals:** `~/kurek_proposed_rules.md`, where the dream cycle and Jev boundary triage only propose rules (`core/proposals.py`). Nothing reads it into a prompt.
+- **Learned memory:** the append-only `ledger` table in `memory/kurek_memory.db`, written only by `manage_memory` (`memory/ledger.py`).
+- **Proposals:** `~/kurek_proposed_rules.md`, where the dream cycle and Jev triage only propose (`core/proposals.py`). Nothing reads it into a prompt.
 
 **Before changing anything that reads or writes memory, rules or the prompt, read [docs/ANTI-DRIFT.md](docs/ANTI-DRIFT.md)** and run `scripts/rules_eval.py` before and after.
 
 Supporting stores:
 - `memory/kurek_history.json` keeps the rolling conversation context between turns.
-- **Hermes continuity:** When configured, `manage_memory(action='remember')` also appends to Hermes `MEMORY.md`, and Kurek reads Hermes `USER.md` / `MEMORY.md` into its system prompt.
+- **Hermes continuity:** When configured, Kurek reads Hermes `USER.md` / `MEMORY.md` into its system prompt. It never writes them.
 
 ---
 
@@ -147,7 +147,7 @@ The daemon auto-discovers all tools in the [`actions/`](actions/) directory:
 - **`computer_control`**: Simulated keystrokes, mouse clicks, hotkeys, screenshots.
 - **`reminder`**: Schedules system alarms and notifications.
 - **`web_search`**: DeepSeek Search API ($0.75 per 1000 successful searches) with DuckDuckGo / Google News RSS fallback.
-- **`manage_memory`**: Stores and retrieves personal knowledge, synced with Hermes.
+- **`manage_memory`**: Stores, recalls and forgets personal knowledge (reads Hermes, never writes it).
 - **`vault_knowledge`**: Reads and searches the `nodaysidle-knowledge` Obsidian vault (projects, PRDs, social media plans, inbox).
 - **`codebase`**: Repo-aware search, tree inspection, line-range read, symbol outlines, index snapshots, and status.
 - **`run`**: Sandboxed command runner for read-only inspection and safe build/test commands.

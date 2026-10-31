@@ -38,7 +38,7 @@ def _setup(monkeypatch, responses):
             raise item
         return item
 
-    monkeypatch.setattr(llm_client.requests, "post", post)
+    monkeypatch.setattr(llm_client._HTTP, "post", post)
     return calls
 
 
@@ -147,6 +147,6 @@ def test_query_deepseek_default_model(monkeypatch) -> None:
         seen.update(json)
         return R()
 
-    monkeypatch.setattr(llm_client.requests, "post", post)
+    monkeypatch.setattr(llm_client._HTTP, "post", post)
     assert llm_client.query_deepseek(prompt="x", model="") == "hi"
     assert seen["model"] == "deepseek-flash"

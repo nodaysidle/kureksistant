@@ -4,6 +4,7 @@ import shutil
 import platform
 from pathlib import Path
 from datetime import datetime
+from typing import Callable
 
 try:
     import send2trash
@@ -11,7 +12,9 @@ try:
 except ImportError:
     _SEND2TRASH = False
 
+from core import confirm
 from core.undo import push_undo
+from actions import _safe_paths
 
 _OS = platform.system()  # "Windows" | "Darwin" | "Linux"
 
@@ -182,6 +185,30 @@ def _safe_trash(target: Path) -> str:
     return f"Moved to Trash: {target.name}"
 
 
+_PENDING_ALREADY = ("There is already a confirmation waiting on screen. "
+                    "Ask the user to answer that one first.")
+
+
+def _gated_write(targets: Path | list[Path], key: str, title: str, detail: str,
+                 write: Callable[[], str]) -> str:
+    """Park a write that touches a secret or a rules file.
+
+    `targets` are every path the write changes: a move or rename also changes
+    its source. rules.toml is refused outright — the anti-drift contract says
+    only the user writes it, so no confirmation can unlock it. Everything else
+    sensitive is a decision for the person at the keyboard, never for the model."""
+    resolved = [_safe_paths.resolve(str(t)) for t in (targets if isinstance(targets, list) else [targets])]
+    for r in resolved:
+        if _safe_paths.is_rules_file(r):
+            return (f"Refused: {r.name} is edited only by the user. "
+                    f"I will not change it.")
+    if not any(_safe_paths.is_sensitive(r) for r in resolved):
+        return write()
+    if confirm.pending_title():
+        return _PENDING_ALREADY
+    return confirm.request(key=key, title=title, detail=detail, run=write)
+
+
 def list_files(path: str = "desktop", show_hidden: bool = False) -> str:
     try:
         target = _resolve_path(path)
@@ -236,18 +263,23 @@ def create_file(path: str, name: str = "", content: str = "") -> str:
             target = target / _infer_filename(content)
         if not _is_safe_path(target):
             return f"Access denied: {target}"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        existed = target.exists()
-        previous = None
-        if existed:
-            try:
-                previous = target.read_text(encoding="utf-8", errors="ignore")
-            except Exception:
-                previous = None
-        target.write_text(content, encoding="utf-8")
-        push_undo(f"created {target.name}",
-                  _undo_write(target, previous) if existed else _undo_create(target))
-        return f"File created: {target.name} in {target.parent}"
+
+        def _do() -> str:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            existed = target.exists()
+            previous = None
+            if existed:
+                try:
+                    previous = target.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    previous = None
+            target.write_text(content, encoding="utf-8")
+            push_undo(f"created {target.name}",
+                      _undo_write(target, previous) if existed else _undo_create(target))
+            return f"File created: {target.name} in {target.parent}"
+
+        return _gated_write(target, f"create-{target.name}",
+                            f"Create {target.name}", str(target), _do)
     except Exception as e:
         return f"Could not create file: {e}"
 
@@ -258,19 +290,24 @@ def create_folder(path: str, name: str = "") -> str:
         target = (base / name) if name else base
         if not _is_safe_path(target):
             return f"Access denied: {target}"
-        already = target.exists()
-        target.mkdir(parents=True, exist_ok=True)
-        # Only offer to undo a folder we actually made. "mkdir -p" on something
-        # that was already there is not a change, and undoing it would delete a
-        # directory the user has had for years.
-        if not already:
-            push_undo(f"created folder {target.name}", _undo_create(target))
-        return f"Folder created: {target.name}"
+
+        def _do() -> str:
+            already = target.exists()
+            target.mkdir(parents=True, exist_ok=True)
+            # Only offer to undo a folder we actually made. "mkdir -p" on something
+            # that was already there is not a change, and undoing it would delete a
+            # directory the user has had for years.
+            if not already:
+                push_undo(f"created folder {target.name}", _undo_create(target))
+            return f"Folder created: {target.name}"
+
+        return _gated_write(target, f"mkdir-{target.name}",
+                            f"Create folder {target.name}", str(target), _do)
     except Exception as e:
         return f"Could not create folder: {e}"
 
 
-def delete_file(path: str, name: str = "", confirmed: bool = False) -> str:
+def delete_file(path: str = "", name: str = "") -> str:
     try:
         base   = _resolve_path(path)
         target = (base / name) if name else base
@@ -293,19 +330,24 @@ def delete_file(path: str, name: str = "", confirmed: bool = False) -> str:
         if target.resolve() in {p.resolve() for p in protected}:
             return f"Protected directory, cannot delete: {target.name}"
 
-        if not confirmed:
-            return (
-                f"File '{target.name}' found at '{target}'. "
-                f"Deletion requires confirmation. "
-                f"Ask the user: 'Are you sure you want to delete {target.name}? Yes or No?'"
-            )
+        def _trash() -> str:
+            original = target.resolve()
+            result   = _safe_trash(target)
+            if result.startswith("Moved to Trash"):
+                push_undo(f"deleted {original.name}",
+                          lambda p=original: _restore_from_trash(p))
+            return result
 
-        original = target.resolve()
-        result   = _safe_trash(target)
-        if result.startswith("Moved to Trash"):
-            push_undo(f"deleted {original.name}",
-                      lambda p=original: _restore_from_trash(p))
-        return result
+        if _safe_paths.is_rules_file(target):
+            return f"Refused: {target.name} is edited only by the user. I will not delete it."
+        if confirm.pending_title():
+            return _PENDING_ALREADY
+        return confirm.request(
+            key=f"delete-{target.name}",
+            title=f"Move {target.name} to Trash",
+            detail=str(target),
+            run=_trash,
+        )
 
     except PermissionError:
         return f"Permission denied: {path}"
@@ -331,12 +373,16 @@ def move_file(path: str, name: str = "", destination: str = "") -> str:
         if dst.is_dir():
             dst = dst / src.name
 
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        origin = src.resolve()
-        shutil.move(str(src), str(dst))
-        push_undo(f"moved {origin.name} to {dst.parent.name}/",
-                  _undo_move(origin, dst.resolve()))
-        return f"Moved: {src.name} → {dst.parent.name}/"
+        def _do() -> str:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            origin = src.resolve()
+            shutil.move(str(src), str(dst))
+            push_undo(f"moved {origin.name} to {dst.parent.name}/",
+                      _undo_move(origin, dst.resolve()))
+            return f"Moved: {src.name} → {dst.parent.name}/"
+
+        return _gated_write([src, dst], f"move-{dst.name}",
+                            f"Move into {dst.parent.name}/", str(dst), _do)
 
     except Exception as e:
         return f"Could not move: {e}"
@@ -360,26 +406,31 @@ def copy_file(path: str, name: str = "", destination: str = "") -> str:
         if dst.is_dir():
             dst = dst / src.name
 
-        dst.parent.mkdir(parents=True, exist_ok=True)
+        def _do() -> str:
+            dst.parent.mkdir(parents=True, exist_ok=True)
 
-        if src.is_dir():
-            shutil.copytree(str(src), str(dst))
-        else:
-            shutil.copy2(str(src), str(dst))
-
-        # The undo for a copy is deleting the copy — never the original.
-        _copy = dst.resolve()
-        def _undo_copy():
-            if not _copy.exists():
-                return f"The copy '{_copy.name}' is already gone."
-            if _copy.is_dir():
-                shutil.rmtree(_copy)
+            if src.is_dir():
+                shutil.copytree(str(src), str(dst))
             else:
-                _copy.unlink()
-            return f"Removed the copy in {_copy.parent.name}/."
-        push_undo(f"copied {src.name} to {dst.parent.name}/", _undo_copy)
+                shutil.copy2(str(src), str(dst))
 
-        return f"Copied: {src.name} → {dst.parent.name}/"
+            # The undo for a copy is deleting the copy — never the original.
+            _copy = dst.resolve()
+
+            def _undo_copy():
+                if not _copy.exists():
+                    return f"The copy '{_copy.name}' is already gone."
+                if _copy.is_dir():
+                    shutil.rmtree(_copy)
+                else:
+                    _copy.unlink()
+                return f"Removed the copy in {_copy.parent.name}/."
+            push_undo(f"copied {src.name} to {dst.parent.name}/", _undo_copy)
+
+            return f"Copied: {src.name} → {dst.parent.name}/"
+
+        return _gated_write(dst, f"copy-{dst.name}",
+                            f"Copy into {dst.parent.name}/", str(dst), _do)
 
     except Exception as e:
         return f"Could not copy: {e}"
@@ -404,11 +455,15 @@ def rename_file(path: str, name: str = "", new_name: str = "") -> str:
         if new_path.exists():
             return f"A file named '{new_name}' already exists here."
 
-        old_path = target.resolve()
-        target.rename(new_path)
-        push_undo(f"renamed {old_path.name} to {new_name}",
-                  _undo_move(old_path, new_path.resolve()))
-        return f"Renamed: {target.name} → {new_name}"
+        def _do() -> str:
+            old_path = target.resolve()
+            target.rename(new_path)
+            push_undo(f"renamed {old_path.name} to {new_name}",
+                      _undo_move(old_path, new_path.resolve()))
+            return f"Renamed: {target.name} → {new_name}"
+
+        return _gated_write([target, new_path], f"rename-{new_name}",
+                            f"Rename to {new_name}", str(new_path), _do)
 
     except Exception as e:
         return f"Could not rename: {e}"
@@ -443,32 +498,37 @@ def write_file(path: str, name: str = "", content: str = "",
             target = target / _infer_filename(content)
         if not _is_safe_path(target):
             return f"Access denied: {target}"
-        target.parent.mkdir(parents=True, exist_ok=True)
 
-        # Snapshot before writing. None means "did not exist", which is a
-        # different undo (delete it) from "existed and had this in it".
-        previous: str | None = None
-        undoable = True
-        if target.exists():
-            try:
-                if target.stat().st_size > _UNDO_CONTENT_LIMIT:
-                    undoable = False       # too large to hold in memory
-                else:
-                    previous = target.read_text(encoding="utf-8", errors="ignore")
-            except Exception:
-                undoable = False           # binary, locked, unreadable
+        def _do() -> str:
+            target.parent.mkdir(parents=True, exist_ok=True)
 
-        mode = "a" if append else "w"
-        with open(target, mode, encoding="utf-8") as f:
-            f.write(content)
+            # Snapshot before writing. None means "did not exist", which is a
+            # different undo (delete it) from "existed and had this in it".
+            previous: str | None = None
+            undoable = True
+            if target.exists():
+                try:
+                    if target.stat().st_size > _UNDO_CONTENT_LIMIT:
+                        undoable = False       # too large to hold in memory
+                    else:
+                        previous = target.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    undoable = False           # binary, locked, unreadable
 
-        action = "Appended to" if append else "Written to"
-        if undoable:
-            push_undo(f"wrote to {target.name}", _undo_write(target, previous))
-            return f"{action}: {target.name}"
-        return (f"{action}: {target.name}. "
-                f"(Too large to keep a copy of the old contents, so this one "
-                f"cannot be undone.)")
+            mode = "a" if append else "w"
+            with open(target, mode, encoding="utf-8") as f:
+                f.write(content)
+
+            action = "Appended to" if append else "Written to"
+            if undoable:
+                push_undo(f"wrote to {target.name}", _undo_write(target, previous))
+                return f"{action}: {target.name}"
+            return (f"{action}: {target.name}. "
+                    f"(Too large to keep a copy of the old contents, so this one "
+                    f"cannot be undone.)")
+
+        return _gated_write(target, f"write-{target.name}",
+                            f"Write to {target.name}", str(target), _do)
     except Exception as e:
         return f"Could not write file: {e}"
 
@@ -693,7 +753,7 @@ def file_controller(
             return create_folder(path, name=name)
 
         elif action in ("delete", "remove", "rm", "unlink"):
-            return delete_file(path, name=name, confirmed=bool(params.get("confirmed", False)))
+            return delete_file(path=path, name=name)
 
         elif action in ("move", "mv"):
             return move_file(path, name=name, destination=params.get("destination", ""))
@@ -774,10 +834,6 @@ TOOL = {
             "name": {
                 "type": "STRING",
                 "description": "File name (e.g. 'kurek.md', 'handoffagent.md') especially if path is just a folder"
-            },
-            "confirmed": {
-                "type": "BOOLEAN",
-                "description": "Set to true only when user has explicitly confirmed 'Yes' to delete this specific file. Default is false."
             },
             "extension": {
                 "type": "STRING",

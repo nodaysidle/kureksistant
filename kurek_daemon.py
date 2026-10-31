@@ -60,10 +60,9 @@ from core.action_loader import discover_actions
 from core.hyprland_watcher import get_hyprland_watcher
 from core.mpv_sink import get_mpv_sink
 from core.timing import begin_query, end_query
-from core import confirm
+from core import auto_recall, confirm, tool_tiers
 from core.proposals import propose
 from core.context import TOOL_NOTE, WHO_WINS, build_messages
-from memory import ledger
 from memory.atomic_io import atomic_write_text
 
 # Audio recording configuration
@@ -71,9 +70,9 @@ SAMPLE_RATE = 16000
 CHANNELS = 1
 SILENCE_THRESHOLD = 0.003  # Sensitive threshold for USB/desk mics
 VAD_WARMUP_S = float(os.environ.get("KUREK_VAD_WARMUP_S", "0.3"))  # fast room calibration at the start
-SILENCE_DURATION = float(os.environ.get("KUREK_SILENCE_DURATION", "4.0"))   # Base pause after speech before auto-submit
-SILENCE_GROWTH = float(os.environ.get("KUREK_SILENCE_GROWTH", "0.6"))       # Extra pause granted per second already spoken
-SILENCE_MAX_EXTRA = float(os.environ.get("KUREK_SILENCE_MAX_EXTRA", "10.0")) # Cap on that adaptive extra pause
+SILENCE_DURATION = float(os.environ.get("KUREK_SILENCE_DURATION", "2.2"))   # Base pause after speech before auto-submit
+SILENCE_GROWTH = float(os.environ.get("KUREK_SILENCE_GROWTH", "0.3"))       # Extra pause granted per second already spoken
+SILENCE_MAX_EXTRA = float(os.environ.get("KUREK_SILENCE_MAX_EXTRA", "2.0")) # Cap on that adaptive extra pause
 MAX_RECORD_SECONDS = float(os.environ.get("KUREK_MAX_RECORD_SECONDS", "180.0")) # Hard ceiling for one dictation
 INITIAL_SILENCE_TIMEOUT = float(os.environ.get("KUREK_INITIAL_SILENCE_TIMEOUT", "30.0")) # Give up if no speech at all
 
@@ -441,6 +440,10 @@ def classify_confirmation_reply(text: str) -> bool | None:
     return None
 
 
+# A new prompt cancels the running turn and waits this long for it to finish.
+QUERY_WAIT_S = 30.0
+
+
 class KurekEngine:
     def __init__(self):
         self.state = KurekState.IDLE
@@ -475,7 +478,14 @@ class KurekEngine:
                         "parameters": _normalize_json_schema(decl.get("parameters", {})),
                     }
                 })
-        print(f"[Kurek] Configured {len(self.openai_tools)} tools for {brain_name()}.")
+        self.openai_tools, self.deferred_tools = tool_tiers.split(self.openai_tools)
+        if self.deferred_tools:
+            self.openai_tools.append(tool_tiers.loader_tool(self.deferred_tools))
+        deferred_note = (
+            f" ({len(self.deferred_tools)} deferred behind {tool_tiers.LOADER})"
+            if self.deferred_tools else ""
+        )
+        print(f"[Kurek] Configured {len(self.openai_tools)} tools for {brain_name()}{deferred_note}.")
 
         # Multi-turn conversational memory & persistence
         self.history_file = BASE_DIR / "memory" / "kurek_history.json"
@@ -549,6 +559,8 @@ class KurekEngine:
         self.uds_subscribers: list[socket.socket] = []
         self.uds_lock = threading.Lock()
         self._cancel_requested = False
+        # One turn at a time: a prompt that arrives mid-turn cancels it and waits.
+        self._query_lock = threading.Lock()
 
         # Pre-warm PipeWire mpv sink & start Hyprland event watcher
         try:
@@ -592,7 +604,7 @@ class KurekEngine:
         confirm.bind(_confirm_show, _confirm_hide, _confirm_log)
         print("[Kurek Confirm] Headless confirmation notifications bound.")
 
-        self._history_lock = threading.Lock()
+        self._history_lock = threading.RLock()
         self._report_startup_problems(xai_key)
 
     def _report_startup_problems(self, xai_key: str | None) -> None:
@@ -713,7 +725,8 @@ class KurekEngine:
             cur = self.state
 
         if cur == KurekState.IDLE:
-            self._cancel_requested = False
+            # Not un-cancelled here: the next handle_text_query resets it after
+            # acquiring the query lock, so a running turn still sees the cancel.
             self.start_listening()
         elif cur == KurekState.LISTENING:
             self.stop_listening_and_process()
@@ -853,10 +866,28 @@ class KurekEngine:
         remote: bool = False,
         stream_audio: bool = False,
     ):
-        begin_query()
-        self.tts.begin_stream()
-        self.set_state(KurekState.THINKING)
+        if self._query_lock.locked():
+            # Barge-in: stop the running turn's speech, then wait for it to unwind.
+            self._cancel_requested = True
+            try:
+                self.tts.stop()
+            except Exception:
+                pass
+        if not self._query_lock.acquire(timeout=QUERY_WAIT_S):
+            busy = "Still finishing the previous request. Try again in a moment."
+            self._notify_failure(busy)
+            if callback:
+                try:
+                    callback({"type": "error", "error": busy})
+                    callback({"type": "done", "reply": busy})
+                except Exception:
+                    pass
+            return None
         try:
+            begin_query()
+            self._cancel_requested = False
+            self.tts.begin_stream()
+            self.set_state(KurekState.THINKING)
             return self._handle_text_query_inner(
                 user_prompt,
                 callback=callback,
@@ -890,9 +921,11 @@ class KurekEngine:
                     time.sleep(0.05)
             except Exception:
                 pass
-            if self.state != KurekState.IDLE:
+            # A cancelled turn may unwind after the user started listening again.
+            if self.state in (KurekState.THINKING, KurekState.SPEAKING):
                 self.set_state(KurekState.IDLE)
             end_query()
+            self._query_lock.release()
 
     def _run_tool(self, fn_name: str, fn_args: dict, *, remote: bool = False) -> str:
         """Dispatch a tool call; block exec/shell tools for remote clients by default."""
@@ -945,7 +978,6 @@ class KurekEngine:
         user_name = (get_user_name() or "the user").strip()
         sys_prompt = (
             f"You are Kurek, an ultra-fast, terse, hyper-competent personal AI assistant. "
-            f"Current date and time: {now_str}. "
             f"You are assisting {user_name}. Your voice is powered by xAI Grok (Sol) and your brain is powered directly by {brain_name()}. "
             f"Execute {user_name}'s commands promptly and helpfully. "
             "You are running natively on the user's workstation with local tool access (not a remote sandbox). "
@@ -960,23 +992,8 @@ class KurekEngine:
             "  5. In your spoken response, give a punchy 1-2 sentence summary of what you found. State that the file was saved ONLY after file_controller succeeded, specifying the exact path. Never claim a file was written if the write was not executed. "
             "• file_controller: full filesystem management to create, write, append, read, list, and move files anywhere (e.g. ~/Downloads, ~/Desktop, ~/Documents). "
             "  - FILE CREATION PERMISSION: You may create or write files when asked. If asked to make a file, IMMEDIATELY call file_controller with action='create_file' without asking for permission. "
-            f"  - FILE DELETION CONFIRMATION: When asked to delete a specific file, call file_controller with action='delete', path=..., confirmed=false. Then ALWAYS ask {user_name}: 'Are you sure you want to delete [filename]? Yes or No?'. NEVER delete a file with confirmed=true unless they have explicitly replied 'Yes'. "
-            "• open_app: launch or switch to apps and tools "
-            "• browser_control: control desktop browser GUI windows (click, type, scroll, navigate tabs). Do NOT use this tool to look up information — use web_search instead. "
-            "• computer_settings: adjust volume, mute, display, and connectivity "
-            "• desktop_control: minimize, maximize, hide, or arrange windows "
-            "• computer_control: simulate typing, clicks, hotkeys, or capture screenshots "
-            "• reminder: schedule alarms and notifications "
-            "• manage_memory: store and recall user knowledge, preferences, and notes; pass replaces=<#id> to correct an earlier learned memory "
-            "• screen_vision: visual perception of the monitor and active Hyprland windows. Use action='inspect' when asked what is on screen, to diagnose compiler errors, review code, or inspect active windows. Use action='start_watch' to continuously watch until told to stop. "
-            "• manage_clipboard: persistent Wayland clipboard manager with snippet pinning and recall. Use action='get_latest' when asked what is in the clipboard. Use action='pin' with an optional title to pin a snippet. Use action='list_pinned' to review saved snippets. Use action='copy' to restore a snippet back into the system clipboard. "
-            "• system_monitor: hardware diagnostics and 5-minute sustained CPU/RAM watcher. Use action='status' when asked about system resources, CPU, RAM, or temperature. "
-            "• process_sentinel: watch long-running compile, build, test, or training jobs (cargo, npm, python, rustc, make). Use action='watch' with a process name, command, or PID. When the job finishes, Kurek alerts verbally and sends a notification. "
-            "• draft_to_clipboard: format dictated text into conventional commits, GitHub PR descriptions, issues, docstrings, or markdown notes and copies immediately to the Wayland system clipboard (wl-copy) for instant pasting with Ctrl+V. "
-            "• workstation_radar: parallel health scan across the git repositories under ~/dev. Use action='actionable' to report dirty working trees, untracked files, and unpushed commits ahead of upstream. "
-            "• dream_tool: executes the Muse Memory reflection cycle. Synthesizes today's daily log into an atmospheric dream journal (~/dreams/YYYY-MM-DD.md) and writes rule proposals to ~/kurek_proposed_rules.md for the user to review. "
+            "  - FILE DELETION: call file_controller with action='delete'; it puts a confirmation on screen and the user answers yes or no. Never claim a file was deleted until that happens. "
             + _run_tool_prompt_line() +
-            "• vault_knowledge: access the nodaysidle-knowledge llm-wiki and Obsidian vault. Use action='list_projects' when asked about what projects exist in the nodaysidle portfolio, what is done, active projects, or releases. Use action='read' with note_name (e.g. 'x-promo-strategy', 'cascade-v3-overview', 'nodaysrammar-overview', 'kureksistant-overview', 'nodaysidle-sonora-overview') to read architecture specs, project PRDs, roadmaps, or social media promotion plans. Use action='search' with a query to look up anything across all notes in the vault. Use action='add_inbox' to capture quick ideas or tasks directly into the vault inbox. "
             "Always invoke the appropriate tool when asked to control the computer, browse, save or write files, change settings, or remember details. "
             "CONVERSATION & OPINIONS: "
             "• When asked for your opinion, thoughts, perspective, or recommendation, provide a direct, candid, and thoughtful opinion with a clear, confident stance. Speak naturally and conversationally. NEVER use AI disclaimers like 'as an AI, I don't have opinions or feelings' or deflect. "
@@ -995,16 +1012,24 @@ class KurekEngine:
             "5. No Apology Deflections: Apologies are never an acceptable substitute for results or honest reporting. Do not use 'Sorry, Master Alan.' or any variant to close a turn, gloss over an unperformed task, or mask a failure. Report facts, tool outcomes, and errors directly. "
             "6. Clarify Instead of Guessing: If a prompt is ambiguous, blocked, or missing parameters required to act, ask exactly one direct, brief question to resolve the blocker. Do not fabricate missing information or guess. "
             + WHO_WINS +
-            "RECALL: When the user refers to a past conversation ('two days ago', 'last week', 'what did I say about...') or asks about anything personal you cannot see above, call manage_memory(action='recall') BEFORE saying you don't know. Put several keywords and synonyms in one query (e.g. 'phone apk android crash rotate'). Answer with the date and what was said ('On Tuesday you said...'). What recall finds stays what was said: save it only if the user asks you to remember it. "
+            "RECALL: When the user refers to a past conversation ('two days ago', 'last week', 'what did I say about...'), the daemon may already have attached a [RECALLED FROM DAILY LOGS] block to their message: answer from it. If it is missing or does not hold the answer, or they ask about anything personal you cannot see above, call manage_memory(action='recall') BEFORE saying you don't know. Put several keywords and synonyms in one query (e.g. 'phone apk android crash rotate'). Answer with the date and what was said ('On Tuesday you said...'). What recall finds stays what was said: save it only if the user asks you to remember it. "
             "CONNECTIONS: When you notice a clear link to one of the user's projects or to something said before, and it changes the answer, mention it in one sentence. Never phrase it as an offer. "
             "FILE TASKS: Only when the user asks you to sort, clean up, move, rename or delete files: look first (list the files). A file is connected to a project only when its name or folder clearly names one of the projects listed below. Before moving, renaming or deleting connected files, ask ONE question with the grouped plan (e.g. '3 files look like Kurek Remote builds and 2 like Sonora notes: move them to those projects and keep only the newest APK?'), then act on the answer. Leave any file you are not sure about where it is, and say so. Files with no project link: do what was asked; deletion still needs confirmation."
         )
 
         # Autonomous screen-context detection (Jev → Decision-1 fallback)
         auto_vision_ctx = self._check_auto_screen_context(user_prompt)
-        effective_user_prompt = f"{user_prompt}\n\n{auto_vision_ctx}" if auto_vision_ctx else user_prompt
+        try:
+            recalled = auto_recall.recall_block(user_prompt)
+        except Exception as e:
+            print(f"[Kurek Recall] notice: {e}", flush=True)
+            recalled = None
+        if recalled:
+            print(f"[Kurek Recall] Added {recalled.count(chr(10))} past turn(s) to the prompt.", flush=True)
+        extra = [c for c in (auto_vision_ctx, recalled) if c]
+        effective_user_prompt = "\n\n".join([user_prompt, *extra])
 
-        messages = build_messages(sys_prompt, effective_user_prompt, self.history)
+        messages = build_messages(sys_prompt, effective_user_prompt, self.history, now=now_str)
 
         reply_text = ""
         last_tool_output = ""
@@ -1013,6 +1038,7 @@ class KurekEngine:
         max_tool_turns = 15
         sentence_count = 0
         stream_error: str | None = None
+        turn_tools = list(self.openai_tools)
 
         for turn_idx in range(max_tool_turns):
             if self._cancel_requested:
@@ -1020,11 +1046,12 @@ class KurekEngine:
 
             tool_detected = False
             streamed_sentences = []
+            flushed = False
 
             for ev in stream_deepseek_sentences(
                 messages=messages,
                 # Final round: forbid tool calls so the model has to answer.
-                tools=self.openai_tools or None,
+                tools=turn_tools or None,
                 tool_choice="none" if turn_idx == max_tool_turns - 1 else None,
                 model="deepseek-flash",
             ):
@@ -1038,10 +1065,6 @@ class KurekEngine:
 
                 if ev_type == "tool_calls":
                     tool_detected = True
-                    if callback and stream_audio:
-                        # Sentence audio events are emitted by the TTS worker;
-                        # flush them so the phone sees them before tool events.
-                        self.tts.wait_stream(timeout=30)
                     tool_calls = ev.get("tool_calls", [])
                     asst_msg = {
                         "role": "assistant",
@@ -1065,13 +1088,24 @@ class KurekEngine:
                         print(f"[Kurek Tool Dispatch] ⚙️ {fn_name}({fn_args})", flush=True)
                         tools_run.append(f"{fn_name}({json.dumps(fn_args, ensure_ascii=False)[:200]})")
                         try:
-                            tool_result = self._run_tool(fn_name, fn_args, remote=remote)
+                            if fn_name == tool_tiers.LOADER:
+                                tool_result = tool_tiers.load(
+                                    fn_args.get("names") or [], self.deferred_tools, turn_tools
+                                )
+                            else:
+                                tool_result = self._run_tool(fn_name, fn_args, remote=remote)
                         except Exception as e:
                             tool_result = f"Error executing {fn_name}: {e}"
                         last_tool_output = str(tool_result)
                         print(f"[Kurek Tool Result] → {tool_result}", flush=True)
 
                         if callback:
+                            if stream_audio and not flushed:
+                                # Sentence audio events are emitted by the TTS
+                                # worker; flush them only now so the tool ran
+                                # while the remaining sentences were synthesized.
+                                self.tts.wait_stream(timeout=30)
+                                flushed = True
                             try:
                                 arg_summary = ", ".join(f"{k}='{v}'" for k, v in list(fn_args.items())[:2]) if isinstance(fn_args, dict) else ""
                                 callback({"type": "tool", "name": fn_name, "description": f"⚙️ {fn_name}({arg_summary})", "result": str(tool_result)[:100]})
@@ -1181,10 +1215,16 @@ class KurekEngine:
 
         print(f"[Kurek Reply] 💬 \"{reply_text}\"", flush=True)
 
+        if self._cancel_requested:
+            # Superseded by a newer prompt: say nothing, remember nothing.
+            print("[Kurek] Cancelled turn — history and memory left untouched.", flush=True)
+            return reply_text
+
         # Update multi-turn history & persist
         ts = datetime.now().isoformat(timespec="seconds")
-        self.history.append({"role": "user", "content": user_prompt, "ts": ts})
-        self.history.append({"role": "assistant", "content": reply_text, "tools": tools_run, "ts": ts})
+        with self._history_lock:
+            self.history.append({"role": "user", "content": user_prompt, "ts": ts})
+            self.history.append({"role": "assistant", "content": reply_text, "tools": tools_run, "ts": ts})
         self._save_history()
 
         # Muse Daily Log & Asynchronous Jev Memory Triage
@@ -1346,14 +1386,14 @@ class KurekEngine:
             if is_durable and salience >= 1.5 and kind in ("preference", "boundary", "fact"):
                 today = datetime.now().strftime("%Y-%m-%d")
                 fact = " ".join(user_prompt.split())
-                source = f"daily/{today}.md (jev:{salience:.1f}, conf:{conf:.2f})"
-                memory_id = ledger.append(kind, fact, source, heard=fact)
-                print(f"[Muse Jev] 🧠 Learned durable {kind} as memory #{memory_id}: {fact[:60]}...", flush=True)
-
-                if kind == "boundary" and propose(
-                    f"jev (boundary, salience {salience:.1f})", fact, heard=fact, source=f"daily/{today}.md"
+                if propose(
+                    f"jev ({kind}, salience {salience:.1f})", fact, heard=fact, source=f"daily/{today}.md",
+                    kind="rule" if kind == "boundary" else "fact",
                 ):
-                    print("[Muse Jev] 🛡️ Proposed boundary in kurek_proposed_rules.md", flush=True)
+                    print(f"[Muse Jev] 📝 Proposed durable {kind} (conf:{conf:.2f}): {fact[:60]}...",
+                          flush=True)
+                else:
+                    print(f"[Muse Jev] durable {kind} already proposed: {fact[:60]}...", flush=True)
         except Exception as e:
             print(f"[Muse Jev Consolidation Notice] {e}", flush=True)
 

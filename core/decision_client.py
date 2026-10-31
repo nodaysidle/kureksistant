@@ -97,9 +97,9 @@ class Decision:
 
 
 def auto_screen_enabled() -> bool:
-    """Return False when ``KUREK_AUTO_SCREEN`` is an explicit opt-out."""
-    flag = (os.environ.get("KUREK_AUTO_SCREEN") or "1").strip().lower()
-    return flag not in ("0", "false", "no", "off", "disabled")
+    """Return True only when ``KUREK_AUTO_SCREEN`` is an explicit opt-in."""
+    flag = (os.environ.get("KUREK_AUTO_SCREEN") or "0").strip().lower()
+    return flag in ("1", "true", "yes", "on")
 
 
 def intent_routing_enabled() -> bool:

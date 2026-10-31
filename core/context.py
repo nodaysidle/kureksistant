@@ -49,7 +49,9 @@ def history_message(turn: dict) -> dict:
     return {"role": turn.get("role", "user"), "content": content}
 
 
-def build_messages(persona: str, user_prompt: str, history: list[dict]) -> list[dict]:
+def build_messages(
+    persona: str, user_prompt: str, history: list[dict], now: str | None = None
+) -> list[dict]:
     """The chat messages for one turn: system prompt, recent history, then the user's prompt
     with any pinned rules repeated after it."""
     global _warned_cutoff
@@ -67,6 +69,9 @@ def build_messages(persona: str, user_prompt: str, history: list[dict]) -> list[
     mem_parts = [reference.prompt_block(), ledger.prompt_block(reference.MEMORY_FILE_MAX_CHARS)]
     if mem_block := "\n\n".join(p for p in mem_parts if p).strip():
         sys_prompt += f"\n\n[USER MEMORY & PREFERENCES]\n{mem_block}"
+    # Last, so DeepSeek's prefix cache still matches: only this tail changes per turn.
+    if now:
+        sys_prompt += f"\n\n[CURRENT TIME]\nCurrent date and time: {now}."
 
     messages = [{"role": "system", "content": sys_prompt}]
     # Last 10 turns for continuity. Turns from before a memory correction made outside the

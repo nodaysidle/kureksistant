@@ -20,6 +20,10 @@ _Avoid_: Temporary memory
 A new memory entry that replaces an older one. The older one stays in the history but no longer counts.
 _Avoid_: Edit, update, overwrite
 
+**Retraction**:
+A memory entry withdrawn without being deleted. A retraction supersedes it, so neither reaches Kurek, and recall still shows both as retracted.
+_Avoid_: Delete, erase, wipe
+
 **Rule**:
 A standing instruction the user wrote, kept word for word. Only the user writes rules.
 _Avoid_: Preference, setting, guideline
@@ -36,7 +40,7 @@ A hand-written sheet of who the user is, their setup and their projects. Kurek r
 _Avoid_: Core memory, Muse core
 
 **Hermes memory**:
-Notes kept by Hermes, another of the user's agents, that Kurek reads and also adds to.
+Notes kept by Hermes, another of the user's agents. Kurek reads them and never adds to them.
 
 **Project**:
 One of the user's git repositories under `~/dev/nodaysidle`, called by its portfolio name. Nothing else counts as a project.

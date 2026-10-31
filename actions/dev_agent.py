@@ -27,7 +27,9 @@ def get_base_dir():
 
 
 from memory.config_manager import get_gemini_key
+from core import confirm
 from core.decision_client import classify_error, intent_routing_enabled
+from actions.run import _validate_command
 BASE_DIR         = get_base_dir()
 PROJECTS_DIR     = Path.home() / "Desktop" / "JarvisProjects"
 MAX_FIX_ATTEMPTS = 5
@@ -332,7 +334,16 @@ def _open_vscode(project_dir: Path) -> bool:
                 continue
     return False
 
-def _run_project(run_command: str, project_dir: Path, timeout: int = 30) -> str:
+_PENDING_MARKER = "[CONFIRMATION_PENDING]"
+_ALREADY_PENDING = ("There is already a confirmation waiting on screen. "
+                    "Ask the user to answer that one first.")
+
+
+def _is_pending_confirmation(text: str) -> bool:
+    return bool(text) and (text.startswith(_PENDING_MARKER) or text == _ALREADY_PENDING)
+
+
+def _run_project_now(run_command: str, project_dir: Path, timeout: int = 30) -> str:
     print(f"[DevAgent] 🚀 Running: {run_command}")
     try:
         parts = shlex.split(run_command) if isinstance(run_command, str) else list(run_command)
@@ -369,28 +380,63 @@ def _run_project(run_command: str, project_dir: Path, timeout: int = 30) -> str:
     except Exception as e:
         return f"Run error: {e}"
 
-def _try_auto_install(error_output: str, project_dir: Path) -> bool:
-    """If there is a ModuleNotFoundError, tries to auto-install the missing package."""
+
+def _run_project(run_command: str, project_dir: Path, timeout: int = 30) -> str:
+    """Run the generated project only through the same gate as actions/run.py.
+
+    The model wrote run_command, so it is checked against the allowlist exactly
+    as a `run` call would be; anything outside it parks behind core.confirm and
+    executes only after a person answers yes on the HUD."""
+    allowed, _tokens, _reason = _validate_command(run_command or "")
+    if allowed:
+        return _run_project_now(run_command, project_dir, timeout)
+    if confirm.pending_title():
+        return _ALREADY_PENDING
+    return confirm.request(
+        key="dev-agent-run",
+        title=f"Run '{run_command}'",
+        detail=f"in {project_dir}",
+        run=lambda: _run_project_now(run_command, project_dir, timeout),
+    )
+
+
+def _try_auto_install(error_output: str, project_dir: Path) -> str:
+    """If there is a ModuleNotFoundError, offer to install the missing package.
+
+    The package name is scraped from an error message the generated code can
+    print, so the install never happens without a human yes. Returns "" when
+    there is nothing to install."""
     pattern = re.compile(
         r"No module named ['\"]([a-zA-Z0-9_\-\.]+)['\"]", re.IGNORECASE
     )
     match = pattern.search(error_output)
     if not match:
-        return False
+        return ""
 
     pkg = match.group(1).replace("_", "-").split(".")[0]
     print(f"[DevAgent] 🔧 Auto-installing missing package: {pkg}")
-    try:
-        cmd = _wrap_systemd_scope([sys.executable, "-m", "pip", "install", pkg])
-        result = subprocess.run(
-            cmd,
-            capture_output=True, text=True,
-            encoding="utf-8", errors="replace",
-            timeout=60, cwd=str(project_dir)
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
+
+    def _install() -> str:
+        try:
+            cmd = _wrap_systemd_scope([sys.executable, "-m", "pip", "install", pkg])
+            result = subprocess.run(
+                cmd,
+                capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
+                timeout=60, cwd=str(project_dir)
+            )
+            return f"Installed {pkg}" if result.returncode == 0 else f"Install of {pkg} failed"
+        except Exception as e:
+            return f"Install of {pkg} failed: {e}"
+
+    if confirm.pending_title():
+        return _ALREADY_PENDING
+    return confirm.request(
+        key=f"dev-agent-pip-{pkg}",
+        title=f"Install Python package '{pkg}'",
+        detail=f"with pip, for the project in {project_dir}",
+        run=_install,
+    )
 
 def _fix_files(
     error_output: str,
@@ -574,6 +620,12 @@ def _build_project(
         last_output = _run_project(run_command, project_dir, timeout)
         log(f"Output preview: {last_output[:150]}")
 
+        if _is_pending_confirmation(last_output):
+            # The run is parked until a person answers; retrying or "fixing"
+            # would only stack a second banner on top of the first. The text is
+            # an instruction for the model, so it is returned, never spoken.
+            return last_output
+
         if not _has_error(last_output, run_command):
             msg = (
                 f"Project '{proj_name}' is working, sir. "
@@ -589,6 +641,8 @@ def _build_project(
         error_type = _classify_error(last_output)
         if error_type == "dependency_error" and auto_installs < 3:
             installed = _try_auto_install(last_output, project_dir)
+            if _is_pending_confirmation(installed):
+                return installed
             if installed:
                 auto_installs += 1
                 log("Missing dependency installed, retrying...")

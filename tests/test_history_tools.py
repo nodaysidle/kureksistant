@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import kurek_daemon as daemon
 from core import context
+from memory import ledger as memory_ledger
 
 
 def test_assistant_turn_lists_its_tools():
@@ -65,7 +66,7 @@ def test_turns_from_before_an_outside_memory_correction_are_not_sent(monkeypatch
         {"role": "user", "content": "hi", "ts": "2026-10-30T12:00:00"},
         {"role": "assistant", "content": "Hello.", "tools": [], "ts": "2026-10-30T12:00:00"},
     ]
-    monkeypatch.setattr(daemon.ledger, "outside_correction_ts", lambda: "2026-10-30T11:00:00")
+    monkeypatch.setattr(memory_ledger, "outside_correction_ts", lambda: "2026-10-30T11:00:00")
     seen: list[list[dict]] = []
 
     def fake_stream(**kwargs):

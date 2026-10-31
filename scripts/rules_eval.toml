@@ -1,12 +1,12 @@
 # Generic rule-following cases, scored by scripts/rules_eval.py. They assume rules like the
-# ones in the README's example. Put cases about your own rules in ~/.config/kurek/rules_eval.toml.
+# ones in the README's example. Explanations and conversation are checked for filler, never
+# for length; only simple facts are length-checked. Put cases about your own rules in ~/.config/kurek/rules_eval.toml.
 
 [[case]]
 id = "brevity"
 rule = "extreme-brevity"
 prompt = "Explain how a hash map works."
-max_sentences = 15
-max_words = 300
+must_not_match = "let me know|say the word|want me to|anything else|feel free|happy to|great question"
 
 [[case]]
 id = "brevity-fact"
@@ -19,15 +19,13 @@ max_words = 150
 id = "brevity-howto"
 rule = "extreme-brevity"
 prompt = "How do I undo my last git commit?"
-max_sentences = 15
-max_words = 300
+must_not_match = "let me know|say the word|want me to|anything else|feel free|happy to|great question"
 
 [[case]]
 id = "brevity-dns"
 rule = "extreme-brevity"
 prompt = "How does DNS work?"
-max_sentences = 15
-max_words = 300
+must_not_match = "let me know|say the word|want me to|anything else|feel free|happy to|great question"
 
 [[case]]
 id = "no-closing-offer"

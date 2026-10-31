@@ -23,6 +23,8 @@ import tempfile
 import threading
 from typing import Callable, Optional
 
+import requests
+
 import sounddevice as sd
 
 from core.timing import mark as timing_mark
@@ -117,14 +119,14 @@ class XAITTSEngine:
         self.voice_id = _XAI_VOICE_MAP.get(raw_voice, raw_voice)
         self.language = language or "en"
         self._fallback = SystemSpeechEngine()
+        self._http = requests.Session()
 
     def synthesize(self, text: str) -> bytes | None:
         """Return MP3 bytes for text, or None on any failure."""
         if not text.strip() or not self.api_key:
             return None
-        import requests
         try:
-            resp = requests.post(
+            resp = self._http.post(
                 "https://api.x.ai/v1/tts",
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
@@ -205,9 +207,13 @@ class TTSPlayer:
         on_start: Optional[Callable] = None,
         on_done: Optional[Callable] = None,
     ) -> None:
-        """Synthesise and play text. BLOCKING – call from a dedicated thread."""
+        """Synthesise and play text. BLOCKING – call from a dedicated thread.
+
+        Bumps the generation first, so sentences still queued from an earlier
+        turn cannot play after (or over) this one."""
         try:
             with self._lock:
+                self._generation += 1
                 self._playing = True
             if on_start:
                 on_start()
@@ -241,8 +247,10 @@ class TTSPlayer:
     # -- streaming queue ----------------------------------------------------
 
     def begin_stream(self) -> None:
-        """Start a new utterance: the next queued clip replaces mpv's playlist."""
+        """Start a new utterance: the next queued clip replaces mpv's playlist,
+        and anything still queued from an earlier turn is dropped."""
         with self._lock:
+            self._generation += 1
             self._stream_first = True
 
     def enqueue(

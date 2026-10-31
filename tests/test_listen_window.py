@@ -27,12 +27,12 @@ def test_window_growth_is_capped() -> None:
 
 def test_long_thought_survives_a_pause_that_would_otherwise_submit() -> None:
     start = 1000.0
-    # 40 s of speech, then a 5 s pause: open, because the window grew.
+    # 40 s of speech, then a 3.5 s pause: open, because the window grew.
     last_sound = start + 40.0
-    assert daemon.silence_stop_reason(last_sound + 5.0, True, last_sound, start) is None
-    # The same 5 s pause after a two-word answer still submits.
+    assert daemon.silence_stop_reason(last_sound + 3.5, True, last_sound, start) is None
+    # The same 3.5 s pause after a two-word answer still submits.
     brief = start + 1.0
-    assert daemon.silence_stop_reason(brief + 5.0, True, brief, start) == "silence"
+    assert daemon.silence_stop_reason(brief + 3.5, True, brief, start) == "silence"
 
 
 def test_hard_ceiling_is_three_minutes() -> None:
@@ -84,8 +84,9 @@ def test_max_window_for_a_long_question() -> None:
     start = 1000.0
     window = daemon.effective_silence_window(start + 30.0, start)
     assert window == pytest.approx(daemon.SILENCE_DURATION + daemon.SILENCE_MAX_EXTRA)
-    # 30 s into a question a 10 s pause is fine; 5 s would never have been enough before.
-    assert daemon.silence_stop_reason(start + 40.0, True, start + 30.0, start) is None
+    # 30 s into a question a 4 s pause is fine; the base window alone would submit.
+    assert daemon.silence_stop_reason(start + 34.0, True, start + 30.0, start) is None
+    assert daemon.silence_stop_reason(start + 34.0 + daemon.SILENCE_MAX_EXTRA, True, start + 30.0, start) == "silence"
 
 
 class _ToggleStub:
