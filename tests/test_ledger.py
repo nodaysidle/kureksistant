@@ -79,6 +79,9 @@ def test_prompt_block_over_limit_keeps_newest_and_warns_once(db: Path, capsys) -
     ledger.prompt_block(limit, db)
     assert "entry number 5" in block and "entry number 0" not in block
     assert capsys.readouterr().out.count("WARNING") == 1
+    hidden = 6 - block.count("entry number")
+    assert hidden > 0 and f"{hidden} older entries are not shown here; call manage_memory recall" in block
+    assert "older entries" not in ledger.prompt_block(10_000, db)
 
 
 @pytest.fixture

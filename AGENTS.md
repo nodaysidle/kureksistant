@@ -88,6 +88,7 @@ OPENROUTER_API_KEY=       # Optional: primary STT (voice audio sent) + Jev/Decis
 GEMINI_API_KEY=           # Gemini-backed tools and screen vision
 TYPESAFE_API_KEY=         # Optional: Jev memory triage (direct SDK)
 KUREK_AUTO_SCREEN=0       # Set 1 to enable auto screen-context detection (adds a decision call before every answer)
+# KUREK_CLAIM_GATE=off    # Claim gate is observe-only by default; "off" disables the log
 # KUREK_DECISION_TIMEOUT=1.5
 KUREK_REMOTE_TOKEN=       # openssl rand -hex 32 — required for any non-loopback HTTP bind
 KUREK_REMOTE_BIND=        # empty=loopback only; "tailscale" binds 127.0.0.1 + Tailscale IPv4
@@ -132,9 +133,10 @@ Rules and learned memory live outside those files:
 
 Supporting stores:
 - `memory/kurek_history.json` keeps the rolling conversation context between turns.
-- **Recall:** when a message points at the past ("yesterday", "two days ago", "what did I say about…", also Slovenian and Italian), `core/auto_recall.py` searches the daily-log index (`memory/recall_index.py`) and attaches the matching turns to that message.
+- **Recall:** when a message points at the past ("yesterday", "two days ago", "what did I say about…"; English only), `core/auto_recall.py` searches the daily-log index (`memory/recall_index.py`) and attaches the matching turns to that message.
 - **Learned-memory sources:** each ledger line in the prompt says whether it was set by the user, said in chat, or inferred; entries set by the user are treated as current without asking again.
 - **Hermes continuity:** When configured, Kurek reads Hermes `USER.md` / `MEMORY.md` into its system prompt. It never writes them.
+- **Claim gate:** `core/claim_gate.py` checks each sentence just before it is spoken against this turn's tool outcomes (`ok`, `failed`, `timed_out`, `pending_confirmation`). Unbacked "deleted", "sent" and "saved/created" claims are logged to `~/.local/share/kurek/claim-violations.jsonl`. Observe-only: it never changes speech, and a gate error falls through to normal speech. English triggers only.
 
 ---
 

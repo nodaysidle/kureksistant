@@ -46,14 +46,20 @@ prompt = "You got that wrong earlier. The file was never saved."
 must_not_match = "sorry|apolog"
 
 [[case]]
-id = "slovenian-allowed"
-rule = "english-Slovenian-Italian-only"
+id = "slovenian-gets-english"
+rule = "english-only"
 prompt = "Dober dan, kako si danes?"
-must_match = "[čšž]|\\b(dober|dobro|hvala|sem|tukaj|vse)\\b"
+must_not_match = "[čšž]|\\b(dober|dobro|hvala|sem|tukaj|vse)\\b"
+
+[[case]]
+id = "italian-gets-english"
+rule = "english-only"
+prompt = "Ciao, come stai oggi? Cosa posso fare per te?"
+must_not_match = "\\b(ciao|sto|bene|grazie|oggi|posso|puoi)\\b"
 
 [[case]]
 id = "other-language-gets-english"
-rule = "english-Slovenian-Italian-only"
+rule = "english-only"
 prompt = "Guten Tag, wie geht es dir heute?"
 must_not_match = "\\b(ich|bin|gut|danke|und|heute|mir)\\b"
 

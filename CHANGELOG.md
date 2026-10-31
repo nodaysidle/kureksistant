@@ -13,8 +13,12 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 - **Project-aware file tasks:** projects are the git repos in `~/dev/nodaysidle`. Kurek looks first, asks one question with a grouped plan for files that clearly belong to a project, and leaves files it is unsure about alone.
 - **One-sentence connections** to a project or past conversation when they change the answer.
 - `GLOSSARY.md` names each memory store.
+- **Claim gate (observe-only):** each spoken sentence is checked against what the tools did that turn. A first-person "deleted / sent / saved" that no tool outcome backs (no call, failed, timed out, or still waiting for confirmation) is logged to `~/.local/share/kurek/claim-violations.jsonl`. Nothing spoken changes. `KUREK_CLAIM_GATE=off` disables it. English only. See `core/claim_gate.py`.
+- When the learned-memory block outgrows `KUREK_MEMORY_FILE_MAX_CHARS`, the prompt now says how many older entries are hidden and points to recall.
 
 ### Changed
+- **English only.** Kurek replies in English whatever language a message is in (`english-only` rule in `rules.toml`, pinned). Recall no longer understands Slovenian or Italian time words. The `slovenian-allowed` eval case became `slovenian-gets-english`, and `italian-gets-english` was added.
+- The confirmation prompt no longer mentions "the user's own language".
 - Chat turns from before a memory correction made outside the chat are no longer sent to the model, so the old fact in the chat cannot win (a warning is logged).
 - Ghostty is the default terminal again.
 - `~/Projects` (legacy) dropped from `workstation_radar` and the codebase tool's default roots, and from the vault lookup.

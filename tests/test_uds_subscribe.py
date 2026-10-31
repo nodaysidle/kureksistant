@@ -65,7 +65,15 @@ def test_uds_subscribe_receives_state_broadcast(monkeypatch, tmp_path: Path) -> 
 
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     client.settimeout(5.0)
-    client.connect(str(sock_path))
+    # The socket file appears at bind(), a moment before listen(): retry a refused connect.
+    for _ in range(40):
+        try:
+            client.connect(str(sock_path))
+            break
+        except ConnectionRefusedError:
+            time.sleep(0.05)
+    else:
+        client.connect(str(sock_path))
     client.sendall(b'{"action":"subscribe"}\n')
 
     initial = _read_json_line(client)

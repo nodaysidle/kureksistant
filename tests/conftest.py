@@ -44,3 +44,9 @@ def _isolated_memory_db(tmp_path, monkeypatch):
     from memory import ledger
 
     monkeypatch.setattr(ledger, "DB_PATH", tmp_path / "kurek_memory.db")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_claim_log(tmp_path, monkeypatch):
+    """Spoken-claim violations go to a temp file, never ~/.local/share/kurek."""
+    monkeypatch.setenv("KUREK_CLAIM_LOG", str(tmp_path / "claim-violations.jsonl"))
