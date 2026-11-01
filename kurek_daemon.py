@@ -60,7 +60,7 @@ from core.action_loader import discover_actions
 from core.hyprland_watcher import get_hyprland_watcher
 from core.mpv_sink import get_mpv_sink
 from core.timing import begin_query, end_query
-from core import auto_recall, confirm, tool_tiers
+from core import auto_recall, claim_gate, confirm, tool_tiers, vocabulary
 from core.proposals import propose
 from core.context import TOOL_NOTE, WHO_WINS, build_messages
 from memory.atomic_io import atomic_write_text
@@ -825,6 +825,10 @@ class KurekEngine:
             self.set_state(KurekState.IDLE)
             return
 
+        heard = transcript
+        transcript = vocabulary.correct(heard)
+        if transcript != heard:
+            print(f"[User Voice] 🎙️ heard \"{heard}\"", flush=True)
         print(f"[User Voice] 🎙️ \"{transcript}\"", flush=True)
         if not transcript.strip():
             print("[Kurek] Transcript was empty — speaking audible feedback", flush=True)
@@ -1033,6 +1037,7 @@ class KurekEngine:
         reply_text = ""
         last_tool_output = ""
         tools_run: list[str] = []
+        outcomes: list[dict] = []
         note_copied = False
         max_tool_turns = 15
         sentence_count = 0
@@ -1096,6 +1101,7 @@ class KurekEngine:
                         except Exception as e:
                             tool_result = f"Error executing {fn_name}: {e}"
                         last_tool_output = str(tool_result)
+                        outcomes.append(claim_gate.record(fn_name, fn_args, tool_result))
                         print(f"[Kurek Tool Result] → {tool_result}", flush=True)
 
                         if callback:
@@ -1128,6 +1134,7 @@ class KurekEngine:
                         continue
                     clean_sentence = self.sanitize_text_for_speech(raw_sentence)
                     if clean_sentence and not self._cancel_requested:
+                        self._observe_claims(raw_sentence, outcomes)
                         self._queue_sentence(
                             raw_sentence, clean_sentence, sentence_count,
                             mute_speaker=mute_speaker, callback=callback, stream_audio=stream_audio,
@@ -1178,6 +1185,7 @@ class KurekEngine:
                         raw_sentence = ev.get("sentence", "")
                         clean_sentence = self.sanitize_text_for_speech(raw_sentence)
                         if clean_sentence and not self._cancel_requested:
+                            self._observe_claims(raw_sentence, outcomes)
                             self._queue_sentence(
                                 raw_sentence, clean_sentence, sentence_count,
                                 mute_speaker=mute_speaker, callback=callback, stream_audio=stream_audio,
@@ -1263,6 +1271,15 @@ class KurekEngine:
         if not text or not text.strip():
             return None
         return self.tts.synthesize(text)
+
+    @staticmethod
+    def _observe_claims(sentence: str, outcomes: list[dict]) -> None:
+        """Log a spoken claim that no tool outcome of this turn backs. Speech is never changed."""
+        try:
+            for hit in claim_gate.observe(sentence, outcomes):
+                print(f"[Kurek Claim] {hit['class']} not backed ({hit['reason']}): {sentence.strip()[:120]}", flush=True)
+        except Exception as e:
+            print(f"[Kurek Claim] notice: {e}", flush=True)
 
     def _queue_sentence(
         self,

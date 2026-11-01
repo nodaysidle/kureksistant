@@ -141,6 +141,7 @@ nano .env
 | `TYPESAFE_API_KEY` | Optional | TypeSafe Jev memory triage (direct SDK). |
 | `OPENROUTER_API_KEY` | Optional | **Primary STT** (your voice audio is sent to OpenRouter Whisper) and typed decisions (Jev, then Decision-1) for auto screen-context and code intent (prompt text is sent). |
 | `KUREK_STT_PROVIDER` / `OPENROUTER_STT_MODEL` | Optional | Prefer `openrouter` (default) or `deepgram`; OpenRouter STT model. |
+| `KUREK_VOCAB_FILE` | Optional | Dictionary used to correct transcripts (default `~/.config/reverseduo/dictionary.json`); empty disables. |
 | `KUREK_WHISPER_MODEL` | Optional | Local faster-whisper model (default `base.en`, English-only; `base`/`small` are multilingual). Used with no cloud STT key, and as the fallback when cloud STT fails. |
 | `KUREK_SILENCE_DURATION` / `KUREK_INITIAL_SILENCE_TIMEOUT` / `KUREK_MAX_RECORD_SECONDS` | Optional | Listening window: 3.0 s (+0.3 s per second spoken, up to 2 s more) / 30 s / 180 s. |
 | `KUREK_STATE_NOTIFY` | Optional | `minimal` (default), `all` or `off` state toasts. |
@@ -205,7 +206,25 @@ kurek status           # daemon state
 kurek prompt "..."     # text prompt without the mic
 kurek start | stop     # systemd user service
 kurek-trigger toggle   # C trigger over the Unix socket
+kurek-ask              # one-line typed box (see below)
 ```
+
+### Typed box
+
+For names the microphone gets wrong ("gate test dot md"), `kurek-ask` is a one-line prompt in a small floating terminal. It stays invisible until you press the key: Enter sends the line to `kurek prompt`, an empty line closes it, and the reply is spoken. A typed "yes" or "no" answers a pending confirmation exactly like a spoken one, so "delete GateTest.md", then "yes" works.
+
+`install_linux.sh` installs it to `~/.local/bin/kurek-ask`. Add to `~/.config/hypr/bindings.lua`:
+
+```lua
+o.bind("SUPER + SHIFT + K", "Type to Kurek", "uwsm-app -- xdg-terminal-exec --app-id=com.nodaysidle.kurek-ask --title=Kurek -e ~/.local/bin/kurek-ask")
+o.window({ class = "^com.nodaysidle.kurek-ask$" }, { float = true, center = true, size = { 640, 90 } })
+```
+
+(`SUPER + K`, `SUPER + ALT + K` and `SUPER + CTRL + K` are Omarchy's own keybinding menus.)
+
+### Your dictionary
+
+Kurek corrects what it heard with the `replacements` in reverseduo's `~/.config/reverseduo/dictionary.json` ("no days idle" becomes "nodaysidle"). The file is read in place and never written; edit it in reverseduo and Kurek picks the change up. It runs on every transcript, whichever speech engine produced it. Entries that would break a voice assistant are skipped: single common words and Kurek's command words (yes, no, delete, send, ...), words of three letters or fewer, symbol words like "slash", case-only changes, non-ASCII originals and other machines' paths. `KUREK_VOCAB_FILE` points elsewhere; set it empty to turn this off.
 
 ---
 

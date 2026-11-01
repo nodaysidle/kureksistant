@@ -87,8 +87,8 @@ def request(key: str, title: str, detail: str, run: Callable[[], str]) -> str:
     """Park an irreversible action behind the on-screen gate.
 
     Returns the sentence the tool should hand back to the model — phrased as an
-    instruction so the assistant asks the user out loud in their own language,
-    rather than reading an English string verbatim."""
+    instruction so the assistant asks the user out loud in its own words,
+    rather than reading this string verbatim."""
     global _pending
 
     if _show_cb is None:
@@ -114,7 +114,7 @@ def request(key: str, title: str, detail: str, run: Callable[[], str]) -> str:
     _log(f"SYS: Awaiting confirmation — {title}")
     return (
         f"[CONFIRMATION_PENDING] A confirmation is waiting for: {title}. "
-        f"Say ONE short sentence in the user's own language asking them to answer "
+        f"Say ONE short sentence asking the user to answer "
         f"yes or no before you do it. Do not claim it is done."
     )
 

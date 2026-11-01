@@ -141,6 +141,8 @@ cp "$DIR/desktop/kurek.png" "$HOME/.local/share/icons/hicolor/512x512/apps/kurek
 mkdir -p "$HOME/.local/bin"
 cp "$DIR/bin/kurek" "$HOME/.local/bin/kurek"
 chmod +x "$HOME/.local/bin/kurek"
+cp "$DIR/bin/kurek-ask" "$HOME/.local/bin/kurek-ask"
+chmod +x "$HOME/.local/bin/kurek-ask"
 
 echo "Compiling kurek-trigger with -Wall -Wextra..."
 gcc -O3 -Wall -Wextra "$DIR/bin/kurek-trigger.c" -o "$HOME/.local/bin/kurek-trigger"

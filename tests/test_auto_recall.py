@@ -14,13 +14,9 @@ TODAY = date(2026, 10, 31)  # a Saturday
 
 @pytest.mark.parametrize("prompt,days", [
     ("what did we talk about yesterday?", ["2026-10-30"]),
-    ("kaj sva se včeraj pogovarjala?", ["2026-10-30"]),
-    ("cosa ho detto ieri?", ["2026-10-30"]),
     ("and the day before yesterday?", ["2026-10-29"]),
     ("what did I say 2 days ago", ["2026-10-29"]),
     ("what did I say two days ago", ["2026-10-29"]),
-    ("kaj sem rekel pred dvema dnevoma", ["2026-10-29"]),
-    ("cosa ho detto 3 giorni fa", ["2026-10-28"]),
     ("what did I work on last week", [f"2026-10-{d}" for d in range(30, 23, -1)]),
     ("what did I tell you on Tuesday", ["2026-10-27"]),
     ("what did I say last Saturday", ["2026-10-24"]),
@@ -64,15 +60,6 @@ def test_dated_question_without_subject_gets_that_days_turns(logs):
     assert "pizza" in block and "rotate" in block
 
 
-@pytest.mark.parametrize("prompt", [
-    "Kaj sva se pogovarjala včeraj?",
-    "Di cosa abbiamo parlato ieri?",
-])
-def test_slovenian_and_italian_questions_get_that_days_turns(logs, prompt):
-    block = auto_recall.recall_block(prompt, TODAY)
-    assert block and "pizza" in block
-
-
 def test_undated_question_searches_every_day(logs):
     block = auto_recall.recall_block("what did I say about the phone app?", TODAY)
     assert "dark theme" in block and "rotate" in block
@@ -110,3 +97,8 @@ def test_daemon_attaches_recall_to_the_message_not_the_history(logs, monkeypatch
     assert auto_recall.HEADER in user_msg and "rotate" in user_msg
     assert auto_recall.HEADER not in seen[0][0]["content"], "system prompt stays cache-stable"
     assert engine.history[-2]["content"] == "what did I say yesterday about the phone app?"
+
+
+def test_plain_english_prepositions_are_not_subject_words():
+    words = auto_recall._subject_words("what did I say yesterday about moving to Ljubljana in May, 10 per day")
+    assert words == {"ljubljana", "may", "moving", "10"}

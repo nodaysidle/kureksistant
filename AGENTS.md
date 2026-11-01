@@ -65,6 +65,8 @@
 | **LLM Client** | [`core/llm_client.py`](core/llm_client.py) | Direct `api.deepseek.com` client with sentence-buffered streaming pipeline (`stream_deepseek_sentences`). |
 | **TTS Engine** | [`core/tts.py`](core/tts.py) | Implements `XAITTSEngine` (Grok Cloud TTS, voice: **Sol** / `sal`) with chunk streaming into `MpvPipeWireSink`. |
 | **STT Engine** | [`core/stt.py`](core/stt.py) | `OpenRouterSTT` (multilingual `openai/whisper-large-v3-turbo`), `DeepgramSTT` (Nova-2), `WhisperSTT` (local `faster-whisper`, model via `KUREK_WHISPER_MODEL`). Order: OpenRouter → Deepgram → local. Cloud failures raise `STTError`; `FallbackSTT` retries the utterance on local Whisper. |
+| **Dictionary** | [`core/vocabulary.py`](core/vocabulary.py) | Corrects each transcript with the `replacements` in reverseduo's `dictionary.json` (read-only, every speech engine). `KUREK_VOCAB_FILE` overrides the path; empty disables. |
+| **Typed box** | [`bin/kurek-ask`](bin/kurek-ask) | One-line prompt in a floating terminal (`SUPER + SHIFT + K`) that calls `kurek prompt`; for names the microphone gets wrong. |
 | **Memory Tool** | [`actions/memory_tool.py`](actions/memory_tool.py) | `manage_memory(action='remember'|'recall'|'forget')`. Reads Hermes `USER.md` & `MEMORY.md`; never writes them. |
 | **External Memory** | `HERMES_PROFILE` / `HERMES_MEMORIES_DIR` / `~/.hermes/memories` | Optional Hermes `USER.md` + `MEMORY.md` continuity. |
 | **Knowledge Vault** | [`actions/vault_knowledge.py`](actions/vault_knowledge.py) | `vault_knowledge(action='list_projects'\|'read'\|'search'\|'add_inbox')`. Accesses nodaysidle-knowledge Obsidian vault notes, PRDs, roadmaps, and social media plans. |
@@ -88,6 +90,7 @@ OPENROUTER_API_KEY=       # Optional: primary STT (voice audio sent) + Jev/Decis
 GEMINI_API_KEY=           # Gemini-backed tools and screen vision
 TYPESAFE_API_KEY=         # Optional: Jev memory triage (direct SDK)
 KUREK_AUTO_SCREEN=0       # Set 1 to enable auto screen-context detection (adds a decision call before every answer)
+# KUREK_CLAIM_GATE=off    # Claim gate is observe-only by default; "off" disables the log
 # KUREK_DECISION_TIMEOUT=1.5
 KUREK_REMOTE_TOKEN=       # openssl rand -hex 32 — required for any non-loopback HTTP bind
 KUREK_REMOTE_BIND=        # empty=loopback only; "tailscale" binds 127.0.0.1 + Tailscale IPv4
@@ -132,9 +135,10 @@ Rules and learned memory live outside those files:
 
 Supporting stores:
 - `memory/kurek_history.json` keeps the rolling conversation context between turns.
-- **Recall:** when a message points at the past ("yesterday", "two days ago", "what did I say about…", also Slovenian and Italian), `core/auto_recall.py` searches the daily-log index (`memory/recall_index.py`) and attaches the matching turns to that message.
+- **Recall:** when a message points at the past ("yesterday", "two days ago", "what did I say about…"; English only), `core/auto_recall.py` searches the daily-log index (`memory/recall_index.py`) and attaches the matching turns to that message.
 - **Learned-memory sources:** each ledger line in the prompt says whether it was set by the user, said in chat, or inferred; entries set by the user are treated as current without asking again.
 - **Hermes continuity:** When configured, Kurek reads Hermes `USER.md` / `MEMORY.md` into its system prompt. It never writes them.
+- **Claim gate:** `core/claim_gate.py` checks each sentence just before it is spoken against this turn's tool outcomes (`ok`, `failed`, `timed_out`, `pending_confirmation`). Unbacked "deleted", "sent" and "saved/created" claims are logged to `~/.local/share/kurek/claim-violations.jsonl`. Observe-only: it never changes speech, and a gate error falls through to normal speech. English triggers only.
 
 ---
 

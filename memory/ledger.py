@@ -193,4 +193,6 @@ def prompt_block(limit: int, db_path: Path | None = None) -> str:
         _warned_cut.add(len(lines))
         print(f"[Kurek Memory] WARNING: ledger has {len(lines)} active entries; only the newest "
               f"{kept} fit in {limit} chars. Raise KUREK_MEMORY_FILE_MAX_CHARS.", flush=True)
-    return PROMPT_HEADER + "\n" + "\n".join(lines[-kept:])
+    hidden = len(lines) - kept
+    note = [f"- ({hidden} older entries are not shown here; call manage_memory recall to find them.)"] if hidden else []
+    return PROMPT_HEADER + "\n" + "\n".join(note + lines[-kept:])

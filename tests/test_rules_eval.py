@@ -43,7 +43,7 @@ def test_tool_names_ignore_arguments() -> None:
 
 def test_shipped_cases_load_with_unique_ids_and_only_known_fields() -> None:
     cases = rules_eval.load_cases(rules_eval.DEFAULT_CASES)
-    known = {"id", "rule", "prompt", "max_words", "max_sentences", "must_match", "must_not_match", "must_call", "must_not_call"}
+    known = {"id", "rule", "prompt", "max_words", "max_sentences", "must_match", "must_not_match", "must_call", "must_not_call", "history"}
     assert len(cases) >= 8
     assert all({"id", "prompt"} <= set(c) and set(c) <= known for c in cases)
 

@@ -9,7 +9,8 @@ Scoring is plain code on the reply text and the tools called, never a model's op
 Desktop tools are recorded, not executed (see llm_ab.py); read-only tools really run.
 
 Case fields: id, rule, prompt, and any of max_words, max_sentences, must_match, must_not_match
-(regexes, case-insensitive), must_call, must_not_call (tool names).
+(regexes, case-insensitive), must_call, must_not_call (tool names), and history (earlier turns
+as {role, content} tables, for cases that only go wrong with a chat behind them).
 """
 from __future__ import annotations
 
@@ -24,6 +25,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
+
+# Eval replies are not Kurek's real speech: keep them out of the claim-gate log.
+os.environ["KUREK_CLAIM_GATE"] = "off"
 
 DEFAULT_CASES = HERE / "rules_eval.toml"
 LOCAL_CASES = Path(os.environ.get("KUREK_RULES_EVAL_FILE") or Path.home() / ".config" / "kurek" / "rules_eval.toml")
@@ -85,7 +89,7 @@ def main() -> int:
             rules.RULES_PATH = path
             runs = []
             for _ in range(args.reps):
-                rec = run_one(engine, case["prompt"])
+                rec = run_one(engine, case["prompt"], case.get("history"))
                 fails = check(case, rec["reply"], rec["tools"])
                 runs.append({"reply": rec["reply"], "tools": rec["tools"], "failures": fails,
                              "first_sentence_s": rec["first_sentence_s"], "total_s": rec["total_s"]})
