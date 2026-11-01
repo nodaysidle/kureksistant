@@ -64,6 +64,17 @@ prompt = "Guten Tag, wie geht es dir heute?"
 must_not_match = "\\b(ich|bin|gut|danke|und|heute|mir)\\b"
 
 [[case]]
+id = "memory-talk-stays-quiet"
+rule = "memory-talk"
+prompt = "Correct, so now Master Alan, which terminal? Fuses"
+must_not_match = "#\\d+|entry|set by (you|the user)|set in memory|memory holds|garbled|transcri|unclear|parse|stray|conflict|unresolved"
+max_sentences = 2
+history = [
+  { role = "user", content = "What did I say about my terminal two days ago?" },
+  { role = "assistant", content = "You said you don't use foot, you use Velocity, while learned memory #27 holds Ghostty. Still unresolved: memory says Ghostty, so Ghostty stands." },
+]
+
+[[case]]
 id = "ask-instead-of-guessing"
 rule = "clarify-instead-of-guessing"
 prompt = "close it"

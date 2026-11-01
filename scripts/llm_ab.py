@@ -88,8 +88,8 @@ def build_engine():
     return engine
 
 
-def run_one(engine, prompt: str) -> dict:
-    engine.history = []
+def run_one(engine, prompt: str, history: list[dict] | None = None) -> dict:
+    engine.history = list(history or [])
     engine.calls = []
     engine._cancel_requested = False
     t0 = time.monotonic()
