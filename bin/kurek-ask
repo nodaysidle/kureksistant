@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# kurek-ask: type to Kurek when the microphone gets a name wrong ("gate test dot md").
+# Run it in a small floating terminal (README: "Typed box"). Enter sends a line, an
+# empty line or Ctrl-D closes. The reply is spoken by the daemon, not shown here, and
+# a typed "yes" or "no" answers a pending confirmation exactly like a spoken one.
+set -u
+KUREK="${KUREK_BIN:-kurek}"
+while IFS= read -r -e -p "kurek › " line; do
+    [[ -z "${line//[[:space:]]/}" ]] && break
+    "$KUREK" prompt "$line" >/dev/null
+done

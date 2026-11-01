@@ -61,6 +61,7 @@ def test_installer_writes_install_path_and_renders_unit(tmp_path: Path) -> None:
     shutil.copy(UNIT_TEMPLATE, fake_root / "desktop" / "kurek.service")
     shutil.copy(ROOT / "bin" / "kurek-trigger.c", fake_root / "bin" / "kurek-trigger.c")
     (fake_root / "bin" / "kurek").write_text("#!/bin/sh\necho ok\n", encoding="utf-8")
+    (fake_root / "bin" / "kurek-ask").write_text("#!/bin/sh\necho ok\n", encoding="utf-8")
     (fake_root / "desktop" / "kurek.png").write_bytes(b"\x89PNG\r\n\x1a\n")
     (fake_root / "desktop" / "kurek.desktop").write_text(
         "[Desktop Entry]\nExec=kurek toggle\n",

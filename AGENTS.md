@@ -65,6 +65,8 @@
 | **LLM Client** | [`core/llm_client.py`](core/llm_client.py) | Direct `api.deepseek.com` client with sentence-buffered streaming pipeline (`stream_deepseek_sentences`). |
 | **TTS Engine** | [`core/tts.py`](core/tts.py) | Implements `XAITTSEngine` (Grok Cloud TTS, voice: **Sol** / `sal`) with chunk streaming into `MpvPipeWireSink`. |
 | **STT Engine** | [`core/stt.py`](core/stt.py) | `OpenRouterSTT` (multilingual `openai/whisper-large-v3-turbo`), `DeepgramSTT` (Nova-2), `WhisperSTT` (local `faster-whisper`, model via `KUREK_WHISPER_MODEL`). Order: OpenRouter → Deepgram → local. Cloud failures raise `STTError`; `FallbackSTT` retries the utterance on local Whisper. |
+| **Dictionary** | [`core/vocabulary.py`](core/vocabulary.py) | Corrects each transcript with the `replacements` in reverseduo's `dictionary.json` (read-only, every speech engine). `KUREK_VOCAB_FILE` overrides the path; empty disables. |
+| **Typed box** | [`bin/kurek-ask`](bin/kurek-ask) | One-line prompt in a floating terminal (`SUPER + SHIFT + K`) that calls `kurek prompt`; for names the microphone gets wrong. |
 | **Memory Tool** | [`actions/memory_tool.py`](actions/memory_tool.py) | `manage_memory(action='remember'|'recall'|'forget')`. Reads Hermes `USER.md` & `MEMORY.md`; never writes them. |
 | **External Memory** | `HERMES_PROFILE` / `HERMES_MEMORIES_DIR` / `~/.hermes/memories` | Optional Hermes `USER.md` + `MEMORY.md` continuity. |
 | **Knowledge Vault** | [`actions/vault_knowledge.py`](actions/vault_knowledge.py) | `vault_knowledge(action='list_projects'\|'read'\|'search'\|'add_inbox')`. Accesses nodaysidle-knowledge Obsidian vault notes, PRDs, roadmaps, and social media plans. |

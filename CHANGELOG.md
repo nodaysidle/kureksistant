@@ -14,6 +14,8 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 - **One-sentence connections** to a project or past conversation when they change the answer.
 - `GLOSSARY.md` names each memory store.
 - **Claim gate (observe-only):** each spoken sentence is checked against what the tools did that turn. A first-person "deleted / sent / saved" that no tool outcome backs (no call, failed, timed out, or still waiting for confirmation) is logged to `~/.local/share/kurek/claim-violations.jsonl`. Nothing spoken changes. `KUREK_CLAIM_GATE=off` disables it. English only. See `core/claim_gate.py`.
+- **Dictionary:** each transcript is corrected with the `replacements` in reverseduo's `~/.config/reverseduo/dictionary.json` ("no days idle" becomes "nodaysidle"), whichever speech engine produced it. Read-only; risky entries (command words, symbol words, short words, other machines' paths) are skipped. `KUREK_VOCAB_FILE` overrides the path, empty disables. See `core/vocabulary.py`.
+- **Typed box:** `kurek-ask` (installed with the CLI) is a one-line prompt for names the microphone gets wrong, run in a floating terminal on `SUPER + SHIFT + K`. See the README.
 - When the learned-memory block outgrows `KUREK_MEMORY_FILE_MAX_CHARS`, the prompt now says how many older entries are hidden and points to recall.
 
 ### Changed

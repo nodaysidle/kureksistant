@@ -60,7 +60,7 @@ from core.action_loader import discover_actions
 from core.hyprland_watcher import get_hyprland_watcher
 from core.mpv_sink import get_mpv_sink
 from core.timing import begin_query, end_query
-from core import auto_recall, claim_gate, confirm, tool_tiers
+from core import auto_recall, claim_gate, confirm, tool_tiers, vocabulary
 from core.proposals import propose
 from core.context import TOOL_NOTE, WHO_WINS, build_messages
 from memory.atomic_io import atomic_write_text
@@ -825,6 +825,10 @@ class KurekEngine:
             self.set_state(KurekState.IDLE)
             return
 
+        heard = transcript
+        transcript = vocabulary.correct(heard)
+        if transcript != heard:
+            print(f"[User Voice] 🎙️ heard \"{heard}\"", flush=True)
         print(f"[User Voice] 🎙️ \"{transcript}\"", flush=True)
         if not transcript.strip():
             print("[Kurek] Transcript was empty — speaking audible feedback", flush=True)
