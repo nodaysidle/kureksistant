@@ -78,3 +78,24 @@ def test_legacy_projects_note(monkeypatch, cmd, flagged) -> None:
     monkeypatch.setattr(run_mod, "_action_exec", lambda *a: "Exit: 0")
     out = run_mod.run({"action": "exec", "cmd": cmd})
     assert ("retired Mac copy" in out) is flagged
+
+
+def test_unrestricted_shell_runs_in_own_scope_under_systemd(monkeypatch, tmp_path) -> None:
+    import actions.dev_agent as dev_agent
+
+    monkeypatch.setenv("KUREK_REMOTE_ALLOW_EXEC", "1")
+    monkeypatch.setattr(run_mod, "_UNRESTRICTED_WARNED", True)
+    monkeypatch.setenv("INVOCATION_ID", "test")
+    monkeypatch.setattr(dev_agent.shutil, "which", lambda name: f"/usr/bin/{name}")
+    seen = {}
+
+    class _Stop(Exception):
+        pass
+
+    def fake_popen(argv, **kwargs):
+        seen["argv"] = argv
+        raise _Stop
+
+    monkeypatch.setattr(run_mod.subprocess, "Popen", fake_popen)
+    run_mod.run({"action": "exec", "cmd": "true", "cwd": str(tmp_path)})
+    assert seen["argv"][:4] == ["systemd-run", "--user", "--scope", "--quiet"]

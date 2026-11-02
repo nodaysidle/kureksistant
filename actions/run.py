@@ -867,9 +867,13 @@ def _spawn_unrestricted_shell(run_id: str, cmd_str: str, cwd_path: Path, timeout
 
     start_time = time.time()
     try:
+        # Own scope: file cache from big find/rg runs is billed there, not to
+        # kurek.service's MemoryHigh. Lazy import: dev_agent imports this module.
+        from actions.dev_agent import _wrap_systemd_scope
+
         shell_bin = shutil.which("bash") or "/bin/sh"
         proc = subprocess.Popen(
-            [shell_bin, "-c", cmd_str],
+            _wrap_systemd_scope([shell_bin, "-c", cmd_str]),
             cwd=str(cwd_path),
             env=env,
             stdout=subprocess.PIPE,
