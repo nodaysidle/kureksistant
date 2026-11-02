@@ -953,8 +953,9 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any) -> str:
             return "Refused: Command string is empty."
         if cwd_arg:
             cwd_path = Path(os.path.expanduser(cwd_arg)).resolve()
-            if not cwd_path.exists():
-                cwd_path = Path.home()
+            if not cwd_path.is_dir():
+                # Running in ~ instead would make a wrong path look like a clean result.
+                return f"Refused: cwd '{cwd_arg}' does not exist. Check the path with ls first."
         else:
             cwd_path = Path.home()
 
@@ -1642,7 +1643,10 @@ def run(parameters: dict | None = None, **kwargs) -> str:
         timeout = params.get("timeout")
         # Any model-supplied 'confirm' value is ignored on purpose: custom targets
         # go through the human confirmation gate in _request_human_confirmation.
-        return _action_exec(cmd, cwd, timeout)
+        result = _action_exec(cmd, cwd, timeout)
+        if _LEGACY_PROJECTS_RE.search(f"{cmd} {cwd or ''}"):
+            result += _LEGACY_PROJECTS_NOTE
+        return result
     elif action == "read":
         run_id = params.get("run_id")
         tail = params.get("tail")
@@ -1663,6 +1667,27 @@ def run(parameters: dict | None = None, **kwargs) -> str:
         )
 
 
+# ~/Projects was the old Mac copy (deleted 2026-11-02); the live repos are in ~/dev/nodaysidle.
+_LEGACY_PROJECTS_RE = re.compile(
+    r"(~|\$HOME|\$\{HOME\}|" + re.escape(str(Path.home())) + r")/Projects(/|\b)"
+)
+_LEGACY_PROJECTS_NOTE = (
+    "\n\nNote: ~/Projects was the retired Mac copy and has been deleted. "
+    "The live repos are in ~/dev/nodaysidle."
+)
+
+# Habits from Kurek's self-audit (run_audit.log, 2026-11-02): one purpose per call,
+# cwd instead of cd, no retries of a refused target.
+_HABITS = (
+    " How to call it: one purpose per call. Set cwd instead of starting with cd. "
+    "Do not use echo as a separator; label results in your reply. "
+    "Never chain an install with a command that needs it; run the install, check its exit code, then continue. "
+    "Projects live in ~/dev/nodaysidle; ~/Projects is gone, never use it. "
+    "Check a path with one ls before looping over it, and say so when a command returns nothing. "
+    "A refusal is final: do not retry the same target. Say in one sentence what was blocked and use another route "
+    "(system_monitor for CPU temperature and load, file_controller for deleting files)."
+)
+
 _SANDBOX_DESCRIPTION = (
     "Sandboxed, auditable command runner for workstation inspection and build/test tasks. "
     "Permits allowlisted read-only commands (git status/diff/log, rg, ls, cat, find, stat, --version) "
@@ -1670,12 +1695,12 @@ _SANDBOX_DESCRIPTION = (
     "build/test commands run repository code and wait for the user's yes/no confirmation. "
     "Destructive commands (rm, git push, git reset --hard, curl|sh) are strictly disallowed. "
     "Never interactive. All runs are strictly root-scoped, timeout-bounded, and recorded in an append-only audit log."
-)
+) + _HABITS
 _UNRESTRICTED_DESCRIPTION = (
     "WARNING: unrestricted shell mode is ENABLED (KUREK_REMOTE_ALLOW_EXEC=1). "
     "Executes arbitrary commands and shell scripts as the user (e.g. bash, systemctl, pacman, git, cargo), "
     "captures stdout/stderr, exit code, and duration. Use with care; runs are audit-logged."
-)
+) + _HABITS
 
 
 def tool_description() -> str:

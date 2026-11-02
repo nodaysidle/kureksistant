@@ -49,3 +49,32 @@ def test_enabled_with_new_var_warns(monkeypatch, capsys) -> None:
     assert "WARNING" in capsys.readouterr().out
     assert "WARNING" in run_mod.tool_description()
     assert "UNRESTRICTED" in daemon._run_tool_prompt_line()
+
+
+def test_descriptions_carry_self_audit_habits(monkeypatch) -> None:
+    for desc in (run_mod._SANDBOX_DESCRIPTION, run_mod._UNRESTRICTED_DESCRIPTION):
+        assert "Set cwd instead of starting with cd" in desc
+        assert "A refusal is final" in desc
+        assert "~/dev/nodaysidle" in desc
+
+
+def test_unrestricted_missing_cwd_refused_not_home(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("KUREK_REMOTE_ALLOW_EXEC", "1")
+    monkeypatch.setattr(run_mod, "_UNRESTRICTED_WARNED", True)
+    out = run_mod.run({"action": "exec", "cmd": "pwd", "cwd": str(tmp_path / "nope")})
+    assert out.startswith("Refused: cwd")
+
+
+@pytest.mark.parametrize(
+    "cmd,flagged",
+    [
+        ("ls ~/Projects/forge", True),
+        ("ls $HOME/Projects", True),
+        ("ls ~/dev/nodaysidle/forge", False),
+        ("ls ~/ProjectsX", False),
+    ],
+)
+def test_legacy_projects_note(monkeypatch, cmd, flagged) -> None:
+    monkeypatch.setattr(run_mod, "_action_exec", lambda *a: "Exit: 0")
+    out = run_mod.run({"action": "exec", "cmd": cmd})
+    assert ("retired Mac copy" in out) is flagged
