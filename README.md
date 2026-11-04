@@ -291,7 +291,7 @@ The older `KUREK_UNRESTRICTED_SHELL` / `KUREK_ALLOW_SHELL` variables no longer e
 
 ## ⚠️ Known limits
 
-- **Not offline:** reasoning (DeepSeek-Flash) needs internet. Speech-to-text falls back to local `faster-whisper`, and voice falls back to the robotic `spd-say` when xAI is unreachable.
+- **Not offline:** reasoning (DeepSeek-Flash) needs internet. Speech-to-text falls back to local `faster-whisper`, and voice falls back from xAI to OpenRouter, then Gemini (voice Charon; the free tier allows only a few sentences a minute, so longer replies can lose sentences), then the robotic `spd-say` if a synthesizer is installed. Live voice needs xAI directly.
 - **Desktop scope:** Hyprland/Omarchy comes first. Other Wayland compositors need their own keybinds, and the Hyprland-specific window actions won't apply there.
 - **Timed-out tools keep running:** they can't be killed. After 120 s Kurek reports the timeout, but the tool may finish in the background.
 - **Confirmation wording:** after a "yes", Kurek replies "Confirmed, doing it now." as the action starts; a failure is logged and shown as a notification.

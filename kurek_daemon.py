@@ -41,6 +41,7 @@ import socket
 from memory.config_manager import (
     get_deepgram_key,
     get_deepseek_key,
+    get_gemini_key,
     get_openrouter_api_key,
     get_user_name,
     get_xai_key,
@@ -531,13 +532,13 @@ class KurekEngine:
                 print(f"[Kurek] Whisper load error: {e}")
                 self.stt = None
 
-        # TTS engine: xAI Grok Cloud TTS (voice: Sol / sal); spd-say fallback
-        xai_key = get_xai_key()
+        # TTS: Grok voice via xAI direct or OpenRouter, then Gemini; spd-say with no key
+        xai_key = get_xai_key() or get_openrouter_api_key() or get_gemini_key()
         if xai_key:
-            print("[Kurek] Using xAI Grok Cloud TTS (voice: Sol/sal)…")
+            print(f"[Kurek] Using Grok Cloud TTS (voice: {os.environ.get('KUREK_TTS_VOICE') or 'sal'}), xAI, OpenRouter, then Gemini…")
             self.tts = create_tts_player({"tts_engine": "xai", "tts_voice": "sal", "xai_api_key": xai_key})
         else:
-            print("[Kurek] No XAI_API_KEY — using local spd-say voice")
+            print("[Kurek] No cloud voice key — using local spd-say voice")
             self.tts = create_tts_player({"tts_engine": "system"})
 
         # Wire sustained resource watcher (300-second CPU/RAM) alert callback
@@ -614,9 +615,9 @@ class KurekEngine:
         if self.stt is None:
             problems.append("No speech recognition (faster-whisper failed to load, no cloud STT key).")
         if not xai_key and not shutil.which("spd-say"):
-            problems.append("No voice: set XAI_API_KEY or install speech-dispatcher (spd-say).")
+            problems.append("No voice: set XAI_API_KEY, OPENROUTER_API_KEY or GEMINI_API_KEY, or install speech-dispatcher (spd-say).")
         elif not xai_key:
-            problems.append("XAI_API_KEY missing — using the robotic spd-say voice.")
+            problems.append("No cloud voice key (xAI, OpenRouter, Gemini) — using the robotic spd-say voice.")
         if not shutil.which("mpv"):
             problems.append("mpv not installed — cloud speech cannot play.")
         if self.input_device is None:
