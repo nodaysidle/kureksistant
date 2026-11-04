@@ -1,8 +1,8 @@
 """
 Text-to-Speech for Kurek.
 
-XAITTSEngine      – xAI Grok cloud TTS (voice: Sol / "sal"), played through the
-                    persistent mpv PipeWire sink.
+XAITTSEngine      – Grok voices via xAI direct or OpenRouter, then Gemini TTS,
+                    played through the persistent mpv PipeWire sink.
 SystemSpeechEngine – local fallback via `spd-say` (speech-dispatcher), or `say`
                     on macOS.
 
@@ -14,6 +14,7 @@ synthesized while clip N plays.
 """
 from __future__ import annotations
 
+import base64
 import os
 import queue as _queue
 import shutil
@@ -85,10 +86,24 @@ class SystemSpeechEngine:
     def available() -> bool:
         return bool(shutil.which("spd-say") or (sys.platform == "darwin" and shutil.which("say")))
 
+    @staticmethod
+    def _spd_has_synthesizer() -> bool:
+        """With no synthesizer installed, spd-say plays a stock clip, not the text."""
+        try:
+            out = subprocess.run(
+                ["spd-say", "-O"], capture_output=True, text=True, timeout=5
+            ).stdout
+        except Exception:
+            return False
+        return any(line.strip() for line in out.splitlines()[1:])
+
     def speak(self, text: str, append: bool = False) -> None:
         if sys.platform == "darwin" and shutil.which("say"):
             cmd = ["say"] + (["-v", self.voice] if self.voice else []) + [text]
         elif shutil.which("spd-say"):
+            if not self._spd_has_synthesizer():
+                print(f"[Speech Synth] spd-say has no synthesizer; silent: {text}")
+                return
             # -w: wait until spoken, so the daemon's SPEAKING state is truthful.
             cmd = ["spd-say", "-w", text]
         else:
@@ -107,38 +122,108 @@ _XAI_VOICE_MAP = {
     "sol": "sal",
 }
 
+# The free tier allows 3 requests a minute per model, so a 429 moves to the next.
+_GEMINI_TTS_MODELS = (
+    "gemini-3.8-flash-tts",
+    "gemini-3.8-flash-lite-tts",
+    "gemini-3.1-flash-tts-preview",
+    "gemini-2.5-flash-preview-tts",
+)
+
 
 class XAITTSEngine:
     """xAI (Grok) Cloud Text-to-Speech Engine."""
 
     def __init__(self, api_key: str | None = None, voice_id: str = "sal", language: str = "en"):
-        from memory.config_manager import get_xai_key
+        from memory.config_manager import (
+            get_gemini_key,
+            get_openrouter_api_key,
+            get_xai_key,
+        )
         self.api_key = api_key or get_xai_key() or os.environ.get("XAI_API_KEY", "")
-        raw_voice = (voice_id or "sal").strip().lower()
+        self.openrouter_key = get_openrouter_api_key() or ""
+        self.gemini_key = get_gemini_key() or ""
+        # KUREK_TTS_VOICE overrides the voice for both xAI direct and OpenRouter.
+        raw_voice = (os.environ.get("KUREK_TTS_VOICE") or voice_id or "sal").strip().lower()
         self.voice_id = _XAI_VOICE_MAP.get(raw_voice, raw_voice)
         self.language = language or "en"
         self._fallback = SystemSpeechEngine()
         self._http = requests.Session()
 
     def synthesize(self, text: str) -> bytes | None:
-        """Return MP3 bytes for text, or None on any failure."""
-        if not text.strip() or not self.api_key:
+        """Return audio bytes for text: xAI direct, OpenRouter, Gemini, else None."""
+        if not text.strip():
             return None
+        if self.api_key:
+            try:
+                resp = self._http.post(
+                    "https://api.x.ai/v1/tts",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"text": text.strip(), "voice_id": self.voice_id, "language": self.language},
+                    timeout=12,
+                )
+                if resp.status_code == 200 and resp.content:
+                    return resp.content
+                print(f"[xAI TTS] HTTP {resp.status_code}: {resp.text[:200]}")
+                if resp.status_code in (401, 402, 403) and self.openrouter_key:
+                    # Out of credits or bad key: stop paying a failed round trip per
+                    # sentence. A daemon restart tries xAI direct again.
+                    print("[xAI TTS] Switching to OpenRouter TTS until restart.")
+                    self.api_key = ""
+            except Exception as e:
+                print(f"[xAI TTS] Error: {e}")
+        audio = self._synthesize_openrouter(text) if self.openrouter_key else None
+        if audio is None and self.gemini_key:
+            audio = self._synthesize_gemini(text)
+        return audio
+
+    def _synthesize_openrouter(self, text: str) -> bytes | None:
+        model = os.environ.get("KUREK_TTS_MODEL") or "x-ai/grok-voice-tts-1.0"
         try:
             resp = self._http.post(
-                "https://api.x.ai/v1/tts",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={"text": text.strip(), "voice_id": self.voice_id, "language": self.language},
+                "https://openrouter.ai/api/v1/audio/speech",
+                headers={"Authorization": f"Bearer {self.openrouter_key}"},
+                json={"model": model, "input": text.strip(), "voice": self.voice_id, "response_format": "mp3"},
                 timeout=12,
             )
             if resp.status_code == 200 and resp.content:
                 return resp.content
-            print(f"[xAI TTS] HTTP {resp.status_code}: {resp.text[:200]}")
+            print(f"[OpenRouter TTS] HTTP {resp.status_code}: {resp.text[:200]}")
         except Exception as e:
-            print(f"[xAI TTS] Error: {e}")
+            print(f"[OpenRouter TTS] Error: {e}")
+        return None
+
+    def _synthesize_gemini(self, text: str) -> bytes | None:
+        """WAV bytes from Google directly: the last cloud voice, on the free tier."""
+        voice = os.environ.get("KUREK_GEMINI_VOICE") or "Charon"
+        # No style text here: Gemini reads it aloud, and rejects systemInstruction.
+        body = {
+            "contents": [{"parts": [{"text": text.strip()}]}],
+            "generationConfig": {
+                "responseModalities": ["AUDIO"],
+                "speechConfig": {
+                    "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}
+                },
+            },
+        }
+        for model in _GEMINI_TTS_MODELS:
+            try:
+                resp = self._http.post(
+                    "https://generativelanguage.googleapis.com/v1beta/models/"
+                    f"{model}:generateContent",
+                    headers={"x-goog-api-key": self.gemini_key},
+                    json=body,
+                    timeout=15,
+                )
+                if resp.status_code == 200:
+                    parts = resp.json()["candidates"][0]["content"]["parts"]
+                    return base64.b64decode(parts[0]["inlineData"]["data"])
+                print(f"[Gemini TTS] {model} HTTP {resp.status_code}")
+            except Exception as e:
+                print(f"[Gemini TTS] {model} error: {e}")
         return None
 
     def speak(self, text: str, append: bool = False) -> None:
@@ -296,15 +381,16 @@ class TTSPlayer:
         if audio:
             _play_audio_bytes(audio, append=append)
             return
-        # No bytes (engine without synthesize(), or cloud failure): speak
-        # through the engine directly, blocking this worker until done.
+        # No bytes (engine without synthesize(), or every cloud voice failed):
+        # speak locally, blocking this worker. Never re-run the cloud chain here.
         with self._lock:
             self._playing = True
+        engine = getattr(self._engine, "_fallback", self._engine)
         try:
             try:
-                self._engine.speak(text, append=append)
+                engine.speak(text, append=append)
             except TypeError:
-                self._engine.speak(text)
+                engine.speak(text)
         finally:
             with self._lock:
                 self._playing = False
