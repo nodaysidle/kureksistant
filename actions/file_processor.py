@@ -321,7 +321,10 @@ def _process_data(path: Path, file_type: str, action: str,
 
     try:
         if file_type == "csv":
-            df = pd.read_csv(path, encoding="utf-8", errors="replace")
+            sep = "\t" if path.suffix.lower() == ".tsv" else ","
+            df = pd.read_csv(
+                path, sep=sep, encoding="utf-8", encoding_errors="replace"
+            )
         else:
             df = pd.read_excel(path)
     except Exception as e:
