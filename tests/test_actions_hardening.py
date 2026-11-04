@@ -251,3 +251,13 @@ def test_tar_extract_fails_closed_without_filter_support(tmp_path, monkeypatch):
     import pytest
     with pytest.raises(RuntimeError):
         fp._safe_unpack(archive, tmp_path / "out")
+
+
+# ── file_processor CSV/TSV loading (issue #34) ────────────────────────────────
+@pytest.mark.parametrize("name,sep", [("a.csv", ","), ("a.tsv", "\t")])
+def test_process_data_reads_csv_and_tsv(tmp_path, name, sep):
+    pytest.importorskip("pandas")
+    f = tmp_path / name
+    f.write_bytes(f"x{sep}y\n1{sep}caf\xe9\n".encode("latin-1"))
+    out = file_processor._process_data(f, "csv", "info", {})
+    assert "Rows: 1, Columns: 2" in out
