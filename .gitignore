@@ -77,3 +77,20 @@ CLAUDE.local.md
 # Eval run output
 rules_eval.json
 llm_ab.json
+
+# === AI Coding Agent Security & Command Cache Guardrails ===
+.claude/
+.claude.json
+.claude_settings.json
+.approved-commands
+*.approved-commands*
+.gemini/
+.agent/
+.codex/
+.hermes/
+.opencode/
+transcript.jsonl
+transcript_full.jsonl
+*.aacpcap
+.env.local
+.env.*.local
