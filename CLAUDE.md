@@ -4,7 +4,7 @@
 - Start every reply with `ALAN`. No exceptions, including one-line answers.
 - If `HANDOFF.md` exists, read it before doing anything else.
 - When the session is long or you cannot clearly recall earlier work, say so, then write `HANDOFF.md` before continuing.
-- Consult `/home/arch/dev/nodaysidle/nodaysidle-knowledge` (`sessions/LATEST.md` and `wiki/`) as the central source of truth for ecosystem decisions.
+- Consult `/home/arch/dev/nodaysidle/nodaysidle-vault` (`wiki/hot.md`, `wiki/index.md`) as the central source of truth for ecosystem decisions; record big changes there with `/claude-obsidian:save`.
 
 ## 2. Execution Posture (Opus 5.5 Directives)
 - Prioritize direct code execution and tool use over conversational narration.
@@ -20,7 +20,7 @@
 | `python3 kurek_daemon.py` | Run daemon locally |
 | `./launch_kurek.sh` | Launch daemon with standard environment setup |
 | `ruff check .` | Run Ruff linter (enforced in CI) |
-| `ruff format --check .` | Check code formatting (double quotes, 88 cols) |
+| `ruff format --check .` | Formatting style (double quotes, 88 cols). NOT enforced: 113 of 131 files differ as of 2026-11-08, so do not reformat unrelated files |
 | `pytest -q` | Run unit test suite (headless safe) |
 | `bash scripts/verify.sh` | Full isolated self-check (never touches live DB/port) |
 
@@ -40,7 +40,6 @@
 
 ## 6. Modular Imports
 @AGENTS.md
-@README.md
 
 ## Agent skills
 
