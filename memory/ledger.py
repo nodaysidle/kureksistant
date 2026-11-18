@@ -16,8 +16,10 @@ from datetime import datetime
 from pathlib import Path
 
 from memory.atomic_io import chmod_private
+from memory.paths import db_path as _default_db_path
 
-DB_PATH = Path(__file__).resolve().parent / "kurek_memory.db"
+_INITIAL_DB_PATH = _default_db_path()
+DB_PATH: Path = _INITIAL_DB_PATH
 
 _lock = threading.Lock()
 
@@ -55,8 +57,17 @@ class LedgerError(Exception):
     pass
 
 
+def resolve_db_path(db_path: Path | None = None) -> Path:
+    """Resolve the DB path, honoring explicit args, monkeypatched DB_PATH, or XDG env."""
+    if db_path is not None:
+        return db_path
+    if DB_PATH != _INITIAL_DB_PATH:
+        return DB_PATH
+    return _default_db_path()
+
+
 def _connect(db_path: Path | None) -> sqlite3.Connection:
-    path = db_path or DB_PATH
+    path = resolve_db_path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), timeout=10.0, isolation_level=None)
     chmod_private(path, f"{path}-wal", f"{path}-shm")

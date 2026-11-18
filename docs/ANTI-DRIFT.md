@@ -11,13 +11,13 @@ Read this before changing anything that reads or writes memory, rules or the pro
 | Store | Who writes | Rule |
 |---|---|---|
 | `~/.config/kurek/rules.toml` | the user, by hand | Verbatim. Injected into every prompt as `[USER RULES]`. No code writes it. |
-| `ledger` table in `memory/kurek_memory.db` | `manage_memory` only | Append-only: triggers abort `UPDATE` and `DELETE`. Every row needs a source. Kinds are `fact`, `preference`, `boundary` and `note`. A correction is a new row with `supersedes`. A retraction is a `kind='retract'` row that supersedes its target. |
+| `ledger` table in `~/.local/share/kurek/kurek_memory.db` (`$XDG_DATA_HOME/kurek/kurek_memory.db`) | `manage_memory` only | Append-only: triggers abort `UPDATE` and `DELETE`. Every row needs a source. Kinds are `fact`, `preference`, `boundary` and `note`. A correction is a new row with `supersedes`. A retraction is a `kind='retract'` row that supersedes its target. |
 | `~/kurek_proposed_rules.md` | the dream cycle, Jev triage, `manage_memory` boundary | Proposals only. Nothing reads this file into a prompt. Each entry is a `rule` or a `fact`. The user promotes a rule by copying it into `rules.toml`, and a fact by saving it to the ledger. The dream cycle is shown current learned memory and rules first, so it does not propose what is already known or was since corrected. |
 | `~/MEMORY.md` | the user, by hand | Reference facts (identity, environment, projects). Kurek never appends to it. |
 | `~/ALIGNMENT_SYNTHESIS.md` | nobody | Legacy. Still read if present, never written by Kurek. |
 | Hermes `USER.md` / `MEMORY.md` | Hermes only | Read into the prompt. Kurek never writes them. Ranks below learned memory. |
-| `memory/kurek_history.json` | the daemon, each turn | The last 10 turns go to the model. Context, never fact. |
-| `~/memory/YYYY-MM-DD.md` daily logs | the daemon, each turn | Never in the system prompt. When the user's message points at the past ("yesterday", "two days ago", "what did I say about…"), `core/auto_recall.py` attaches matching turns to that message, labelled as what was said, not what is true, capped at 3000 chars with a logged warning. Also read by Jev triage, the dream cycle and `manage_memory` recall. Also indexed for recall in `memory/kurek_memory.db` (FTS5, tables `daily_fts` / `daily_files`); the log files stay the source of truth. |
+| `~/.local/state/kurek/kurek_history.json` (`$XDG_STATE_HOME/kurek/kurek_history.json`) | the daemon, each turn | The last 10 turns go to the model. Context, never fact. |
+| `~/memory/YYYY-MM-DD.md` daily logs | the daemon, each turn | Never in the system prompt. When the user's message points at the past ("yesterday", "two days ago", "what did I say about…"), `core/auto_recall.py` attaches matching turns to that message, labelled as what was said, not what is true, capped at 3000 chars with a logged warning. Also read by Jev triage, the dream cycle and `manage_memory` recall. Also indexed for recall in `~/.local/share/kurek/kurek_memory.db` (FTS5, tables `daily_fts` / `daily_files`); the log files stay the source of truth. |
 
 Retired: the old personal-context store (`entries` table, `memory/long_term.json` import) and
 `~/memory/bank/`. Nothing reads them into the prompt or into recall. Names for each store are in
@@ -91,10 +91,10 @@ without the rules in the prompt is not being followed because of the prompt.
 
 ```bash
 # what Kurek has learned, and what replaced what
-sqlite3 memory/kurek_memory.db "select id,key,text,source,supersedes from ledger"
+sqlite3 "${XDG_DATA_HOME:-$HOME/.local/share}/kurek/kurek_memory.db" "select id,key,text,source,supersedes from ledger"
 
 # back up before touching any store
-sqlite3 memory/kurek_memory.db ".backup ~/kurek_memory.db.$(date +%F)"
+sqlite3 "${XDG_DATA_HOME:-$HOME/.local/share}/kurek/kurek_memory.db" ".backup ~/kurek_memory.db.$(date +%F)"
 cp -p ~/.config/kurek/rules.toml ~/rules.toml.$(date +%F)
 ```
 

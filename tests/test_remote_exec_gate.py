@@ -99,3 +99,37 @@ def test_unrestricted_shell_runs_in_own_scope_under_systemd(monkeypatch, tmp_pat
     monkeypatch.setattr(run_mod.subprocess, "Popen", fake_popen)
     run_mod.run({"action": "exec", "cmd": "true", "cwd": str(tmp_path)})
     assert seen["argv"][:4] == ["systemd-run", "--user", "--scope", "--quiet"]
+
+
+@pytest.mark.parametrize(
+    "cmd,expected_hint",
+    [
+        ("cd", "cwd"),
+        ("cd /tmp", "cwd"),
+        ("cd /tmp && ls", "cwd"),
+        ("echo", "reply"),
+        ("echo hello", "reply"),
+        ("echo '---' && git status", "reply"),
+    ],
+)
+def test_unrestricted_refuses_leading_cd_and_echo_and_audits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, cmd: str, expected_hint: str
+) -> None:
+    monkeypatch.setenv("KUREK_REMOTE_ALLOW_EXEC", "1")
+    monkeypatch.setattr(run_mod, "_UNRESTRICTED_WARNED", True)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(
+        run_mod.subprocess,
+        "Popen",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("Popen must not run")),
+    )
+    audit_file = run_mod._get_audit_log_path()
+    if audit_file.exists():
+        audit_file.unlink()
+
+    out = run_mod.run({"action": "exec", "cmd": cmd, "cwd": str(tmp_path)})
+    assert out.startswith("Refused:")
+    assert expected_hint in out.lower()
+    assert audit_file.exists()
+    assert "STATUS=refused" in audit_file.read_text(encoding="utf-8")
+

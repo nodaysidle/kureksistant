@@ -33,7 +33,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS daily_fts USING fts5(
 
 
 def _connect(db_path: Path | None) -> sqlite3.Connection:
-    path = db_path or ledger.DB_PATH
+    path = ledger.resolve_db_path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), timeout=10.0, isolation_level=None)
     chmod_private(path, f"{path}-wal", f"{path}-shm")

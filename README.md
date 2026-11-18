@@ -8,10 +8,10 @@
   <strong>Autonomous voice assistant daemon for Arch Linux (Omarchy / Hyprland), paired with Kurek Remote Android over Tailscale.</strong>
 </p>
 
-<p align="center"><strong>Headless Linux daemon (~333MB RAM), summoned via middle-click. No GUI on purpose.</strong></p>
+<p align="center"><strong>Headless Linux daemon (~450MB peak RAM with faster-whisper loaded), summoned via middle-click. No GUI on purpose.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.3"><img src="https://img.shields.io/badge/Release-v0.2.3-blue.svg?style=flat-square" alt="Release v0.2.3"></a>
+  <a href="https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.4"><img src="https://img.shields.io/badge/Release-v0.2.4-blue.svg?style=flat-square" alt="Release v0.2.4"></a>
   <img src="https://img.shields.io/badge/Desktop-Arch%20%2F%20Omarchy%20%2F%20Hyprland-1793D1?style=flat-square&logo=arch-linux&logoColor=white" alt="Arch / Omarchy / Hyprland">
   <img src="https://img.shields.io/badge/Remote-Android%20app%20(APK%20in%20v0.2.3)-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android remote">
   <img src="https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey?style=flat-square" alt="License">
@@ -25,11 +25,11 @@ Kurek is a headless Python daemon (`kurek_daemon.py`) with no GUI that runs as a
 
 It is built and tested on **Arch Linux with Omarchy / Hyprland**. The old macOS menu-bar client and PyQt6 GUI were removed in v0.2.2.
 
-**Latest release: [v0.2.3, live voice on the phone](https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.3)** (see also [CHANGELOG.md](CHANGELOG.md)).
+**Latest release: [v0.2.4, recall, claim gate, XDG paths & audit fixes](https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.4)** (see also [CHANGELOG.md](CHANGELOG.md)).
 
 ---
 
-## ✨ Features (v0.2.3)
+## ✨ Features (v0.2.4)
 
 ### Omarchy / Hyprland desktop integration
 - **Terminals and shell:** Ghostty is the default terminal and Herdr runs inside it, with a Fish shell alias. btop/htop open in a terminal.
@@ -65,15 +65,15 @@ It is built and tested on **Arch Linux with Omarchy / Hyprland**. The old macOS 
   text = "Never lie. If you are not sure, always check the web, then answer."
   pin = true   # optional: also re-send this rule, verbatim, right after each of your messages
   ```
-- **Learned memory, an append-only ledger:** what Kurek learns through `manage_memory` goes into a `ledger` table in `memory/kurek_memory.db`. The database refuses updates and deletes, and every row needs a source. A correction is a new row that supersedes the old one (the same key does it automatically, or pass `replaces=<#id>`), and "forget #id" adds a retraction, so history stays and the prompt carries only entries nothing has replaced. The block is capped by `KUREK_MEMORY_FILE_MAX_CHARS`; if the oldest entries have to be left out, a warning is logged.
+- **Learned memory, an append-only ledger:** what Kurek learns through `manage_memory` goes into a `ledger` table in `~/.local/share/kurek/kurek_memory.db` (`$XDG_DATA_HOME/kurek/kurek_memory.db`). The database refuses updates and deletes, and every row needs a source. A correction is a new row that supersedes the old one (the same key does it automatically, or pass `replaces=<#id>`), and "forget #id" adds a retraction, so history stays and the prompt carries only entries nothing has replaced. The block is capped by `KUREK_MEMORY_FILE_MAX_CHARS`; if the oldest entries have to be left out, a warning is logged.
 - **Proposals, `~/kurek_proposed_rules.md`:** the nightly dream cycle and Jev triage only *propose* here, with a source and your words verbatim. Nothing reads this file back into a prompt. You promote a proposal by copying it into `rules.toml`.
 - **Everything else:** daily logs in `~/memory/`, a hand-written reference in `~/MEMORY.md`, and `~/ALIGNMENT_SYNTHESIS.md`, which is still read if present but is no longer written by Kurek. Memory files longer than the cap are cut to head and tail, with a warning in the log. Optional Hermes continuity is available via `HERMES_PROFILE` / `HERMES_MEMORIES_DIR`; Kurek reads those files and never writes them.
 - **Recall:** ask about a past conversation ("what did I say about the phone app two days ago?") and Kurek searches the daily logs with several keywords, then answers with the date and what was said. What recall finds is never saved as memory unless you ask.
 - **Who wins:** rules, then what you say now, then learned memory, then `~/MEMORY.md` and Hermes, then earlier chat and daily logs. If you say something that goes against a lasting fact (your terminal, city, where files go), Kurek asks whether it changed before acting and saves the change only after your yes. When you correct learned memory outside the chat (by hand or with another agent), chat turns from before the correction stop going to the model, with a warning in the log.
-- **Fresh start:** say "Kurek, fresh start" (or "new conversation") to clear only the recent chat in `memory/kurek_history.json`. Rules, learned memory and daily logs stay.
+- **Fresh start:** say "Kurek, fresh start" (or "new conversation") to clear only the recent chat in `~/.local/state/kurek/kurek_history.json` (`$XDG_STATE_HOME/kurek/kurek_history.json`). Rules, learned memory and daily logs stay.
 - **Terms:** [GLOSSARY.md](GLOSSARY.md) names each store.
 - **Why it is built this way, and how rule-following is measured:** [docs/ANTI-DRIFT.md](docs/ANTI-DRIFT.md).
-- **Storage:** learned memory is the `ledger` table in `memory/kurek_memory.db` (SQLite). The legacy `memory/long_term.json` store is retired: it is no longer read or imported, and is left on disk untouched.
+- **Storage:** learned memory is the `ledger` table in `~/.local/share/kurek/kurek_memory.db` (`$XDG_DATA_HOME/kurek/kurek_memory.db`, SQLite), and clipboard history lives in `~/.local/share/kurek/clipboard_history.json`. Legacy runtime files under `memory/` are migrated once at daemon startup; the legacy `memory/long_term.json` store is retired: it is no longer read or imported, and is left on disk untouched.
 
 ### Stability: the 600M systemd memory limit
 - `kurek.service` runs with `MemoryHigh=512M` / `MemoryMax=600M` and `Restart=on-failure`.
@@ -97,14 +97,14 @@ It is built and tested on **Arch Linux with Omarchy / Hyprland**. The old macOS 
 
 ## ⚡ Install (Linux)
 
-### Option: download the v0.2.3 bundle
+### Option: download the v0.2.4 bundle
 
-Download [`kureksistant-v0.2.3-linux-x86_64.tar.gz`](https://github.com/nodaysidle/kureksistant/releases/download/v0.2.3/kureksistant-v0.2.3-linux-x86_64.tar.gz) and [`SHA256SUMS.txt`](https://github.com/nodaysidle/kureksistant/releases/download/v0.2.3/SHA256SUMS.txt), then:
+Download [`kureksistant-v0.2.4-linux-x86_64.tar.gz`](https://github.com/nodaysidle/kureksistant/releases/download/v0.2.4/kureksistant-v0.2.4-linux-x86_64.tar.gz) and [`SHA256SUMS.txt`](https://github.com/nodaysidle/kureksistant/releases/download/v0.2.4/SHA256SUMS.txt), then:
 
 ```bash
-grep ' kureksistant-v0.2.3-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c - && \
-tar -xzf kureksistant-v0.2.3-linux-x86_64.tar.gz && \
-cd kureksistant-0.2.3 && \
+grep ' kureksistant-v0.2.4-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c - && \
+tar -xzf kureksistant-v0.2.4-linux-x86_64.tar.gz && \
+cd kureksistant-0.2.4 && \
 ./install_linux.sh
 ```
 

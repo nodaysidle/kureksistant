@@ -24,13 +24,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-def _get_base_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent
+from memory.paths import clipboard_path
 
-BASE_DIR = _get_base_dir()
-CLIPBOARD_FILE = BASE_DIR / "memory" / "clipboard_history.json"
+CLIPBOARD_FILE = clipboard_path()
 MAX_UNPINNED_HISTORY = 100
 
 _STORE_LOCK = threading.Lock()
@@ -40,8 +36,8 @@ _LAST_SEEN_CLIP: str = ""
 
 
 class ClipboardStore:
-    def __init__(self, filepath: Path = CLIPBOARD_FILE):
-        self.filepath = filepath
+    def __init__(self, filepath: Path | None = None):
+        self.filepath = Path(filepath) if filepath is not None else clipboard_path()
         self.filepath.parent.mkdir(parents=True, exist_ok=True)
         self.items: list[dict] = self._load()
 

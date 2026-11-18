@@ -65,6 +65,7 @@ from core import auto_recall, claim_gate, confirm, tool_tiers, vocabulary
 from core.proposals import propose
 from core.context import TOOL_NOTE, WHO_WINS, build_messages
 from memory.atomic_io import atomic_write_text
+from memory.paths import history_path, migrate_legacy_runtime_files
 
 # Audio recording configuration
 SAMPLE_RATE = 16000
@@ -488,7 +489,7 @@ class KurekEngine:
         print(f"[Kurek] Configured {len(self.openai_tools)} tools for {brain_name()}{deferred_note}.")
 
         # Multi-turn conversational memory & persistence
-        self.history_file = BASE_DIR / "memory" / "kurek_history.json"
+        self.history_file = history_path()
         self.history = self._load_history()
         print(f"[Kurek Memory] Loaded {len(self.history)} prior conversation turns.")
 
@@ -559,8 +560,11 @@ class KurekEngine:
         self.uds_subscribers: list[socket.socket] = []
         self.uds_lock = threading.Lock()
         self._cancel_requested = False
-        # One turn at a time: a prompt that arrives mid-turn cancels it and waits.
-        self._query_lock = threading.Lock()
+        self._speaker_epoch = 0
+        # _engine_lock serializes LLM/tool turns; _speaker_lock guards local TTS playback/drain.
+        self._engine_lock = threading.Lock()
+        self._query_lock = self._engine_lock
+        self._speaker_lock = threading.Lock()
 
         # Pre-warm PipeWire mpv sink & start Hyprland event watcher
         try:
@@ -670,6 +674,13 @@ class KurekEngine:
 
     def set_state(self, new_state: str):
         with self.state_lock:
+            if (
+                new_state == KurekState.IDLE
+                and self._speaker_lock.locked()
+                and getattr(self.tts, "is_playing", False)
+                and not self._cancel_requested
+            ):
+                return
             self.state = new_state
             print(f"[Kurek State] → {new_state.upper()}", flush=True)
             self._notify_state(new_state)
@@ -733,6 +744,7 @@ class KurekEngine:
         elif cur in (KurekState.SPEAKING, KurekState.THINKING):
             # Instant barge-in / interrupt
             self._cancel_requested = True
+            self._speaker_epoch += 1
             self.tts.stop()
             self.set_state(KurekState.IDLE)
 
@@ -870,14 +882,19 @@ class KurekEngine:
         remote: bool = False,
         stream_audio: bool = False,
     ):
-        if self._query_lock.locked():
-            # Barge-in: stop the running turn's speech, then wait for it to unwind.
-            self._cancel_requested = True
-            try:
-                self.tts.stop()
-            except Exception:
-                pass
-        if not self._query_lock.acquire(timeout=QUERY_WAIT_S):
+        if not mute_speaker:
+            local_speaking = self._speaker_lock.locked() or getattr(
+                self.tts, "is_playing", False
+            )
+            if self._engine_lock.locked() or local_speaking:
+                # Barge-in: stop the running turn's speech, then wait for it to unwind.
+                self._cancel_requested = True
+                self._speaker_epoch += 1
+                try:
+                    self.tts.stop()
+                except Exception:
+                    pass
+        if not self._engine_lock.acquire(timeout=QUERY_WAIT_S):
             busy = "Still finishing the previous request. Try again in a moment."
             self._notify_failure(busy)
             if callback:
@@ -887,49 +904,89 @@ class KurekEngine:
                 except Exception:
                     pass
             return None
+
+        speaker_acquired = False
+        my_speaker_epoch = self._speaker_epoch
         try:
+            if not mute_speaker:
+                if not self._speaker_lock.acquire(timeout=QUERY_WAIT_S):
+                    busy = "Still finishing the previous request. Try again in a moment."
+                    self._notify_failure(busy)
+                    if callback:
+                        try:
+                            callback({"type": "error", "error": busy})
+                            callback({"type": "done", "reply": busy})
+                        except Exception:
+                            pass
+                    return None
+                speaker_acquired = True
+                my_speaker_epoch = self._speaker_epoch
+                self._cancel_requested = False
+                self.tts.begin_stream()
+                self.set_state(KurekState.THINKING)
+            else:
+                self._cancel_requested = False
+                if not self._speaker_lock.locked() and not getattr(
+                    self.tts, "is_playing", False
+                ):
+                    self.set_state(KurekState.THINKING)
+
             begin_query()
-            self._cancel_requested = False
-            self.tts.begin_stream()
-            self.set_state(KurekState.THINKING)
-            return self._handle_text_query_inner(
-                user_prompt,
-                callback=callback,
-                mute_speaker=mute_speaker,
-                remote=remote,
-                stream_audio=stream_audio,
-            )
-        except Exception as e:
-            print(f"[Kurek] Unhandled query error: {e}", flush=True)
-            self._notify_failure("Something went wrong handling that request.")
             try:
-                if not self._cancel_requested and not mute_speaker:
-                    self.set_state(KurekState.SPEAKING)
-                    self.tts.speak("Something went wrong handling that request.")
-            except Exception as tts_err:
-                print(f"[Kurek] TTS error during failure report: {tts_err}")
-            if callback:
+                return self._handle_text_query_inner(
+                    user_prompt,
+                    callback=callback,
+                    mute_speaker=mute_speaker,
+                    remote=remote,
+                    stream_audio=stream_audio,
+                )
+            except Exception as e:
+                print(f"[Kurek] Unhandled query error: {e}", flush=True)
+                self._notify_failure("Something went wrong handling that request.")
                 try:
-                    callback({"type": "error", "error": str(e)})
+                    if not self._cancel_requested and not mute_speaker:
+                        self.set_state(KurekState.SPEAKING)
+                        self.tts.speak("Something went wrong handling that request.")
+                except Exception as tts_err:
+                    print(f"[Kurek] TTS error during failure report: {tts_err}")
+                if callback:
+                    try:
+                        callback({"type": "error", "error": str(e)})
+                    except Exception:
+                        pass
+            finally:
+                end_query()
+        finally:
+            self._engine_lock.release()
+            if speaker_acquired:
+                # Wait for local TTS playback to drain outside _engine_lock so
+                # concurrent mute_speaker=True queries do not block or interrupt.
+                try:
+                    deadline = time.time() + 180.0
+                    while getattr(self.tts, "is_playing", False) and time.time() < deadline:
+                        if self._cancel_requested or my_speaker_epoch != self._speaker_epoch:
+                            break
+                        time.sleep(0.05)
+                    if (
+                        getattr(self.tts, "is_playing", False)
+                        and time.time() >= deadline
+                    ):
+                        self.tts.stop()
                 except Exception:
                     pass
-        finally:
-            # Always return to a resting state — never leave the daemon stuck in THINKING.
-            # Sentences are spoken from the TTS queue, so wait for it to drain
-            # (barge-in via toggle() cancels immediately).
-            try:
-                deadline = time.time() + 180.0
-                while getattr(self.tts, "is_playing", False) and time.time() < deadline:
-                    if self._cancel_requested:
-                        break
-                    time.sleep(0.05)
-            except Exception:
-                pass
-            # A cancelled turn may unwind after the user started listening again.
-            if self.state in (KurekState.THINKING, KurekState.SPEAKING):
-                self.set_state(KurekState.IDLE)
-            end_query()
-            self._query_lock.release()
+                try:
+                    # A cancelled turn may unwind after the user started listening again.
+                    if self.state in (KurekState.THINKING, KurekState.SPEAKING):
+                        self.set_state(KurekState.IDLE)
+                finally:
+                    self._speaker_lock.release()
+            else:
+                if (
+                    not self._speaker_lock.locked()
+                    and not getattr(self.tts, "is_playing", False)
+                    and self.state in (KurekState.THINKING, KurekState.SPEAKING)
+                ):
+                    self.set_state(KurekState.IDLE)
 
     def _run_tool(self, fn_name: str, fn_args: dict, *, remote: bool = False) -> str:
         """Dispatch a tool call; block exec/shell tools for remote clients by default."""
@@ -1013,8 +1070,9 @@ class KurekEngine:
             "2. Completed vs. Planned: Never state or imply that an action was completed unless its corresponding tool call executed and succeeded in the current turn. If an action is merely planned, queued, or intended, state plainly that it is planned—never that it is done. "
             "3. File Writes and Sources: Never claim you saved, filed, placed, or recorded sources in a folder or document unless the write operation succeeded in that turn. When reporting a write, state only what was written and the exact destination path in one sentence. Do not justify naming choices or offer renames. If you did not perform the write, do not claim any file was modified. "
             "4. Web Search Integrity: Never invent citations, URLs, snippets, or file paths. If a search yields no relevant results or fails, state the truth in one sentence: say plainly that you found nothing and report the exact query you searched. Do not add commentary or speculation about the query. "
-            "5. No Apology Deflections: Apologies are never an acceptable substitute for results or honest reporting. Do not use 'Sorry, Master Alan.' or any variant to close a turn, gloss over an unperformed task, or mask a failure. Report facts, tool outcomes, and errors directly. "
+            "5. No Apology Deflections: Apologies are never an acceptable substitute for results or honest reporting. Do not use 'Sorry, Boris.', 'Sorry, Master Alan.', or any variant to close a turn, gloss over an unperformed task, or mask a failure. Report facts, tool outcomes, and errors directly. "
             "6. Clarify Instead of Guessing: If a prompt is ambiguous, blocked, or missing parameters required to act, ask exactly one direct, brief question to resolve the blocker. Do not fabricate missing information or guess. "
+            "7. Screen-First Inspection: When the user refers to what is currently visible ('this window', 'this error', 'on my screen', 'what am I looking at'), inspect the screen first with screen_vision(action='inspect') before diagnosing or guessing from text. "
             + WHO_WINS +
             "RECALL: When the user refers to a past conversation ('two days ago', 'last week', 'what did I say about...'), the daemon may already have attached a [RECALLED FROM DAILY LOGS] block to their message: answer from it. If it is missing or does not hold the answer, or they ask about anything personal you cannot see above, call manage_memory(action='recall') BEFORE saying you don't know. Put several keywords and synonyms in one query (e.g. 'phone apk android crash rotate'). Answer with the date and what was said ('On Tuesday you said...'). What recall finds stays what was said: save it only if the user asks you to remember it. "
             "CONNECTIONS: When you notice a clear link to one of the user's projects or to something said before, and it changes the answer, mention it in one sentence. Never phrase it as an offer. "
@@ -1163,7 +1221,7 @@ class KurekEngine:
                 detail = "empty stream"
             print(f"[Kurek] Stream failure ({detail})", flush=True)
             self._notify_failure(failure_msg)
-            if not self._cancel_requested:
+            if not self._cancel_requested and not mute_speaker:
                 self.set_state(KurekState.SPEAKING)
                 try:
                     self.tts.speak(failure_msg)
@@ -1986,6 +2044,11 @@ if __name__ == "__main__":
     print("=" * 60)
     print("⚡ KUREK DAEMON STARTING (Arch Linux / Omarchy Native Mode)")
     print("=" * 60)
+
+    migrated = migrate_legacy_runtime_files(BASE_DIR)
+    for _name, _did in migrated.items():
+        if _did:
+            print(f"[Kurek Paths] Migrated legacy {_name} to XDG runtime path.", flush=True)
 
     engine = KurekEngine()
 

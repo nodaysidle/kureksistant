@@ -7,6 +7,8 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-11-18
+
 ### Added
 - **Recall over past conversations:** `manage_memory` recall searches the daily logs with several keywords and answers with the date of what was said. Nothing recall finds becomes memory unless you ask.
 - **Who wins:** the prompt ranks rules, your current message, learned memory, `~/MEMORY.md` and Hermes, then earlier chat. Before going against a lasting fact (terminal, city, where files go) Kurek asks whether it changed.
@@ -25,7 +27,15 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 - Ghostty is the default terminal again.
 - `~/Projects` (legacy) dropped from `workstation_radar` and the codebase tool's default roots, and from the vault lookup.
 - Recall ignores filler words ("what did I say about"), which matched nearly every past turn and buried the real hits.
+- **XDG runtime storage (`memory/paths.py`):** moved live runtime data and state out of the repo `memory/` tree to `$XDG_DATA_HOME/kurek/` (`kurek_memory.db`, `clipboard_history.json`) and `$XDG_STATE_HOME/kurek/` (`kurek_history.json`), with explicit one-shot startup migration (`migrate_legacy_runtime_files`) and full XDG isolation in tests and `scripts/verify.sh`.
+- **User profile facts (`actions/computer_control.py`):** `user_data` now sources identity fields from `memory.reference` and active `memory.ledger` entries instead of the retired `memory/long_term.json` file.
+- **Single-purpose shell rules (`actions/run.py` & `actions/screen_vision.py`):** `run(action="exec")` rejects chained `cd ... && ...` (use `cwd`) and `echo ...` wrapper commands; deictic screen references prioritize `screen_vision` before hypothesis generation.
 - **Internal:** the prompt is built in one place, `core/context.py` (`build_messages`), which also holds the who-wins ranking. Hermes and `~/MEMORY.md` are read by `memory/reference.py` for both the prompt and recall. The prompt the model sees is unchanged byte for byte.
+
+### Fixed
+- **Concurrent muted queries (`kurek_daemon.py`):** split `_engine_lock` (LLM/tools) and `_speaker_lock` (local TTS playback) so remote/CLI queries with `mute_speaker=True` execute without waiting for or interrupting active local desktop speech.
+- **Operator naming consistency (`kurek_daemon.py`, `scripts/rules_eval.toml`):** rule 5 forbids apology deflections under both `Boris` and `Master Alan`.
+- **Documentation & packaging:** reconciled `README.md` RAM footprint to `~450MB peak RAM (with faster-whisper loaded)` and bumped release metadata to `0.2.4`.
 
 ### Removed
 - The Claude Haiku brain (`KUREK_LLM=haiku`, `anthropic` package). DeepSeek-Flash (V4.1) is the only brain.

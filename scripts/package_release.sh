@@ -4,7 +4,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${VERSION:-0.2.0}"
+VERSION="${VERSION:-0.2.4}"
 OUT_DIR="${OUT_DIR:-${ROOT}/dist}"
 STAGE_NAME="kureksistant-${VERSION}"
 ARCHIVE_NAME="kureksistant-v${VERSION}-linux-x86_64.tar.gz"
@@ -15,6 +15,7 @@ DENY_PATHS=(
   ".env"
   ".env.local"
   ".env.production"
+  "memory/kurek_memory.db"
   "memory/kurek_history.json"
   "memory/long_term.json"
   "memory/clipboard_history.json"

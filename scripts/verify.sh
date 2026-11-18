@@ -5,8 +5,8 @@
 # Safety (never touches a live install):
 #   * code comes from `git archive <SHA>` into a temp dir (repo-relative
 #     memory/kurek_memory.db of the live checkout is never opened)
-#   * HOME, XDG_RUNTIME_DIR, XDG_CONFIG_HOME point into the temp dir
-#     (no ~/.env keys, no live kurek.sock)
+#   * HOME, XDG_RUNTIME_DIR, XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_STATE_HOME
+#     point into the temp dir (no ~/.env keys, no live kurek.sock or DB)
 #   * daemon binds 127.0.0.1 only on a throwaway port (default 18791,
 #     refuses 8790); KUREK_REMOTE_BIND/KUREK_BIND are unset
 #   * tests/test_daemon_smoke.py is deselected because it hardcodes :8790;
@@ -57,12 +57,12 @@ cleanup(){
 }
 trap cleanup EXIT
 ORIG_HOME=$HOME
-mkdir -p "$TMP/src" "$TMP/home" "$TMP/run" "$TMP/cfg"; chmod 700 "$TMP/run"
+mkdir -p "$TMP/src" "$TMP/home" "$TMP/run" "$TMP/cfg" "$TMP/data" "$TMP/state"; chmod 700 "$TMP/run"
 git -C "$REPO_ROOT" archive "$SHA" | tar -x -C "$TMP/src"
 cd "$TMP/src" || { echo "FAIL: cannot cd to $TMP/src"; exit 2; }
 # some tests call `git ls-files`: give the copy its own throwaway git index
 git init -q . && git add -A && git -c user.name=verify -c user.email=verify@localhost commit -qm "verify $SHA" >/dev/null
-export HOME="$TMP/home" XDG_RUNTIME_DIR="$TMP/run" XDG_CONFIG_HOME="$TMP/cfg" PYTHONDONTWRITEBYTECODE=1
+export HOME="$TMP/home" XDG_RUNTIME_DIR="$TMP/run" XDG_CONFIG_HOME="$TMP/cfg" XDG_DATA_HOME="$TMP/data" XDG_STATE_HOME="$TMP/state" PYTHONDONTWRITEBYTECODE=1
 unset KUREK_REMOTE_BIND KUREK_BIND KUREK_REMOTE_ALLOW_EXEC KUREK_REMOTE_TOKEN \
   DEEPSEEK_API_KEY XAI_API_KEY GEMINI_API_KEY DEEPGRAM_API_KEY TYPESAFE_API_KEY OPENROUTER_API_KEY
 # Deterministic gate: kurek_daemon.py does `import numpy` (which starts one

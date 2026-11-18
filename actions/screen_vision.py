@@ -2,6 +2,11 @@
 actions/screen_vision.py — Screen vision and continuous observation tool for Kurek.
 Auto-discovered by core/action_loader.py.
 
+Screen-first rule (K-4):
+  • On any deictic reference ("this window", "this error", "on my screen", "what am I looking at",
+    "look at this"), call 'inspect' BEFORE forming hypotheses or reasoning from text alone.
+  • After GUI actions, call 'inspect' to confirm the new on-screen state before reporting success.
+
 Capabilities:
   • 'inspect': Single snapshot on demand (e.g. "what is on my screen?", "check this error", "what code is this?").
   • 'start_watch': Continuous background monitor (e.g. "watch the screen till I say so and tell me what you think about X").
@@ -178,7 +183,8 @@ def query_vision(jpeg_bytes: bytes, prompt: str) -> str:
         "You are looking directly at the user's active monitor. "
         "Be candid, sharp, concise, and direct like Jarvis. Answer in 1 to 3 punchy sentences. "
         "Do NOT output markdown asterisks, raw URLs, code blocks, or conversational filler. "
-        "Focus on key compiler errors, active windows, code context, or design elements requested."
+        "Report directly from what is visible on screen rather than guessing; "
+        "focus on key compiler errors, active windows, code context, or design elements requested."
     )
 
     models_to_try = ["gemini-3.5-flash", "gemini-3.5-flash-lite"]
@@ -302,10 +308,12 @@ TOOL = {
     "name": "screen_vision",
     "description": (
         "Visual perception and monitor inspection tool. "
+        "Screen-first rule: call action='inspect' FIRST—before reasoning or forming any hypothesis—whenever the user "
+        "uses deictic phrases referring to their display ('this window', 'this error', 'on my screen', "
+        "'what am I looking at', 'look at this'), and after GUI actions to confirm the on-screen result. "
         "Use 'inspect' when asked what is on screen, to read text, diagnose errors, or review code. "
         "Use 'start_watch' when asked to continuously watch the screen till told to stop (e.g. 'watch the screen and tell me what you think'). "
         "Use 'stop_watch' when asked to stop watching the screen."
-        " Call action='inspect' first whenever the user refers to something on their screen ('this error', 'this window', 'what am I looking at')."
     ),
     "parameters": {
         "type": "OBJECT",

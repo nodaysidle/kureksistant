@@ -1516,3 +1516,34 @@ def test_redaction_any_scheme_url_and_env_key_names(line: str, secret: str) -> N
 def test_redaction_keeps_lowercase_key_code() -> None:
     code = "primary_key = 'user_identifier'\nsort_key: created_at_desc"
     assert _redact_secrets(code) == code
+
+
+@pytest.mark.parametrize(
+    "cmd,expected_hint",
+    [
+        ("cd", "cwd"),
+        ("cd /tmp", "cwd"),
+        ("cd /tmp && git status", "cwd"),
+        ("echo", "reply"),
+        ("echo hi", "reply"),
+        ("echo '---' && ls", "reply"),
+    ],
+)
+def test_sandbox_refuses_leading_cd_and_echo_and_audits(
+    run_workspace: Path, cmd: str, expected_hint: str
+) -> None:
+    audit_file = _get_audit_log_path()
+    if audit_file.exists():
+        audit_file.unlink()
+
+    res = _exec(run_workspace, cmd)
+    assert res.startswith("Refused:")
+    assert expected_hint in res.lower()
+    assert audit_file.exists()
+    assert "STATUS=refused" in audit_file.read_text(encoding="utf-8")
+
+
+def test_single_purpose_prefix_does_not_block_similar_words() -> None:
+    assert run_mod._single_purpose_shell_reason("cdrom --info") == ""
+    assert run_mod._single_purpose_shell_reason("echocardiogram") == ""
+

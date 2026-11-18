@@ -39,8 +39,20 @@ def _no_desktop_toasts(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_xdg_dirs(tmp_path_factory, monkeypatch):
+    """Redirect XDG data/state dirs so tests never touch ~/.local/share or ~/.local/state."""
+    xdg_root = tmp_path_factory.mktemp("xdg")
+    data_home = xdg_root / "data"
+    state_home = xdg_root / "state"
+    data_home.mkdir()
+    state_home.mkdir()
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+
+
+@pytest.fixture(autouse=True)
 def _isolated_memory_db(tmp_path, monkeypatch):
-    """No test may open the live memory/kurek_memory.db; tests that need a DB set their own."""
+    """No test may open the live ~/.local/share/kurek or repo memory/kurek_memory.db."""
     from memory import ledger
 
     monkeypatch.setattr(ledger, "DB_PATH", tmp_path / "kurek_memory.db")

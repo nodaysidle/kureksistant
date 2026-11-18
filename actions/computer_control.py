@@ -34,7 +34,6 @@ def _base_dir() -> Path:
 
 _BASE         = _base_dir()
 _CONFIG_PATH  = _BASE / "config" / "api_keys.json"
-_MEMORY_PATH  = _BASE / "memory" / "long_term.json"
 
 def _load_config() -> dict:
     try:
@@ -145,16 +144,53 @@ def _random_data(data_type: str) -> str:
 
     return f"random_{data_type}_{random.randint(1000, 9999)}"
 
+def _parse_kv_fact(text: str) -> tuple[str, str] | None:
+    """Parse '- key: value' or 'key: value' into (lowercase_key, value)."""
+    cleaned = str(text).lstrip("-").strip()
+    if ":" not in cleaned:
+        return None
+    k, v = cleaned.split(":", 1)
+    k_norm = k.strip().lower()
+    v_norm = v.strip()
+    if not k_norm or not v_norm:
+        return None
+    return k_norm, v_norm
+
+
 def _user_profile() -> dict:
-    """Read identity fields from long-term memory."""
+    """Read identity fields from reference facts and active ledger entries (ledger wins)."""
+    profile: dict[str, str] = {}
     try:
-        if _MEMORY_PATH.exists():
-            data     = json.loads(_MEMORY_PATH.read_text(encoding="utf-8"))
-            identity = data.get("identity", {})
-            return {k: v.get("value", "") for k, v in identity.items()}
-    except Exception:
-        pass
-    return {}
+        from memory import reference
+
+        for _label, text in reference.entries():
+            parsed = _parse_kv_fact(text)
+            if parsed:
+                profile[parsed[0]] = parsed[1]
+    except Exception as e:
+        print(f"[ComputerControl] Error loading reference profile: {e}")
+
+    try:
+        from memory import ledger
+
+        for row in ledger.active():
+            if row["kind"] == "retract":
+                continue
+            raw_text = str(row["text"]).lstrip("-").strip()
+            key_col = (row["key"] or "").strip().lower() if "key" in row.keys() else ""
+            if key_col:
+                prefix = f"{key_col}:"
+                val = raw_text[len(prefix):].strip() if raw_text.lower().startswith(prefix) else raw_text
+                if val:
+                    profile[key_col] = val
+            else:
+                parsed = _parse_kv_fact(raw_text)
+                if parsed:
+                    profile[parsed[0]] = parsed[1]
+    except Exception as e:
+        print(f"[ComputerControl] Error loading ledger profile: {e}")
+
+    return profile
 
 def _type(text: str, interval: float = 0.03) -> str:
     if _wtype.available():
@@ -563,9 +599,9 @@ def computer_control(
             return result
 
         if action == "user_data":
-            field   = params.get("field", "name")
+            field   = str(params.get("field") or "name").strip()
             profile = _user_profile()
-            value   = profile.get(field, "")
+            value   = profile.get(field.lower(), "")
             if not value:
                 value = _random_data(field)
                 print(f"[ComputerControl] ⚠️ No '{field}' in memory, using random: {value}")

@@ -260,13 +260,14 @@ class TTSPlayer:
         self._generation = 0
         self._stream_first = True
         self._pending = 0
+        self._pending_local = 0
         self._idle = threading.Condition(self._lock)
         self._worker: threading.Thread | None = None
 
     @property
     def is_playing(self) -> bool:
         with self._lock:
-            if self._playing or self._pending:
+            if self._playing or self._pending_local:
                 return True
         try:
             from core.mpv_sink import get_mpv_sink
@@ -334,6 +335,8 @@ class TTSPlayer:
             return
         with self._lock:
             self._pending += 1
+            if play_local:
+                self._pending_local += 1
             gen = self._generation
             if self._worker is None or not self._worker.is_alive():
                 self._worker = threading.Thread(
@@ -353,7 +356,7 @@ class TTSPlayer:
             gen, text, play_local, on_audio = self._queue.get()
             try:
                 with self._lock:
-                    stale = gen != self._generation
+                    stale = play_local and gen != self._generation
                 if not stale:
                     self._process(gen, text, play_local, on_audio)
             except Exception as e:
@@ -361,6 +364,8 @@ class TTSPlayer:
             finally:
                 with self._idle:
                     self._pending -= 1
+                    if play_local:
+                        self._pending_local = max(0, self._pending_local - 1)
                     self._idle.notify_all()
 
     def _process(self, gen: int, text: str, play_local: bool, on_audio) -> None:
@@ -399,16 +404,23 @@ class TTSPlayer:
         with self._lock:
             self._generation += 1
             self._stream_first = True
-        # Drop queued sentences; the worker's finally still decrements _pending
-        # for the one it is processing.
+        # Drop queued local sentences while preserving muted remote-audio items;
+        # the worker's finally still decrements _pending for the item in flight.
+        kept = []
         while True:
             try:
-                self._queue.get_nowait()
+                item = self._queue.get_nowait()
             except _queue.Empty:
                 break
-            with self._idle:
-                self._pending -= 1
-                self._idle.notify_all()
+            if not item[2]:
+                kept.append(item)
+            else:
+                with self._idle:
+                    self._pending -= 1
+                    self._pending_local = max(0, self._pending_local - 1)
+                    self._idle.notify_all()
+        for item in kept:
+            self._queue.put(item)
         try:
             sd.stop()
         except Exception:

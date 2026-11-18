@@ -468,6 +468,40 @@ def _validate_path_args(binary: str, tokens: list[str], base_dir: Path, allowed_
     return ""
 
 
+_LEADING_CD_RE = re.compile(r"^cd(?:$|\s|;|&&|\|\|)", re.IGNORECASE)
+_LEADING_ECHO_RE = re.compile(r"^echo(?:$|\s|;|&&|\|\|)", re.IGNORECASE)
+
+
+def _single_purpose_shell_reason(cmd_str: str) -> str:
+    """Enforce single-purpose shell hygiene (K-2): reject leading 'cd' or 'echo'."""
+    stripped = (cmd_str or "").strip()
+    if _LEADING_CD_RE.match(stripped):
+        return "Refused: do not start or chain commands with 'cd'. Use the 'cwd' parameter instead."
+    if _LEADING_ECHO_RE.match(stripped):
+        return (
+            "Refused: do not start commands with 'echo' as a shell separator or output wrapper. "
+            "Label results in your reply instead."
+        )
+    return ""
+
+
+def _record_refusal(run_id: str, cmd_str: str, cwd_path: Path, reason: str) -> str:
+    """Record a refused command in _RUN_HISTORY and append to the audit log."""
+    rec = RunRecord(
+        run_id=run_id,
+        cmd=cmd_str,
+        cwd=str(cwd_path),
+        status="refused",
+        exit_code=-1,
+        output=reason,
+    )
+    with _RUN_LOCK:
+        _RUN_HISTORY[run_id] = rec
+        _cap_run_history()
+    _audit_log(rec, reason=reason)
+    return reason
+
+
 def _validate_command(cmd_str: str, human_confirmed: bool = False) -> tuple[bool, list[str], str]:
     """
     Parses and checks command against strict allowlist.
@@ -490,6 +524,10 @@ def _validate_command(cmd_str: str, human_confirmed: bool = False) -> tuple[bool
         )
     if not cmd_str:
         return False, [], "Refused: Command string is empty."
+
+    sp_reason = _single_purpose_shell_reason(cmd_str)
+    if sp_reason:
+        return False, [], sp_reason
 
     try:
         tokens = shlex.split(cmd_str)
@@ -967,6 +1005,10 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any) -> str:
             _RUN_COUNTER += 1
             run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{_RUN_COUNTER}"
 
+        sp_reason = _single_purpose_shell_reason(cmd_clean)
+        if sp_reason:
+            return _record_refusal(run_id, cmd_clean, cwd_path, sp_reason)
+
         return _spawn_unrestricted_shell(run_id, cmd_clean, cwd_path, timeout_arg)
 
     allowed_roots = get_allowed_roots()
@@ -999,37 +1041,15 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any) -> str:
         run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{_RUN_COUNTER}"
 
     if not is_allowed:
-        rec = RunRecord(
-            run_id=run_id,
-            cmd=cmd_str,
-            cwd=str(cwd_path),
-            status="refused",
-            exit_code=-1,
-            output=reason,
-        )
-        with _RUN_LOCK:
-            _RUN_HISTORY[run_id] = rec
-            _cap_run_history()
-        _audit_log(rec, reason=reason)
-        return reason
+        return _record_refusal(run_id, cmd_str, cwd_path, reason)
 
     path_reason = _validate_path_args(tokens[0].lower(), tokens, cwd_path, allowed_roots)
     if path_reason:
-        rec = RunRecord(run_id=run_id, cmd=cmd_str, cwd=str(cwd_path), status="refused", exit_code=-1, output=path_reason)
-        with _RUN_LOCK:
-            _RUN_HISTORY[run_id] = rec
-            _cap_run_history()
-        _audit_log(rec, reason=path_reason)
-        return path_reason
+        return _record_refusal(run_id, cmd_str, cwd_path, path_reason)
 
     scope_reason = _search_scope_reason(tokens, cwd_path)
     if scope_reason:
-        rec = RunRecord(run_id=run_id, cmd=cmd_str, cwd=str(cwd_path), status="refused", exit_code=-1, output=scope_reason)
-        with _RUN_LOCK:
-            _RUN_HISTORY[run_id] = rec
-            _cap_run_history()
-        _audit_log(rec, reason=scope_reason)
-        return scope_reason
+        return _record_refusal(run_id, cmd_str, cwd_path, scope_reason)
 
     if Path(tokens[0]).name == "git" and _git_emits_patches(tokens):
         tracked = _tracked_secret_files(cwd_path) or _touched_secret_files(tokens, cwd_path)
@@ -1040,24 +1060,14 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any) -> str:
                 "(git diff/show/log -p, stash show -p) could print them, including deleted ones. "
                 "Use --stat/--name-only on git log, or limit the range/paths."
             )
-            rec = RunRecord(run_id=run_id, cmd=cmd_str, cwd=str(cwd_path), status="refused", exit_code=-1, output=reason)
-            with _RUN_LOCK:
-                _RUN_HISTORY[run_id] = rec
-                _cap_run_history()
-            _audit_log(rec, reason=reason)
-            return reason
+            return _record_refusal(run_id, cmd_str, cwd_path, reason)
 
     # Refuse an untrusted binary (planted in a project, symlinked out of the trusted dirs)
     # up front instead of asking the human first. A binary that is simply not installed
     # is reported by _spawn_run, which resolves again (fail closed) after the yes.
     _exe, why = resolve_trusted_binary(tokens[0], allow_user_toolchains=needs_confirmation)
     if not _exe and BINARY_NOT_FOUND not in why:
-        rec = RunRecord(run_id=run_id, cmd=cmd_str, cwd=str(cwd_path), status="refused", exit_code=-1, output=why)
-        with _RUN_LOCK:
-            _RUN_HISTORY[run_id] = rec
-            _cap_run_history()
-        _audit_log(rec, reason=why)
-        return why
+        return _record_refusal(run_id, cmd_str, cwd_path, why)
 
     if needs_confirmation:
         return _request_human_confirmation(run_id, cmd_str, tokens, cwd_path, timeout_arg)
