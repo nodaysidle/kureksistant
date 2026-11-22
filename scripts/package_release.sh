@@ -4,7 +4,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${VERSION:-0.2.4}"
+VERSION="${VERSION:-0.2.5}"
 OUT_DIR="${OUT_DIR:-${ROOT}/dist}"
 STAGE_NAME="kureksistant-${VERSION}"
 ARCHIVE_NAME="kureksistant-v${VERSION}-linux-x86_64.tar.gz"

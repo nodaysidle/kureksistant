@@ -7,6 +7,8 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-11-22
+
 ### Changed
 - **Kurek Remote 0.2.5 (Android):** light redesign, same behaviour. Light theme with dark system-bar icons, system sans type (monospace only for the host, tool names and timestamps), vector icons instead of any emoji, message bubbles capped at 82% of the width, an input bar with two equal round buttons, and a Terminal chip that moved from the header into the preset row so the status line fits. Settings, the 2x1 widget and the live-call notification follow the same look. The app asks for no new permissions and keeps your saved host, port and token.
 - **Read-only tool rounds run in parallel:** when every tool call in one model round is a read-only lookup (web search, weather, memory recall, vault list/read/search, codebase search/tree/read/find/outline), they run at the same time; results reach the model in the original order. Any other mix runs one by one, as before.
@@ -19,13 +21,6 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 - **`system_monitor` status says memory completely:** it now reports usable RAM, available RAM and the installed RAM, and lists zram (compressed, in RAM) and disk swap separately with a closing "Swap is not RAM" sentence, so the model no longer runs `free` and a combined swap total is never read as "29 GB of RAM".
-
-### Security
-- **File tools refuse secret files:** `file_controller` read and `file_processor` refuse `.env*` (not `.env.example`), `api_keys.json`, `*.pem`/`*.key`, `id_*` keys, `.netrc`, `.git/*` and anything in `~/.ssh`, also through a symlink or a bare name in the notes folder. Nothing from them reaches the model or Gemini. Shell dotfiles, `~/.config/kurek` and other config stay readable.
-- **Tool lines are redacted:** the journal's `[Kurek Tool Dispatch]` / `[Kurek Tool Result]` lines and the phone's `tool` event pass through the `run` tool's secret patterns and are cut (500 / 100 characters). The model still gets the full result.
-- **Clipboard history skips password-manager clips:** a clip a password manager marks (`x-kde-passwordManagerHint`, as `wl-copy --sensitive` does) is never read or saved. Other clips are kept as copied, so a pinned key can still be copied back. The watcher starts with the daemon, no longer when the tool is imported, so a test run no longer touches the real history.
-
-### Fixed
 - **Kurek Remote dictation no longer sends by itself (behaviour change, on purpose):** the mic button now puts what you say into the prompt field, live as you speak, and you press Send. It waits about 6 seconds of silence before it stops listening (some phones ignore this hint), keeps what you already typed, and says "Did not catch that" instead of failing silently.
 - **Kurek Remote keeps a half-streamed reply:** when the connection drops or the PC ends a turn with an error after some of the answer arrived, that text stays and the error appears as its own row below it; audio already queued keeps playing.
 - **Kurek Remote no longer waits forever:** a reply stream that closes without `done` or `error` now shows an error. The daemon's "Still finishing the previous request" shows as Busy, not Offline. After an error the status is re-checked at 2, 5 and 15 seconds; a prompt is never resent by itself.
@@ -51,6 +46,11 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 - **Recording keeps every word:** "Speak now" appears only once the microphone is running, the last words before your stop click are kept, a double click no longer opens two microphones, and a phone prompt no longer ends your recording. A microphone that fails to start is shown as a notification.
 - **Nothing you said vanishes:** a new prompt waits up to 150 s for a running tool; if it still cannot run, Kurek says so aloud (unless you are recording) and the notification shows your words. A waiting prompt is not answered once you click, send a newer one or start recording; the notification shows its words. A click that stops your recording also silences Kurek at once. Typed prompts up to 64 KB arrive whole; longer ones are refused with a message.
 - **Inline code is read out** without its backticks; a copied "Interrupted before replying." is dropped and the rest of the answer is spoken; a sentence no cloud voice could speak is shown as a notification.
+
+### Security
+- **File tools refuse secret files:** `file_controller` read and `file_processor` refuse `.env*` (not `.env.example`), `api_keys.json`, `*.pem`/`*.key`, `id_*` keys, `.netrc`, `.git/*` and anything in `~/.ssh`, also through a symlink or a bare name in the notes folder. Nothing from them reaches the model or Gemini. Shell dotfiles, `~/.config/kurek` and other config stay readable.
+- **Tool lines are redacted:** the journal's `[Kurek Tool Dispatch]` / `[Kurek Tool Result]` lines and the phone's `tool` event pass through the `run` tool's secret patterns and are cut (500 / 100 characters). The model still gets the full result.
+- **Clipboard history skips password-manager clips:** a clip a password manager marks (`x-kde-passwordManagerHint`, as `wl-copy --sensitive` does) is never read or saved. Other clips are kept as copied, so a pinned key can still be copied back. The watcher starts with the daemon, no longer when the tool is imported, so a test run no longer touches the real history.
 
 ## [0.2.4] - 2026-11-18
 
