@@ -69,3 +69,19 @@ def test_vault_knowledge_source_has_no_home_arch() -> None:
     root = Path(__file__).resolve().parents[1]
     text = (root / "actions" / "vault_knowledge.py").read_text(encoding="utf-8")
     assert "/home/arch" not in text
+
+
+def test_add_inbox_never_overwrites_a_capture(vault_tmp: Path) -> None:
+    from datetime import datetime
+
+    results = [
+        vault_knowledge({"action": "add_inbox", "title": "My Idea", "content": f"take {i}"})
+        for i in (1, 2, 3)
+    ]
+    d = datetime.now().strftime("%Y-%m-%d")
+    inbox = vault_tmp / "inbox"
+    assert sorted(p.name for p in inbox.iterdir()) == [
+        f"{d}-my-idea-2.md", f"{d}-my-idea-3.md", f"{d}-my-idea.md",
+    ]
+    assert "take 1" in (inbox / f"{d}-my-idea.md").read_text(encoding="utf-8")
+    assert results[1] == f"Successfully saved to vault inbox: inbox/{d}-my-idea-2.md"

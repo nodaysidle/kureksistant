@@ -229,7 +229,6 @@ def vault_knowledge(parameters: dict | None = None, **kwargs) -> str:
         date_str = datetime.now().strftime("%Y-%m-%d")
         slug_raw = re.sub(r"[^a-zA-Z0-9]+", "-", (title or content[:30]).lower()).strip("-")
         slug = slug_raw[:40] or "voice-capture"
-        target_file = inbox_dir / f"{date_str}-{slug}.md"
 
         frontmatter = (
             f"---\n"
@@ -240,7 +239,16 @@ def vault_knowledge(parameters: dict | None = None, **kwargs) -> str:
             f"---\n\n"
         )
         full_text = f"{frontmatter}# {title or 'Voice Capture'}\n\n{content}\n"
-        target_file.write_text(full_text, encoding="utf-8")
+        # Never overwrite an earlier capture with the same title on the same day.
+        n = 1
+        while True:
+            target_file = inbox_dir / (f"{date_str}-{slug}.md" if n == 1 else f"{date_str}-{slug}-{n}.md")
+            try:
+                with open(target_file, "x", encoding="utf-8") as f:
+                    f.write(full_text)
+                break
+            except FileExistsError:
+                n += 1
 
         return f"Successfully saved to vault inbox: inbox/{target_file.name}"
 

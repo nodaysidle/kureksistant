@@ -10,6 +10,7 @@ import threading
 import webbrowser
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote_plus
 
 from playwright.async_api import (
     async_playwright,
@@ -555,7 +556,7 @@ class _BrowserSession:
 
     async def search(self, query: str, engine: str = "google") -> str:
         base = _SEARCH_ENGINES.get(engine.lower(), _SEARCH_ENGINES["google"])
-        return await self.go_to(base + query.replace(" ", "+"))
+        return await self.go_to(base + quote_plus(query))
 
     async def click(self, selector: str = None, text: str = None) -> str:
         page = await self._get_page()
@@ -876,7 +877,7 @@ def browser_control(
         if action == "search":
             base    = _SEARCH_ENGINES.get(params.get("engine", "google").lower(),
                                           _SEARCH_ENGINES["google"])
-            nav_url = base + params.get("query", "").replace(" ", "+")
+            nav_url = base + quote_plus(params.get("query", ""))
         else:
             nav_url = params.get("url", "").strip()
 

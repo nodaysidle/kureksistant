@@ -138,6 +138,12 @@ def _get_videos() -> Path:
     return Path.home() / "Videos"
 
 
+def _notes_dir() -> Path:
+    """Where a bare or relative file name goes. KUREK_NOTES_DIR overrides; relative means under home."""
+    d = Path(os.environ.get("KUREK_NOTES_DIR") or Path.home() / "Downloads" / "KUREK" / "NOTES").expanduser()
+    return d if d.is_absolute() else Path.home() / d
+
+
 def _resolve_path(raw: str) -> Path:
     shortcuts: dict[str, Path] = {
         "desktop":   _get_desktop(),
@@ -164,7 +170,9 @@ def _resolve_path(raw: str) -> Path:
         sub = parts[3] if len(parts) > 3 else ""
         return Path.home() / sub
 
-    return Path(raw).expanduser()
+    p = Path(raw).expanduser()
+    # The daemon runs with the repo as its working directory: a bare name must never land there.
+    return p if p.is_absolute() else _notes_dir() / p
 
 def _format_size(b: int) -> str:
     for unit in ["B", "KB", "MB", "GB", "TB"]:
@@ -255,6 +263,12 @@ def _infer_filename(content: str, default: str = "notes.md") -> str:
     return default
 
 
+def _replaced(target: Path, previous: str | None, old_bytes: int) -> str:
+    """Result text for a write that replaced a file: say so, and how much was there."""
+    had = f"{len(previous)} chars" if previous is not None else f"{old_bytes} bytes"
+    return f"Replaced existing file: {os.path.abspath(target)} (it had {had})"
+
+
 def create_file(path: str, name: str = "", content: str = "") -> str:
     try:
         base   = _resolve_path(path)
@@ -267,6 +281,7 @@ def create_file(path: str, name: str = "", content: str = "") -> str:
         def _do() -> str:
             target.parent.mkdir(parents=True, exist_ok=True)
             existed = target.exists()
+            old_bytes = target.stat().st_size if existed else 0
             previous = None
             if existed:
                 try:
@@ -276,7 +291,7 @@ def create_file(path: str, name: str = "", content: str = "") -> str:
             target.write_text(content, encoding="utf-8")
             push_undo(f"created {target.name}",
                       _undo_write(target, previous) if existed else _undo_create(target))
-            return f"File created: {target.name} in {target.parent}"
+            return _replaced(target, previous, old_bytes) if existed else f"File created: {os.path.abspath(target)}"
 
         return _gated_write(target, f"create-{target.name}",
                             f"Create {target.name}", str(target), _do)
@@ -312,7 +327,7 @@ def delete_file(path: str = "", name: str = "") -> str:
         base   = _resolve_path(path)
         target = (base / name) if name else base
         if not target.exists():
-            for cand in [Path.home() / "Desktop" / target.name, Path.home() / "Downloads" / target.name, Path.home() / target.name, Path.cwd() / target.name]:
+            for cand in [Path.home() / "Desktop" / target.name, Path.home() / "Downloads" / target.name, Path.home() / target.name, _notes_dir() / target.name]:
                 if cand.exists():
                     target = cand
                     break
@@ -506,9 +521,11 @@ def write_file(path: str, name: str = "", content: str = "",
             # different undo (delete it) from "existed and had this in it".
             previous: str | None = None
             undoable = True
-            if target.exists():
+            existed = target.exists()
+            old_bytes = target.stat().st_size if existed else 0
+            if existed:
                 try:
-                    if target.stat().st_size > _UNDO_CONTENT_LIMIT:
+                    if old_bytes > _UNDO_CONTENT_LIMIT:
                         undoable = False       # too large to hold in memory
                     else:
                         previous = target.read_text(encoding="utf-8", errors="ignore")
@@ -519,12 +536,16 @@ def write_file(path: str, name: str = "", content: str = "",
             with open(target, mode, encoding="utf-8") as f:
                 f.write(content)
 
-            action = "Appended to" if append else "Written to"
+            if append:
+                msg = f"Appended to: {os.path.abspath(target)}"
+            elif existed:
+                msg = _replaced(target, previous, old_bytes)
+            else:
+                msg = f"Written to: {os.path.abspath(target)}"
             if undoable:
                 push_undo(f"wrote to {target.name}", _undo_write(target, previous))
-                return f"{action}: {target.name}"
-            return (f"{action}: {target.name}. "
-                    f"(Too large to keep a copy of the old contents, so this one "
+                return msg
+            return (f"{msg}. (Too large to keep a copy of the old contents, so this one "
                     f"cannot be undone.)")
 
         return _gated_write(target, f"write-{target.name}",
@@ -830,6 +851,10 @@ TOOL = {
             "content": {
                 "type": "STRING",
                 "description": "File content for create_file/write"
+            },
+            "append": {
+                "type": "BOOLEAN",
+                "description": "write only: true adds content to the end of the file instead of replacing it"
             },
             "name": {
                 "type": "STRING",

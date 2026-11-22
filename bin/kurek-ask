@@ -7,5 +7,5 @@ set -u
 KUREK="${KUREK_BIN:-kurek}"
 while IFS= read -r -e -p "kurek › " line; do
     [[ -z "${line//[[:space:]]/}" ]] && break
-    "$KUREK" prompt "$line" >/dev/null
+    "$KUREK" prompt "$line" >/dev/null 2>&1 || echo "kurek-ask: not sent (kurek prompt exit $?). Is the daemon running? Try: kurek doctor" >&2
 done

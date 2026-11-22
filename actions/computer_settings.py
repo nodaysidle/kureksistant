@@ -693,8 +693,7 @@ _ALIASES = {
     "brightness_down": ("dimmer", "dim", "lower brightness", "decrease brightness"),
     # close_window first: "close this window" also contains "close this".
     "close_window":    ("close window", "close this window", "close the window"),
-    "close_tab":       ("close this", "close it", "close tab", "close this tab",
-                        "close the tab"),
+    "close_tab":       ("close this", "close tab", "close this tab", "close the tab"),
     "full_screen":     ("fullscreen", "maximise screen"),
     "show_desktop":    ("minimise everything", "go to desktop"),
     "lock_screen":     ("lock", "lock the pc", "lock computer"),
@@ -715,6 +714,16 @@ _VALUE_ACTIONS = {"volume_set", "type_text", "press_key", "reload_n",
 
 def _normalise(text: str) -> str:
     return (text or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+# A bare "close it" never acts: it does not say what to close, and typed into
+# Kurek's floating box, Ctrl+W would close the box itself.
+_ASK_WHAT_TO_CLOSE = ('Not done: "close it" does not say what to close. '
+                      "Ask the user which window, tab or app they mean.")
+
+
+def _is_bare_close_it(text: str) -> bool:
+    return " ".join((text or "").replace("_", " ").split()).lower().rstrip(".!").strip() == "close it"
 
 
 def _detect_action(description: str) -> dict:
@@ -745,6 +754,10 @@ def _detect_action(description: str) -> dict:
     for action, phrases in _ALIASES.items():
         if any(_normalise(p) == norm or p in low for p in phrases):
             return {"action": action, "value": None}
+
+    # "close_it" spells close to "close_tab": the fuzzy step must never pick it.
+    if _is_bare_close_it(raw):
+        return {"action": "", "value": None}
 
     # 4. Fuzzy match on the action names — catches "fullscren", "volumeup".
     import difflib
@@ -783,6 +796,9 @@ def computer_settings(
     raw_action  = params.get("action", "").strip()
     description = params.get("description", "").strip()
     value       = params.get("value", None)
+
+    if _is_bare_close_it(raw_action or description):
+        return _ASK_WHAT_TO_CLOSE
 
     if not raw_action and description:
         detected   = _detect_action(description)

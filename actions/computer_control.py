@@ -603,8 +603,9 @@ def computer_control(
             profile = _user_profile()
             value   = profile.get(field.lower(), "")
             if not value:
-                value = _random_data(field)
-                print(f"[ComputerControl] ⚠️ No '{field}' in memory, using random: {value}")
+                # Never invent personal data: a random email typed into a real form is worse than asking.
+                print(f"[ComputerControl] ⚠️ No '{field}' in memory")
+                return f"No {field} in memory."
             return value
 
         return f"Unknown action: '{action}'"

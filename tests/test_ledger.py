@@ -138,3 +138,26 @@ def test_remember_with_unknown_replaces_saves_nothing(tool: Path) -> None:
     out = memory_tool.manage_memory({"action": "remember", "key": "k", "value": "v", "replaces": 42})
     assert out.startswith("Nothing was saved")
     assert ledger.active() == []
+
+
+def test_replacing_an_already_replaced_row_is_refused(db: Path) -> None:
+    a = append("fact", "city: Bergen", "s", db_path=db)
+    b = append("fact", "city: Oslo", "s", supersedes=a, db_path=db)
+    with pytest.raises(LedgerError, match=f"#{a} was already replaced or forgotten"):
+        append("fact", "city: Paris", "s", supersedes=a, db_path=db)
+    assert [r["id"] for r in ledger.active(db)] == [b]
+    assert sqlite3.connect(db).execute("SELECT count(*) FROM ledger").fetchone()[0] == 2
+
+
+def test_replacing_a_forgotten_row_is_refused(db: Path) -> None:
+    a = append("fact", "city: Bergen", "s", db_path=db)
+    ledger.retract(a, "wrong", "user", db_path=db)
+    with pytest.raises(LedgerError, match=f"#{a} was already replaced or forgotten"):
+        append("fact", "city: Oslo", "s", supersedes=a, db_path=db)
+
+
+def test_remember_replacing_an_already_replaced_id_saves_nothing(tool: Path) -> None:
+    memory_tool.manage_memory({"action": "remember", "key": "address", "value": "Smyth"})
+    memory_tool.manage_memory({"action": "remember", "key": "address", "value": "Smith", "replaces": 1})
+    out = memory_tool.manage_memory({"action": "remember", "key": "x", "value": "Jones", "replaces": 1})
+    assert out == "Nothing was saved: memory #1 was already replaced or forgotten."

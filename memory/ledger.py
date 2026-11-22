@@ -99,6 +99,8 @@ def append(kind: str, text: str, source: str, *, key: str | None = None,
             if supersedes is not None:
                 if not conn.execute("SELECT 1 FROM ledger WHERE id = ?", (supersedes,)).fetchone():
                     raise LedgerError(f"no memory #{supersedes} to replace")
+                if conn.execute("SELECT 1 FROM ledger WHERE supersedes = ?", (supersedes,)).fetchone():
+                    raise LedgerError(f"memory #{supersedes} was already replaced or forgotten")
             elif key:
                 prev = conn.execute(f"SELECT id FROM ({_ACTIVE}) WHERE key = ? ORDER BY id DESC",
                                     (key,)).fetchone()

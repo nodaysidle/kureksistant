@@ -323,9 +323,19 @@ case "$1" in
         if [ -x "$TRIGGER_BIN" ] && "$TRIGGER_BIN" prompt "$PROMPT_TEXT" 2>/dev/null; then
             exit 0
         fi
-        curl -s -X POST "$DAEMON_URL/prompt" \
+        curl -s --fail --max-time 5 -X POST "$DAEMON_URL/prompt" \
             -H "Content-Type: application/json" \
             -d "{\"prompt\": $(python3 -c "import json, sys; print(json.dumps(sys.argv[1]))" "$PROMPT_TEXT")}"
+        rc=$?
+        if [ "$rc" -eq 28 ]; then
+            # Timed out: the daemon may already have the prompt, so do not say it was not sent.
+            echo "kurek: no answer within 5 s; the prompt may still run" >&2
+            exit "$rc"
+        elif [ "$rc" -ne 0 ]; then
+            reason="curl exit $rc"; [ "$rc" -eq 7 ] && reason="connection refused"
+            echo "kurek: prompt not sent to $DAEMON_URL ($reason). Try: kurek doctor" >&2
+            exit "$rc"
+        fi
         ;;
     toggle|"")
         # Sub-millisecond fast path via C trigger UDS

@@ -42,23 +42,31 @@ def test_user_profile_reads_reference_and_ledger_with_override(isolated_profile:
     assert profile.get("city") != "should be ignored on retract"
 
 
-def test_user_data_resolves_and_falls_back_to_random(isolated_profile: Path) -> None:
+def test_user_data_resolves_and_reports_missing(isolated_profile: Path) -> None:
     (isolated_profile / "MEMORY.md").write_text("- Email: boris@example.com\n", encoding="utf-8")
     ledger.append("fact", "name: Boris Test", "user", key="name")
 
     assert cc.computer_control({"action": "user_data", "field": "Email"}) == "boris@example.com"
     assert cc.computer_control({"action": "user_data", "field": "name"}) == "Boris Test"
 
-    zip_val = cc.computer_control({"action": "user_data", "field": "zip_code"})
-    assert len(zip_val) == 5 and zip_val.isdigit()
+    assert cc.computer_control({"action": "user_data", "field": "zip_code"}) == "No zip_code in memory."
 
 
-def test_user_data_falls_back_when_empty(isolated_profile: Path) -> None:
-    email_val = cc.computer_control({"action": "user_data", "field": "email"})
-    assert "@" in email_val
+def test_user_data_reports_missing_when_empty(isolated_profile: Path) -> None:
+    assert cc.computer_control({"action": "user_data", "field": "email"}) == "No email in memory."
+
+
+def test_user_data_never_calls_random(isolated_profile: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cc, "_random_data", lambda *_: pytest.fail("invented"))
+    assert cc.computer_control({"action": "user_data", "field": "phone"}) == "No phone in memory."
 
 
 def test_long_term_json_dependency_removed() -> None:
     src = Path(cc.__file__).read_text(encoding="utf-8")
     assert "long_term.json" not in src
     assert not hasattr(cc, "_MEMORY_PATH")
+
+
+def test_random_data_action_still_invents_on_request() -> None:
+    zip_val = cc.computer_control({"action": "random_data", "type": "zip_code"})
+    assert len(zip_val) == 5 and zip_val.isdigit()

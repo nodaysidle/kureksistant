@@ -7,6 +7,19 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Files land where you can find them:** a bare or relative file name (`notes.md`) is saved in `~/Downloads/KUREK/NOTES` (`KUREK_NOTES_DIR` overrides) instead of the daemon's working directory, the repo. Create and write results give the absolute path and say when an existing file was replaced and how long it was; `file_controller` exposes `append`.
+- **Vault inbox:** a second capture with the same title on the same day gets `-2`, `-3` instead of replacing the first.
+- **A brain failure after tools ran** says what the tools did and keeps the turn in history, then names the failure.
+- **Phone streams always end:** a brain failure, an empty answer or a cancelled turn sends `error` and `done`, so Kurek Remote no longer waits.
+- **Cancelled turns** keep the tools they already ran in history, and no further tool of that turn starts. Nothing is said aloud, as before.
+- **Unreadable tool arguments** (invalid JSON) are no longer run as empty arguments; the model is told and can retry.
+- **Typed box and CLI:** `kurek-ask` prints one line when a prompt is not sent; `kurek prompt` reports a refused connection (`curl --fail --max-time 5`).
+- **Learned memory:** replacing an entry that was already replaced or forgotten is refused, as forgetting it twice already was.
+- **Browser search** URL-encodes the query (`c++`, `&`, `?`).
+- **user_data** says a field is not in memory instead of inventing a random value.
+- **A bare "close it"** no longer sends Ctrl+W: Kurek asks which window, tab or app you mean. "close this" and "close tab" still close the current tab.
+
 ## [0.2.4] - 2026-11-18
 
 ### Added

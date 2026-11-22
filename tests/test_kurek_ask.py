@@ -40,3 +40,29 @@ def test_several_lines_then_an_empty_one_closes(fake_kurek):
 @pytest.mark.parametrize("typed", ["", "\n", "   \n", "\t\n", "   \nhello\n"])
 def test_nothing_to_send_makes_no_call(fake_kurek, typed):
     assert fake_kurek(typed) == []
+
+
+def _fake_exiting(tmp_path: Path, code: int) -> Path:
+    exe = tmp_path / "kurek"
+    exe.write_text(f'#!/bin/sh\necho "stdout noise"\necho "stderr noise" >&2\nexit {code}\n')
+    exe.chmod(0o755)
+    return exe
+
+
+def _ask(exe: Path, typed: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["bash", str(ASK)], input=typed, text=True, capture_output=True,
+                          env={"PATH": "/usr/bin:/bin", "KUREK_BIN": str(exe)}, timeout=10)
+
+
+def test_a_failed_send_prints_one_line_and_the_box_stays_open(tmp_path: Path):
+    done = _ask(_fake_exiting(tmp_path, 7), "hello\nagain\n\n")
+    assert done.returncode == 0
+    assert done.stdout == ""
+    assert done.stderr.splitlines() == [
+        "kurek-ask: not sent (kurek prompt exit 7). Is the daemon running? Try: kurek doctor"
+    ] * 2
+
+
+def test_a_successful_send_prints_nothing(tmp_path: Path):
+    done = _ask(_fake_exiting(tmp_path, 0), "hello\n\n")
+    assert done.stdout == "" and done.stderr == ""

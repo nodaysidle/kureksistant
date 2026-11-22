@@ -443,6 +443,7 @@ def classify_confirmation_reply(text: str) -> bool | None:
 
 # A new prompt cancels the running turn and waits this long for it to finish.
 QUERY_WAIT_S = 30.0
+CANCELLED_REPLY = "Interrupted before replying."
 
 
 class KurekEngine:
@@ -1001,6 +1002,25 @@ class KurekEngine:
             )
         return self.actions.run(fn_name, fn_args)
 
+    def _end_cancelled_turn(self, user_prompt: str, tools_run: list[str], callback) -> None:
+        """A newer prompt superseded this turn. Nothing is said aloud (by design). Tools that already ran stay in history, and a waiting phone stream is closed."""
+        if tools_run:
+            # The tools did run: the next turn must see them, or it may deny or repeat them.
+            ts = datetime.now().isoformat(timespec="seconds")
+            with self._history_lock:
+                self.history.append({"role": "user", "content": user_prompt, "ts": ts})
+                self.history.append({"role": "assistant", "content": CANCELLED_REPLY, "tools": tools_run, "ts": ts})
+            self._save_history()
+            print(f"[Kurek] Cancelled turn — {len(tools_run)} tool call(s) kept in history.", flush=True)
+        else:
+            print("[Kurek] Cancelled turn — history and memory left untouched.", flush=True)
+        if callback:
+            try:
+                callback({"type": "error", "error": CANCELLED_REPLY})
+                callback({"type": "done", "reply": CANCELLED_REPLY})
+            except Exception:
+                pass
+
     def _handle_text_query_inner(
         self,
         user_prompt: str,
@@ -1140,27 +1160,40 @@ class KurekEngine:
 
                     last_tool_output = ""
                     for tc in tool_calls:
+                        if self._cancel_requested:
+                            break
                         fn = tc.get("function", {})
                         fn_name = fn.get("name", "")
                         fn_args_raw = fn.get("arguments", "{}")
                         try:
-                            fn_args = json.loads(fn_args_raw) if isinstance(fn_args_raw, str) else fn_args_raw
-                        except Exception:
-                            fn_args = {}
+                            # A call with no arguments arrives as "".
+                            fn_args = json.loads(fn_args_raw.strip() or "{}") if isinstance(fn_args_raw, str) else fn_args_raw
+                        except ValueError:
+                            fn_args = None
 
-                        print(f"[Kurek Tool Dispatch] ⚙️ {fn_name}({fn_args})", flush=True)
-                        tools_run.append(f"{fn_name}({json.dumps(fn_args, ensure_ascii=False)[:200]})")
-                        try:
-                            if fn_name == tool_tiers.LOADER:
-                                tool_result = tool_tiers.load(
-                                    fn_args.get("names") or [], self.deferred_tools, turn_tools
-                                )
-                            else:
-                                tool_result = self._run_tool(fn_name, fn_args, remote=remote)
-                        except Exception as e:
-                            tool_result = f"Error executing {fn_name}: {e}"
+                        refused = not isinstance(fn_args, dict)
+                        if refused:
+                            # Never run a tool on arguments we could not read; the model is told and can retry.
+                            print(f"[Kurek Tool Dispatch] ✋ {fn_name}: arguments are not a JSON object: {str(fn_args_raw)[:200]}", flush=True)
+                            fn_args = {}
+                            tool_result = (f"Error: the arguments for {fn_name} were not valid JSON, so it was not run. "
+                                           "Call it again with one complete JSON object.")
+                        else:
+                            print(f"[Kurek Tool Dispatch] ⚙️ {fn_name}({fn_args})", flush=True)
+                            tools_run.append(f"{fn_name}({json.dumps(fn_args, ensure_ascii=False)[:200]})")
+                            try:
+                                if fn_name == tool_tiers.LOADER:
+                                    tool_result = tool_tiers.load(
+                                        fn_args.get("names") or [], self.deferred_tools, turn_tools
+                                    )
+                                else:
+                                    tool_result = self._run_tool(fn_name, fn_args, remote=remote)
+                            except Exception as e:
+                                tool_result = f"Error executing {fn_name}: {e}"
                         last_tool_output = str(tool_result)
-                        outcomes.append(claim_gate.record(fn_name, fn_args, tool_result))
+                        outcome = claim_gate.record(fn_name, fn_args, tool_result)
+                        # A refused call never ran: it neither failed nor backs a claim.
+                        outcomes.append({**outcome, "outcome": "not_run"} if refused else outcome)
                         print(f"[Kurek Tool Result] → {tool_result}", flush=True)
 
                         if callback:
@@ -1186,8 +1219,8 @@ class KurekEngine:
 
                 elif ev_type == "sentence":
                     raw_sentence = ev.get("sentence", "")
-                    # The model copied the history's tool note: speak nothing from there on.
-                    if TOOL_NOTE in raw_sentence:
+                    # The model copied the history's tool note or cancelled-turn marker: speak nothing from there on.
+                    if TOOL_NOTE in raw_sentence or CANCELLED_REPLY in raw_sentence:
                         note_copied = True
                     if note_copied:
                         continue
@@ -1212,7 +1245,26 @@ class KurekEngine:
             else:
                 break
 
-        if stream_error or (not reply_text and not last_tool_output and sentence_count == 0):
+        if self._cancel_requested:
+            self._end_cancelled_turn(user_prompt, tools_run, callback)
+            return reply_text
+
+        if stream_error and tools_run:
+            # Tools already ran this turn: say what they did and keep the turn, not a bare "couldn't reach".
+            print(f"[Kurek] Stream failure after {len(outcomes)} tool call(s) ({stream_error})", flush=True)
+            self._notify_failure(f"I couldn't reach {brain_name()} right now.")
+            ran = "; ".join(
+                " ".join(filter(None, (o["tool"], str(o["args"].get("action", "")), o["outcome"]))).replace("_", " ")
+                for o in outcomes
+            )
+            reply_text = f"Tools this turn: {ran}. Then I couldn't reach {brain_name()}, so I could not finish."
+            if not self._cancel_requested:
+                self._queue_sentence(
+                    reply_text, self.sanitize_text_for_speech(reply_text), sentence_count,
+                    mute_speaker=mute_speaker, callback=callback, stream_audio=stream_audio,
+                )
+            sentence_count += 1
+        elif stream_error or (not reply_text and not last_tool_output and sentence_count == 0):
             if stream_error:
                 failure_msg = f"I couldn't reach {brain_name()} right now."
                 detail = stream_error
@@ -1221,6 +1273,12 @@ class KurekEngine:
                 detail = "empty stream"
             print(f"[Kurek] Stream failure ({detail})", flush=True)
             self._notify_failure(failure_msg)
+            if callback:
+                try:
+                    callback({"type": "error", "error": failure_msg})
+                    callback({"type": "done", "reply": failure_msg})
+                except Exception:
+                    pass
             if not self._cancel_requested and not mute_speaker:
                 self.set_state(KurekState.SPEAKING)
                 try:
@@ -1274,6 +1332,7 @@ class KurekEngine:
         reply_text = re.sub(r"<[｜|].*?[｜|]>", "", reply_text)
         reply_text = re.sub(r"</[｜|].*?[｜|]>", "", reply_text)
         reply_text = re.sub(rf"\({TOOL_NOTE}.*", "", reply_text, flags=re.DOTALL)
+        reply_text = re.sub(rf"{re.escape(CANCELLED_REPLY)}.*", "", reply_text, flags=re.DOTALL)
         reply_text = reply_text.strip()
         if not reply_text:
             # Successful tool path with no spoken content — not a transport failure.
@@ -1282,8 +1341,7 @@ class KurekEngine:
         print(f"[Kurek Reply] 💬 \"{reply_text}\"", flush=True)
 
         if self._cancel_requested:
-            # Superseded by a newer prompt: say nothing, remember nothing.
-            print("[Kurek] Cancelled turn — history and memory left untouched.", flush=True)
+            self._end_cancelled_turn(user_prompt, tools_run, callback)
             return reply_text
 
         # Update multi-turn history & persist

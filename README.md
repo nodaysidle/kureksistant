@@ -40,7 +40,7 @@ It is built and tested on **Arch Linux with Omarchy / Hyprland**. The old macOS 
   - maximize (`fullscreen 1`);
   - snap the active window to the left or right half of the focused monitor;
   - display off (`dpms`).
-- **Close:** "close this", "close it" and "close tab" close the current tab (Ctrl+W). Only an explicit "close window" closes the whole window (`killactive`).
+- **Close:** "close this" and "close tab" close the current tab (Ctrl+W). A bare "close it" makes Kurek ask what you mean. Only an explicit "close window" closes the whole window (`killactive`).
 - **Screen vision:** `grim` captures the active window and sends it to Gemini Flash. Hyprland context comes from the `.socket2.sock` event stream.
 - **Summon:** a compiled C trigger (`bin/kurek-trigger`) over the Unix socket `$XDG_RUNTIME_DIR/kurek.sock`.
 
@@ -148,6 +148,7 @@ nano .env
 | `KUREK_MEMORY_FILE_MAX_CHARS` | Optional | Cap per memory file, and for the learned-memory block, injected into each prompt (default 6000). A warning is logged when something is cut. |
 | `KUREK_RULES_FILE` | Optional | Path to `rules.toml` (default `~/.config/kurek/rules.toml`). |
 | `KUREK_VAULT_DIR` | Optional | Path to the Obsidian vault used by `vault_knowledge`. |
+| `KUREK_NOTES_DIR` | Optional | Where a file saved by bare name (`notes.md`) goes (default `~/Downloads/KUREK/NOTES`; a relative path is under your home). |
 | `KUREK_CODEBASE_ROOTS` | Optional | Project roots for the `codebase` tool (`:`-separated). |
 | `KUREK_AUTO_SCREEN` | Optional | `0` disables auto screen-context. |
 | `KUREK_DECISION_TIMEOUT` | Optional | Decision request timeout in seconds (Jev and Decision-1). |

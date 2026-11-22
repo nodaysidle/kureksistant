@@ -77,7 +77,6 @@ def test_close_tab_uses_ctrl_w_and_close_window_uses_killactive(monkeypatch):
 
 @pytest.mark.parametrize("phrase,action", [
     ("close this", "close_tab"),
-    ("close it", "close_tab"),
     ("close the tab", "close_tab"),
     ("close this window", "close_window"),
     ("close the window", "close_window"),
@@ -208,3 +207,37 @@ def test_hyprland_fullscreen_toggles(monkeypatch, state, target):
     computer_settings.full_screen()
     assert ["hyprctl", "dispatch", "fullscreenstate", target, "-1"] in calls
     assert ["hyprctl", "dispatch", "fullscreen", "0"] not in calls
+
+
+_ASK_CLOSE = ('Not done: "close it" does not say what to close. '
+              "Ask the user which window, tab or app they mean.")
+
+
+@pytest.fixture
+def no_keys(monkeypatch):
+    """Record every hotkey and subprocess instead of sending it."""
+    keys, run = [], _Run()
+    monkeypatch.setattr(computer_settings, "_PYAUTOGUI", True)
+    monkeypatch.setattr(computer_settings, "_OS", "Linux")
+    monkeypatch.setattr(computer_settings, "_hk", lambda *k: keys.append(k))
+    monkeypatch.setattr(computer_settings.subprocess, "run", run)
+    return keys, run
+
+
+@pytest.mark.parametrize("phrase", ["close it", "Close it.", " close it ", "close it!"])
+def test_bare_close_it_asks_what_to_close_and_sends_nothing(no_keys, phrase):
+    keys, run = no_keys
+    assert computer_settings.computer_settings({"description": phrase}) == _ASK_CLOSE
+    assert keys == [] and run.calls == []
+    assert computer_settings._detect_action(phrase)["action"] not in ("close_tab", "close_window")
+
+
+@pytest.mark.parametrize("phrase", ["close tab", "close this"])
+def test_close_tab_phrases_still_resolve(phrase):
+    assert computer_settings._detect_action(phrase)["action"] == "close_tab"
+
+
+def test_explicit_close_tab_action_still_sends_ctrl_w(no_keys):
+    keys, _run = no_keys
+    assert computer_settings.computer_settings({"action": "close_tab"}) == "Done: close_tab."
+    assert keys == [("ctrl", "w")]
