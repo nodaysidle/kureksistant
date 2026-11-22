@@ -189,6 +189,7 @@ def _run_tool_prompt_line() -> str:
 
 # HTTP remote-access hardening
 HTTP_MAX_BODY_BYTES = 64 * 1024
+SSE_HEARTBEAT_S = 15.0  # an SSE comment this often keeps Kurek Remote's 90 s read timeout from firing
 REMOTE_TOKEN_MIN_LEN = 32
 # Tools that execute model-generated code or shell commands — blocked for remote
 # clients unless KUREK_REMOTE_ALLOW_EXEC=1.
@@ -227,6 +228,26 @@ def _tool_args(raw) -> dict | None:
     except ValueError:
         return None
     return args if isinstance(args, dict) else None
+
+
+def _redact(text: str) -> str:
+    """text with secrets replaced by the run tool's patterns. Quadratic on long word runs: pass a bounded slice."""
+    from actions.run import _redact_secrets  # lazy: actions.run builds its TOOL dict at import
+    return _redact_secrets(text)
+
+
+def _redacted(value, limit: int) -> str:
+    """For the journal and the phone only: secrets redacted with the run tool's patterns, then cut.
+    Redact first, so a key that crosses the limit is not left half visible. The model's tool
+    message never goes through this."""
+    raw = str(value)
+    # The patterns are quadratic on long word runs: redact only what can be shown, plus 200 characters
+    # so a key that straddles the limit is redacted whole.
+    try:
+        text = _redact(raw[:limit + 200])
+    except Exception:
+        return "[redaction unavailable]"[:limit]  # fail closed: never the raw text
+    return text[:limit] + ("…" if len(text) > limit or len(raw) > limit + 200 else "")
 
 
 def remote_allow_exec() -> bool:
@@ -495,6 +516,14 @@ class KurekEngine:
         except Exception as e:
             print(f"[Kurek] Action loader notice: {e}")
             self.actions = None
+
+        # Only a running daemon watches the clipboard; importing the tool (tests, tool discovery) does not.
+        if self.actions is not None and "manage_clipboard" in self.actions.names():
+            try:
+                from actions.clipboard_tool import start_clipboard_watcher
+                start_clipboard_watcher()
+            except Exception as e:
+                print(f"[Kurek] Clipboard watcher notice: {e}")
 
         # Build OpenAI tool declarations for DeepSeek
         self.openai_tools = []
@@ -1240,12 +1269,12 @@ class KurekEngine:
                         refused = fn_args is None
                         if refused:
                             # Never run a tool on arguments we could not read; the model is told and can retry.
-                            print(f"[Kurek Tool Dispatch] ✋ {fn_name}: arguments are not a JSON object: {str(fn_args_raw)[:200]}", flush=True)
+                            print(f"[Kurek Tool Dispatch] ✋ {fn_name}: arguments are not a JSON object: {_redacted(fn_args_raw, 200)}", flush=True)
                             fn_args = {}
                             tool_result = (f"Error: the arguments for {fn_name} were not valid JSON, so it was not run. "
                                            "Call it again with one complete JSON object.")
                         else:
-                            print(f"[Kurek Tool Dispatch] ⚙️ {fn_name}({fn_args})", flush=True)
+                            print(f"[Kurek Tool Dispatch] ⚙️ {fn_name}({_redacted(fn_args, 500)})", flush=True)
                             tools_run.append(f"{fn_name}({json.dumps(fn_args, ensure_ascii=False)[:200]})")
                             if i in prefetched:
                                 tool_result = prefetched[i]
@@ -1265,7 +1294,7 @@ class KurekEngine:
                         outcome = claim_gate.record(fn_name, fn_args, tool_result)
                         # A refused call never ran: it neither failed nor backs a claim.
                         outcomes.append({**outcome, "outcome": "not_run"} if refused else outcome)
-                        print(f"[Kurek Tool Result] → {tool_result}", flush=True)
+                        print(f"[Kurek Tool Result] → {_redacted(tool_result, 500)}", flush=True)
 
                         if callback:
                             if stream_audio and not flushed:
@@ -1276,7 +1305,7 @@ class KurekEngine:
                                 flushed = True
                             try:
                                 arg_summary = ", ".join(f"{k}='{v}'" for k, v in list(fn_args.items())[:2]) if isinstance(fn_args, dict) else ""
-                                callback({"type": "tool", "name": fn_name, "description": f"⚙️ {fn_name}({arg_summary})", "result": str(tool_result)[:100]})
+                                callback({"type": "tool", "name": fn_name, "description": f"⚙️ {fn_name}({_redacted(arg_summary, 200)})", "result": _redacted(tool_result, 100)})
                             except Exception:
                                 pass
 
@@ -1388,10 +1417,11 @@ class KurekEngine:
                 print(f"[Kurek] Summary synthesis notice: {e}")
 
         if not reply_text and last_tool_output:
+            # A tool result spoken as the reply goes to speech, the phone, history and logs: redact it.
             if "error" in last_tool_output.lower():
-                reply_text = f"Notice: {last_tool_output.strip()[:140]}"
+                reply_text = f"Notice: {_redact(last_tool_output.strip()[:340])[:140]}"
             elif len(last_tool_output) <= 120 and "\n" not in last_tool_output:
-                reply_text = last_tool_output.strip()
+                reply_text = _redact(last_tool_output.strip())
             else:
                 reply_text = "Done."
 
@@ -1680,6 +1710,11 @@ class KurekHTTPHandler(BaseHTTPRequestHandler):
     engine: KurekEngine = None
     # Tests may force non-loopback semantics while connecting via 127.0.0.1.
     force_remote_client: bool | None = None
+    # Socket timeout for each read and write (StreamRequestHandler.setup applies it): a request that
+    # stops arriving is dropped after 30 s. An SSE reply is not cut by gaps: between events no socket
+    # call is pending. Events go out in 16 KB slices, each its own send, so the stream ends only when
+    # the phone accepts nothing for 30 s, however large the event (a sentence's audio).
+    timeout = 30
 
     def log_message(self, format, *args):
         # Suppress routine polling logs
@@ -1858,25 +1893,49 @@ class KurekHTTPHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
             stream_lock = threading.Lock()
+            finished = threading.Event()  # set by "done", a failed write, or the end of the turn
+
+            def _write(chunk: bytes, last: bool = False) -> None:
+                with stream_lock:  # the one writer: events and heartbeats never interleave
+                    if finished.is_set():
+                        return
+                    try:
+                        view = memoryview(chunk)
+                        for i in range(0, len(view), 16 * 1024):  # the timeout applies per slice
+                            self.wfile.write(view[i:i + 16 * 1024])
+                        self.wfile.flush()
+                    except Exception:
+                        last = True  # the phone went away: stop writing; the turn itself goes on
+                    if last:
+                        finished.set()
 
             def _sse_callback(event: dict):
                 try:
-                    with stream_lock:
-                        payload = f"data: {json.dumps(event)}\n\n".encode("utf-8")
-                        self.wfile.write(payload)
-                        self.wfile.flush()
+                    chunk = f"data: {json.dumps(event)}\n\n".encode("utf-8")
                 except Exception:
-                    pass
+                    return
+                _write(chunk, last=event.get("type") == "done")
 
+            def _heartbeat() -> None:
+                # An SSE comment; KurekClient 0.2.3 skips every line that does not start with "data:".
+                while not finished.wait(SSE_HEARTBEAT_S):
+                    _write(b": keep-alive\n\n")
+
+            heartbeat = threading.Thread(target=_heartbeat, name="kurek-sse-heartbeat", daemon=True)
+            heartbeat.start()
             is_remote = not self._peer_is_loopback()
-            # Execute query synchronously inside this HTTP thread so the SSE connection stays open
-            self.engine.handle_text_query(
-                prompt_text,
-                callback=_sse_callback,
-                mute_speaker=mute_speaker,
-                remote=is_remote,
-                stream_audio=stream_audio,
-            )
+            try:
+                # Execute query synchronously inside this HTTP thread so the SSE connection stays open
+                self.engine.handle_text_query(
+                    prompt_text,
+                    callback=_sse_callback,
+                    mute_speaker=mute_speaker,
+                    remote=is_remote,
+                    stream_audio=stream_audio,
+                )
+            finally:
+                finished.set()
+                heartbeat.join()  # bounded: a pending write gives up after KurekHTTPHandler.timeout
             return
 
         self.send_response(404)
@@ -2073,8 +2132,12 @@ def _start_http_server(host: str, port: int) -> ThreadingHTTPServer:
     return server
 
 
-def _tailscale_rebind_loop(port: int, bound_hosts: set[str], stop_event: threading.Event) -> None:
-    """Retry Tailscale bind until an IPv4 appears; never crash the daemon."""
+def _tailscale_rebind_loop(port: int, bound_hosts: set[str], stop_event: threading.Event,
+                           on_bound=None) -> None:
+    """Retry Tailscale bind until an IPv4 appears; never crash the daemon.
+    on_bound(ip), when given, runs for each newly bound IP (live voice) until it succeeds: when it
+    raises or returns False it is retried on the next pass, and once it succeeded never again."""
+    live_pending: list[str] = []
     while not stop_event.wait(5.0):
         try:
             require_strong_remote_token_for_bind()
@@ -2082,20 +2145,29 @@ def _tailscale_rebind_loop(port: int, bound_hosts: set[str], stop_event: threadi
             print(f"[Kurek Server] Tailscale re-bind paused: {exc}", flush=True)
             continue
         ts_ip = detect_tailscale_ipv4()
-        if not ts_ip or ts_ip in bound_hosts:
-            continue
-        try:
-            _start_http_server(ts_ip, port)
-            bound_hosts.add(ts_ip)
-            print(
-                f"[Kurek Server] Tailscale interface ready — bound remote HTTP on {ts_ip}:{port}",
-                flush=True,
-            )
-        except OSError as exc:
-            print(
-                f"[Kurek Server] Could not bind Tailscale address {ts_ip}:{port}: {exc}",
-                flush=True,
-            )
+        if ts_ip and ts_ip not in bound_hosts:
+            try:
+                _start_http_server(ts_ip, port)
+                bound_hosts.add(ts_ip)
+                print(
+                    f"[Kurek Server] Tailscale interface ready — bound remote HTTP on {ts_ip}:{port}",
+                    flush=True,
+                )
+                if on_bound is not None:
+                    live_pending.append(ts_ip)
+            except OSError as exc:
+                print(
+                    f"[Kurek Server] Could not bind Tailscale address {ts_ip}:{port}: {exc}",
+                    flush=True,
+                )
+        for ip in list(live_pending):
+            try:
+                started = on_bound(ip) is not False
+            except Exception as exc:
+                started = False
+                print(f"[Kurek Server] Live voice on {ip} did not start: {exc}; retrying", flush=True)
+            if started:
+                live_pending.remove(ip)
 
 
 def _live_authorized(authorization: str | None) -> bool:
@@ -2103,6 +2175,18 @@ def _live_authorized(authorization: str | None) -> bool:
     token = get_remote_token()
     provided = parse_bearer_token(authorization)
     return remote_token_is_strong(token) and provided is not None and tokens_match(provided, token)
+
+
+def _live_starter(engine: KurekEngine):
+    """start(host) serves live voice on one host and says whether it bound; None when live voice is
+    off (KUREK_LIVE_VOICE)."""
+    if not live_voice_enabled():
+        return None
+
+    def start(host: str) -> bool:
+        return host in start_live_servers([host], _live_authorized, engine.openai_tools,
+                                          lambda name, args: engine._run_tool(name, args, remote=True))
+    return start
 
 
 def run_server(engine: KurekEngine, port: int = 8790):
@@ -2147,19 +2231,16 @@ def run_server(engine: KurekEngine, port: int = 8790):
         bound.add("127.0.0.1")
         print(f"[Kurek Server] 🚀 Listening at http://127.0.0.1:{port}", flush=True)
 
-    if live_voice_enabled():
-        start_live_servers(
-            sorted(bound),
-            _live_authorized,
-            engine.openai_tools,
-            lambda name, args: engine._run_tool(name, args, remote=True),
-        )
+    start_live = _live_starter(engine)
+    if start_live:
+        for host in sorted(bound):
+            start_live(host)
 
     stop_event = threading.Event()
     if watch_tailscale:
         threading.Thread(
             target=_tailscale_rebind_loop,
-            args=(port, bound, stop_event),
+            args=(port, bound, stop_event, start_live),
             name="kurek-tailscale-rebind",
             daemon=True,
         ).start()

@@ -15,6 +15,7 @@ except ImportError:
 from core import confirm
 from core.undo import push_undo
 from actions import _safe_paths
+from actions.codebase import _is_dynamic_secret, is_secret_file
 
 _OS = platform.system()  # "Windows" | "Darwin" | "Linux"
 
@@ -94,6 +95,27 @@ def _is_safe_path(target: Path) -> bool:
         )
     except Exception:
         return False
+
+
+def secret_file_refusal(target: Path) -> str | None:
+    """The refusal when a file tool must not read target, else None. Checks the path as given and
+    after symlinks against actions/codebase.py's credential files and anything under ~/.ssh, so a
+    link or a bare name in the notes folder cannot get round it. Shell dotfiles and other config
+    stay readable: _safe_paths.is_sensitive guards writes, not reads. /proc is refused whole: a
+    process's environ holds every key the daemon loaded."""
+    real = _safe_paths.resolve(target)
+    if (is_secret_file(target) or is_secret_file(real) or _is_dynamic_secret(real)
+            or real.is_relative_to(_safe_paths.resolve(Path.home() / ".ssh"))
+            or Path(target).is_relative_to("/proc") or real.is_relative_to("/proc")):
+        return (f"Refused: '{target.name}' may hold credentials (.env, keys, tokens, SSH files or "
+                "a process environment), so file tools do not read it.")
+    return None
+
+
+def secret_escape_refusal(src: Path, dst: Path) -> str | None:
+    """Refuse copying, moving or renaming a secret to a name the read check would let through."""
+    refusal = secret_file_refusal(src)
+    return refusal if refusal and not secret_file_refusal(dst) else None
 
 def _get_desktop() -> Path:
     if _OS == "Linux":
@@ -387,6 +409,9 @@ def move_file(path: str, name: str = "", destination: str = "") -> str:
 
         if dst.is_dir():
             dst = dst / src.name
+        refusal = secret_escape_refusal(src, dst)
+        if refusal:
+            return refusal
 
         def _do() -> str:
             dst.parent.mkdir(parents=True, exist_ok=True)
@@ -420,6 +445,9 @@ def copy_file(path: str, name: str = "", destination: str = "") -> str:
 
         if dst.is_dir():
             dst = dst / src.name
+        refusal = secret_escape_refusal(src, dst)
+        if refusal:
+            return refusal
 
         def _do() -> str:
             dst.parent.mkdir(parents=True, exist_ok=True)
@@ -469,6 +497,9 @@ def rename_file(path: str, name: str = "", new_name: str = "") -> str:
             return f"Access denied: {new_path}"
         if new_path.exists():
             return f"A file named '{new_name}' already exists here."
+        refusal = secret_escape_refusal(target, new_path)
+        if refusal:
+            return refusal
 
         def _do() -> str:
             old_path = target.resolve()
@@ -490,6 +521,9 @@ def read_file(path: str, name: str = "", max_chars: int = 4000) -> str:
         target = (base / name) if name else base
         if not _is_safe_path(target):
             return f"Access denied: {target}"
+        refusal = secret_file_refusal(target)
+        if refusal:
+            return refusal
         if not target.exists():
             return f"File not found: {target.name}"
         if not target.is_file():

@@ -24,6 +24,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from actions.file_controller import secret_file_refusal
+
 def _get_api_key() -> str:
     from memory.config_manager import get_gemini_key
     return get_gemini_key()
@@ -797,6 +799,9 @@ def file_processor(parameters: dict, player=None, speak=None) -> str:
         return "No file path provided."
 
     path = Path(file_path_str)
+    refusal = secret_file_refusal(path)  # one check covers every action: each one reads the file
+    if refusal:
+        return refusal
     if not path.exists():
         return f"File not found: {file_path_str}"
     if not path.is_file():

@@ -28,6 +28,9 @@ from memory.paths import clipboard_path
 
 CLIPBOARD_FILE = clipboard_path()
 MAX_UNPINNED_HISTORY = 100
+# MIME types a source offers to say "do not keep this clip" (KDE convention; wl-copy --sensitive
+# sets it and wl-paste reports CLIPBOARD_STATE=sensitive for it).
+_SENSITIVE_HINTS = frozenset({"x-kde-passwordManagerHint"})
 
 _STORE_LOCK = threading.Lock()
 _WATCHER_THREAD: threading.Thread | None = None
@@ -198,8 +201,18 @@ def _read_system_clipboard() -> str:
             return ""
     elif shutil.which("wl-paste"):
         try:
+            def _skip() -> bool:  # the types could not be listed, or a password manager marked the clip
+                types = subprocess.run(["wl-paste", "--list-types"], capture_output=True, text=True, timeout=1.0)
+                return types.returncode != 0 or bool(_SENSITIVE_HINTS & set(types.stdout.split()))
+
+            if _skip():
+                return ""  # never read or keep it
             res = subprocess.run(["wl-paste", "--no-newline"], capture_output=True, text=True, timeout=1.0)
-            return res.stdout if res.returncode == 0 else ""
+            # Listed again: the clip may have changed between the first listing and the paste.
+            # shortcut: a marked clip replaced again before the second listing is still read; wl-paste --watch would close that gap if it matters.
+            if res.returncode != 0 or _skip():
+                return ""
+            return res.stdout
         except Exception:
             return ""
     elif shutil.which("xclip"):
@@ -263,10 +276,6 @@ def start_clipboard_watcher():
     _WATCHER_THREAD = threading.Thread(target=_clipboard_watcher_loop, daemon=True, name="ClipboardWatcher")
     _WATCHER_THREAD.start()
     print("[Kurek Clipboard] Background watcher thread started.", flush=True)
-
-
-# Auto-start watcher on module import
-start_clipboard_watcher()
 
 
 def manage_clipboard(parameters: dict, player=None, session_memory=None) -> str:

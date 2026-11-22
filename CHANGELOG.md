@@ -16,6 +16,11 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 - **`KUREK_TIMING=1` covers the whole turn:** voice turns start at the stop click, so speech-to-text is measured; new marks for the DeepSeek request, headers and first reasoning token, each tool, the first sentence's speech synthesis, and mpv start. The speech marks now print (they ran on a thread without a clock).
 - A `[Kurek Summary Round]` log line each time the extra answer round runs after tools.
 
+### Security
+- **File tools refuse secret files:** `file_controller` read and `file_processor` refuse `.env*` (not `.env.example`), `api_keys.json`, `*.pem`/`*.key`, `id_*` keys, `.netrc`, `.git/*` and anything in `~/.ssh`, also through a symlink or a bare name in the notes folder. Nothing from them reaches the model or Gemini. Shell dotfiles, `~/.config/kurek` and other config stay readable.
+- **Tool lines are redacted:** the journal's `[Kurek Tool Dispatch]` / `[Kurek Tool Result]` lines and the phone's `tool` event pass through the `run` tool's secret patterns and are cut (500 / 100 characters). The model still gets the full result.
+- **Clipboard history skips password-manager clips:** a clip a password manager marks (`x-kde-passwordManagerHint`, as `wl-copy --sensitive` does) is never read or saved. Other clips are kept as copied, so a pinned key can still be copied back. The watcher starts with the daemon, no longer when the tool is imported, so a test run no longer touches the real history.
+
 ### Fixed
 - **Files land where you can find them:** a bare or relative file name (`notes.md`) is saved in `~/Downloads/KUREK/NOTES` (`KUREK_NOTES_DIR` overrides) instead of the daemon's working directory, the repo. Create and write results give the absolute path and say when an existing file was replaced and how long it was; `file_controller` exposes `append`.
 - **Vault inbox:** a second capture with the same title on the same day gets `-2`, `-3` instead of replacing the first.
@@ -29,6 +34,9 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 - **Browser search** URL-encodes the query (`c++`, `&`, `?`).
 - **user_data** says a field is not in memory instead of inventing a random value.
 - **A bare "close it"** no longer sends Ctrl+W: Kurek asks which window, tab or app you mean. "close this" and "close tab" still close the current tab.
+- **Live voice after a late Tailscale:** when Tailscale comes up after the daemon started, live voice (port 8791) binds the Tailscale IP too, as HTTP already did.
+- **Phone streams survive long tools:** during a phone turn the daemon sends an SSE comment every 15 s, so Kurek Remote's 90 s read timeout no longer fires during a slow tool; the app ignores those lines.
+- **Idle HTTP connections close after 30 s:** a request that stops arriving for 30 s no longer holds a daemon thread. A phone stream ends only when the phone accepts nothing for 30 s: replies go out in 16 KB slices, so a large audio event on a slow link is not cut.
 
 ## [0.2.4] - 2026-11-18
 

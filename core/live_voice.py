@@ -134,6 +134,19 @@ def session_update(tools: list[dict] | None = None) -> dict:
     return {"type": "session.update", "session": session}
 
 
+def _redacted(value, limit: int) -> str:
+    """For the journal and the phone only, as kurek_daemon._redacted (which imports this module, so
+    it cannot be imported here): the run tool's secret patterns over a bounded slice, then cut.
+    Fails closed: on any error the fixed text, never the input."""
+    raw = str(value)
+    try:
+        from actions.run import _redact_secrets  # lazy: actions.run builds its TOOL dict at import
+        text = _redact_secrets(raw[:limit + 200])
+    except Exception:
+        return "[redaction unavailable]"[:limit]
+    return text[:limit] + ("…" if len(text) > limit or len(raw) > limit + 200 else "")
+
+
 def _answer_tool_call(ev: dict, xai, phone: ServerConnection, run_tool: RunTool | None) -> None:
     name = ev.get("name") or ""
     try:
@@ -148,9 +161,11 @@ def _answer_tool_call(ev: dict, xai, phone: ServerConnection, run_tool: RunTool 
     if run_tool is None or not call_allowed(name, args):
         output = f"Tool '{name}' with action '{args.get('action')}' is not available in live voice (read-only mode)."
     else:
-        print(f"[Live Voice] ⚙️ {name}({args})", flush=True)
+        print(f"[Live Voice] ⚙️ {name}({_redacted(args, 500)})", flush=True)
+        # Still an object, so Kurek Remote can show the action; each value redacted and cut.
+        shown = {k: _redacted(v, 200) for k, v in args.items()}
         try:
-            phone.send(json.dumps({"type": "kurek.tool", "name": name, "arguments": args}))
+            phone.send(json.dumps({"type": "kurek.tool", "name": name, "arguments": shown}))
         except ConnectionClosed:
             pass
         try:
@@ -236,10 +251,11 @@ def start_live_servers(
     authorize: Callable[[str | None], bool],
     openai_tools: list[dict] | None = None,
     run_tool: RunTool | None = None,
-) -> None:
+) -> list[str]:
     """Serve /live on each host in a daemon thread. authorize() gets the Authorization header.
 
     With openai_tools and run_tool, the read-only subset is offered to xAI; otherwise talk-only.
+    Returns the hosts it is now serving on (a host that could not be bound is left out).
     """
     from memory.config_manager import get_xai_key
 
@@ -264,8 +280,7 @@ def start_live_servers(
             return
         _bridge(conn, key, tools, run_tool)
 
-    # shortcut: binds only the hosts up at startup; a Tailscale IP that appears later
-    # needs a daemon restart. Upgrade by hooking _tailscale_rebind_loop if that bites.
+    started = []
     for host in hosts:
         try:
             server = serve(handler, host, port, process_request=process_request, max_size=2**20)
@@ -274,3 +289,5 @@ def start_live_servers(
             continue
         threading.Thread(target=server.serve_forever, name=f"kurek-live-{host}", daemon=True).start()
         print(f"[Live Voice] 🎙️ Listening at ws://{host}:{port}/live ({len(tools)} read-only tools)", flush=True)
+        started.append(host)
+    return started

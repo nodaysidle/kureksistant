@@ -180,7 +180,7 @@ journalctl --user -u kurek -f           # the log shows the bind addresses
 curl -s http://127.0.0.1:8790/status
 ```
 
-With `KUREK_REMOTE_BIND=tailscale`, the log shows two listeners: `127.0.0.1:8790` and your Tailscale IPv4 (`100.x.y.z:8790`). If Tailscale isn't up yet at boot, the daemon stays on loopback and retries.
+With `KUREK_REMOTE_BIND=tailscale`, the log shows two listeners: `127.0.0.1:8790` and your Tailscale IPv4 (`100.x.y.z:8790`). If Tailscale isn't up yet at boot, the daemon stays on loopback and retries (HTTP and live voice).
 
 **System dependencies (Linux):**
 - PipeWire with `mpv`;
@@ -262,10 +262,12 @@ Full details and how to report issues: **[SECURITY.md](SECURITY.md)**.
 - **Token:** if the remote token is missing or shorter than 32 characters, the daemon **refuses** to bind remotely. Non-loopback requests need `Authorization: Bearer <token>`, compared in constant time (`hmac.compare_digest`).
 - **Browser requests:** cross-origin/CSRF requests carrying an `Origin` header are rejected, and there is no `CORS *`.
 - **Body limit:** request bodies are capped at 64 KB.
+- **Slow requests:** a request that stops arriving for 30 s is dropped; a running phone stream ends only if the phone accepts nothing for 30 s.
 - **Exec tools:** remote prompts can't use exec-capable tools (`desktop_control`, `code_helper`, `dev_agent`) unless `KUREK_REMOTE_ALLOW_EXEC=1`.
 - **Phone confirmations:** a remote client with the token can confirm pending confirmations, as described above. Treat the token like a password, and rotate it (`openssl rand -hex 32`) if it was ever shared or shipped in a build.
 - **Local access:** the loopback API is unauthenticated by design. Any local process can call it.
 - **Secrets:** `.env` and `config/api_keys.json` must never be committed or packaged.
+- **Secrets at runtime:** file tools refuse credential files (`.env*`, keys, `~/.ssh`), tool lines in the journal and on the phone are redacted, and the clipboard history skips clips marked by a password manager.
 
 ---
 
