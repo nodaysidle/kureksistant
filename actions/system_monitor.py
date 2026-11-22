@@ -3,8 +3,10 @@ System Monitor — background metric checks with voice alert support.
 Zero subprocess calls on all platforms — uses ctypes/pynvml/psutil/wmi only.
 """
 import ctypes
+import math
 import platform
 import time
+from pathlib import Path
 
 import psutil
 
@@ -95,6 +97,44 @@ def _get_cpu_temp() -> float:
     return -1.0
 
 
+def _installed_ram_gb(total_bytes: float, root: object = "/sys/devices/system/memory"):
+    """Installed RAM in whole GiB from the online memory blocks (no root), else None."""
+    root = Path(root)
+    try:
+        block = int((root / "block_size_bytes").read_text().strip(), 16)
+        online = sum(
+            1
+            for st in root.glob("memory*/state")
+            if st.read_text().strip() == "online"
+        )
+    except (OSError, ValueError):
+        return None
+    installed = math.ceil(block * online / 1024 ** 3)
+    return installed if installed * 1024 ** 3 > total_bytes else None
+
+
+def _read_swaps(path: object = "/proc/swaps") -> list[dict]:
+    """One dict per swap area; zram is compressed memory, disk is a file or partition."""
+    try:
+        lines = Path(path).read_text().splitlines()[1:]
+    except OSError:
+        return []
+    areas = []
+    for line in lines:
+        f = line.split()
+        try:
+            size, used = int(f[2]), int(f[3])
+        except (IndexError, ValueError):
+            continue
+        areas.append({
+            "name": f[0],
+            "kind": "zram" if f[0].startswith("/dev/zram") else "disk",
+            "size_gb": round(size / 1024 ** 2, 1),
+            "used_gb": round(used / 1024 ** 2, 1),
+        })
+    return areas
+
+
 def get_system_status() -> dict:
     """Snapshot of current system metrics for the system_status tool."""
     cpu  = psutil.cpu_percent(interval=0.2)
@@ -112,6 +152,9 @@ def get_system_status() -> dict:
         "ram_percent":   round(ram.percent, 1),
         "ram_used_gb":   round(ram.used   / 1024 ** 3, 1),
         "ram_total_gb":  round(ram.total  / 1024 ** 3, 1),
+        "ram_available_gb": round(ram.available / 1024 ** 3, 1),
+        "ram_installed_gb": _installed_ram_gb(ram.total),
+        "swap":          _read_swaps(),
         "cpu_temp_c":    round(temp, 1) if temp > 0 else None,
         "gpu_percent":   round(gpu,  1) if gpu  >= 0 else None,
         "uptime":        f"{uptime_h}h {uptime_m}m",
@@ -357,9 +400,24 @@ def system_monitor(parameters: dict, player=None, session_memory=None) -> str:
         gpu_str = f", GPU at {cur['gpu_percent']}%" if cur.get("gpu_percent") is not None else ""
         temp_str = f", CPU temp {cur['cpu_temp_c']}°C" if cur.get("cpu_temp_c") is not None else ""
 
+        installed = cur["ram_installed_gb"]
+        installed_str = f"; {installed} GB installed" if installed is not None else ""
+        swap_str = ""
+        if cur["swap"]:
+            for kind, label in (("zram", "Compressed swap in RAM (zram)"), ("disk", "Swap on disk")):
+                areas = [a for a in cur["swap"] if a["kind"] == kind]
+                if areas:
+                    used = round(sum(a["used_gb"] for a in areas), 1)
+                    size = round(sum(a["size_gb"] for a in areas), 1)
+                    swap_str += f" {label}: {used} GB of {size} GB."
+            mem = f"{installed} GB installed" if installed is not None else f"{cur['ram_total_gb']} GB usable"
+            swap_str += f" Swap is not RAM: this machine's memory is the {mem}."
+
         return (
             f"System Status: CPU currently at {cur['cpu_percent']}%, RAM at {cur['ram_percent']}% "
-            f"({cur['ram_used_gb']} GB of {cur['ram_total_gb']} GB used){gpu_str}{temp_str}.{avg_str}"
+            f"({cur['ram_used_gb']} GB of {cur['ram_total_gb']} GB usable used, "
+            f"{cur['ram_available_gb']} GB available{installed_str}){gpu_str}{temp_str}."
+            f"{avg_str}{swap_str}"
         )
 
     elif action in ("set_threshold", "config"):

@@ -16,6 +16,9 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 - **`KUREK_TIMING=1` covers the whole turn:** voice turns start at the stop click, so speech-to-text is measured; new marks for the DeepSeek request, headers and first reasoning token, each tool, the first sentence's speech synthesis, and mpv start. The speech marks now print (they ran on a thread without a clock).
 - A `[Kurek Summary Round]` log line each time the extra answer round runs after tools.
 
+### Fixed
+- **`system_monitor` status says memory completely:** it now reports usable RAM, available RAM and the installed RAM, and lists zram (compressed, in RAM) and disk swap separately with a closing "Swap is not RAM" sentence, so the model no longer runs `free` and a combined swap total is never read as "29 GB of RAM".
+
 ### Security
 - **File tools refuse secret files:** `file_controller` read and `file_processor` refuse `.env*` (not `.env.example`), `api_keys.json`, `*.pem`/`*.key`, `id_*` keys, `.netrc`, `.git/*` and anything in `~/.ssh`, also through a symlink or a bare name in the notes folder. Nothing from them reaches the model or Gemini. Shell dotfiles, `~/.config/kurek` and other config stay readable.
 - **Tool lines are redacted:** the journal's `[Kurek Tool Dispatch]` / `[Kurek Tool Result]` lines and the phone's `tool` event pass through the `run` tool's secret patterns and are cut (500 / 100 characters). The model still gets the full result.
