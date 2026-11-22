@@ -16,6 +16,9 @@ import wave
 from typing import Callable
 
 import numpy as np
+import requests
+
+from core.llm_client import post_once_more_if_dropped
 
 
 class STTError(Exception):
@@ -49,12 +52,13 @@ def _to_wav_bytes(audio_data, sample_rate: int) -> bytes:
     return buf.getvalue()
 
 
-def _post(label: str, url: str, timeout: float, **kwargs):
-    """requests.post that maps every transport/HTTP failure to STTError."""
-    import requests
+_HTTP = requests.Session()  # one TLS connection reused across utterances
 
+
+def _post(label: str, url: str, timeout: float, **kwargs):
+    """POST on the shared session; every transport/HTTP failure becomes STTError."""
     try:
-        resp = requests.post(url, timeout=timeout, **kwargs)
+        resp = post_once_more_if_dropped(_HTTP, url, timeout=timeout, **kwargs)
     except requests.Timeout as e:
         raise STTError(f"{label} timeout: {e}") from e
     except Exception as e:

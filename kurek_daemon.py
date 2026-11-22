@@ -22,6 +22,7 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -60,7 +61,7 @@ from core.stt import DeepgramSTT, FallbackSTT, OpenRouterSTT, STTError, WhisperS
 from core.action_loader import discover_actions
 from core.hyprland_watcher import get_hyprland_watcher
 from core.mpv_sink import get_mpv_sink
-from core.timing import begin_query, end_query
+from core.timing import begin_query, current_timing, end_query, mark as timing_mark
 from core import auto_recall, claim_gate, confirm, tool_tiers, vocabulary
 from core.proposals import propose
 from core.context import TOOL_NOTE, WHO_WINS, build_messages
@@ -199,6 +200,33 @@ REMOTE_BLOCKED_EXEC_TOOLS = frozenset({
     # codebase reads arbitrary files under the project roots; keep it local-only.
     "codebase",
 })
+
+# Tool calls a round may run at the same time: no side effects and no module state two threads
+# could corrupt (checked per tool, task 002). None = every call; a tuple = only these exact actions.
+PARALLEL_SAFE_TOOLS: dict[str, tuple[str, ...] | None] = {
+    "web_search": None,
+    "weather_report": None,
+    "manage_memory": ("recall",),
+    "vault_knowledge": ("list_projects", "read", "search"),
+    "codebase": ("search", "tree", "read", "find", "outline"),
+}
+
+
+def parallel_safe(name: str, args: dict) -> bool:
+    if name not in PARALLEL_SAFE_TOOLS:
+        return False
+    actions = PARALLEL_SAFE_TOOLS[name]
+    return actions is None or args.get("action") in actions
+
+
+def _tool_args(raw) -> dict | None:
+    """A tool call's arguments as a dict, or None when they are not one JSON object.
+    A call with no arguments arrives as ""."""
+    try:
+        args = json.loads(raw.strip() or "{}") if isinstance(raw, str) else raw
+    except ValueError:
+        return None
+    return args if isinstance(args, dict) else None
 
 
 def remote_allow_exec() -> bool:
@@ -792,6 +820,7 @@ class KurekEngine:
     def stop_listening_and_process(self):
         if not self.is_recording:
             return
+        t0 = time.perf_counter()  # a voice turn is timed from the stop click / auto-submit, so STT counts
         self.is_recording = False
         try:
             if self.record_stream:
@@ -806,7 +835,14 @@ class KurekEngine:
             self.set_state(KurekState.IDLE)
             return
 
-        threading.Thread(target=self._process_recorded_audio, daemon=True).start()
+        threading.Thread(target=self._timed_process_recorded_audio, args=(t0,), daemon=True).start()
+
+    def _timed_process_recorded_audio(self, t0: float) -> None:
+        begin_query(t0)
+        try:
+            self._process_recorded_audio()
+        finally:
+            end_query()  # no-op when handle_text_query already ended the clock
 
     def _process_recorded_audio(self):
         self.set_state(KurekState.THINKING)
@@ -828,6 +864,7 @@ class KurekEngine:
                 print(f"[Kurek] STT error: {e}", flush=True)
                 traceback.print_exc()
                 stt_failure = "My speech recognition failed, so I couldn't understand that."
+        timing_mark("stt_done")
 
         if stt_failure:
             self._notify_failure(stt_failure)
@@ -932,7 +969,8 @@ class KurekEngine:
                 ):
                     self.set_state(KurekState.THINKING)
 
-            begin_query()
+            if current_timing() is None:  # a voice turn's clock already started at the stop click
+                begin_query()
             try:
                 return self._handle_text_query_inner(
                     user_prompt,
@@ -955,8 +993,6 @@ class KurekEngine:
                         callback({"type": "error", "error": str(e)})
                     except Exception:
                         pass
-            finally:
-                end_query()
         finally:
             self._engine_lock.release()
             if speaker_acquired:
@@ -988,6 +1024,7 @@ class KurekEngine:
                     and self.state in (KurekState.THINKING, KurekState.SPEAKING)
                 ):
                     self.set_state(KurekState.IDLE)
+            end_query()
 
     def _run_tool(self, fn_name: str, fn_args: dict, *, remote: bool = False) -> str:
         """Dispatch a tool call; block exec/shell tools for remote clients by default."""
@@ -1001,6 +1038,37 @@ class KurekEngine:
                 "(set KUREK_REMOTE_ALLOW_EXEC=1 to allow)."
             )
         return self.actions.run(fn_name, fn_args)
+
+    def _run_parallel_round(self, tool_calls: list, *, remote: bool) -> dict[int, str]:
+        """Results by call index when a round has 2+ calls and every one is parallel_safe; {} otherwise,
+        and the serial loop runs the round as before. Every call runs to the end, even after a cancel."""
+        calls = []
+        for tc in tool_calls:
+            fn = tc.get("function", {})
+            args = _tool_args(fn.get("arguments", "{}"))
+            if args is None or not parallel_safe(fn.get("name", ""), args):
+                return {}
+            calls.append((fn.get("name", ""), args))
+        if len(calls) < 2 or self._cancel_requested:
+            return {}
+        qt = current_timing()  # pool threads have no clock of their own
+
+        def run(call):
+            name, args = call
+            if qt is not None:
+                qt.mark(f"tool_start:{name}")
+            try:
+                return self._run_tool(name, args, remote=remote)
+            except Exception as e:
+                return f"Error executing {name}: {e}"
+            finally:
+                if qt is not None:
+                    qt.mark(f"tool_end:{name}")
+
+        print(f"[Kurek Tool Dispatch] ⚡ {len(calls)} read-only calls at once: "
+              f"{', '.join(name for name, _ in calls)}", flush=True)
+        with ThreadPoolExecutor(max_workers=min(len(calls), 8), thread_name_prefix="kurek-tool") as pool:
+            return dict(enumerate(pool.map(run, calls)))
 
     def _end_cancelled_turn(self, user_prompt: str, tools_run: list[str], callback) -> None:
         """A newer prompt superseded this turn. Nothing is said aloud (by design). Tools that already ran stay in history, and a waiting phone stream is closed."""
@@ -1159,19 +1227,17 @@ class KurekEngine:
                     messages.append(asst_msg)
 
                     last_tool_output = ""
-                    for tc in tool_calls:
-                        if self._cancel_requested:
+                    prefetched = self._run_parallel_round(tool_calls, remote=remote)
+                    for i, tc in enumerate(tool_calls):
+                        # A call of a parallel round has already run: record it even after a cancel.
+                        if self._cancel_requested and i not in prefetched:
                             break
                         fn = tc.get("function", {})
                         fn_name = fn.get("name", "")
                         fn_args_raw = fn.get("arguments", "{}")
-                        try:
-                            # A call with no arguments arrives as "".
-                            fn_args = json.loads(fn_args_raw.strip() or "{}") if isinstance(fn_args_raw, str) else fn_args_raw
-                        except ValueError:
-                            fn_args = None
+                        fn_args = _tool_args(fn_args_raw)
 
-                        refused = not isinstance(fn_args, dict)
+                        refused = fn_args is None
                         if refused:
                             # Never run a tool on arguments we could not read; the model is told and can retry.
                             print(f"[Kurek Tool Dispatch] ✋ {fn_name}: arguments are not a JSON object: {str(fn_args_raw)[:200]}", flush=True)
@@ -1181,15 +1247,20 @@ class KurekEngine:
                         else:
                             print(f"[Kurek Tool Dispatch] ⚙️ {fn_name}({fn_args})", flush=True)
                             tools_run.append(f"{fn_name}({json.dumps(fn_args, ensure_ascii=False)[:200]})")
-                            try:
-                                if fn_name == tool_tiers.LOADER:
-                                    tool_result = tool_tiers.load(
-                                        fn_args.get("names") or [], self.deferred_tools, turn_tools
-                                    )
-                                else:
-                                    tool_result = self._run_tool(fn_name, fn_args, remote=remote)
-                            except Exception as e:
-                                tool_result = f"Error executing {fn_name}: {e}"
+                            if i in prefetched:
+                                tool_result = prefetched[i]
+                            else:
+                                timing_mark(f"tool_start:{fn_name}")
+                                try:
+                                    if fn_name == tool_tiers.LOADER:
+                                        tool_result = tool_tiers.load(
+                                            fn_args.get("names") or [], self.deferred_tools, turn_tools
+                                        )
+                                    else:
+                                        tool_result = self._run_tool(fn_name, fn_args, remote=remote)
+                                except Exception as e:
+                                    tool_result = f"Error executing {fn_name}: {e}"
+                                timing_mark(f"tool_end:{fn_name}")
                         last_tool_output = str(tool_result)
                         outcome = claim_gate.record(fn_name, fn_args, tool_result)
                         # A refused call never ran: it neither failed nor backs a claim.
@@ -1288,6 +1359,7 @@ class KurekEngine:
             return
 
         if not reply_text and sentence_count == 0 and last_tool_output:
+            print("[Kurek Summary Round] tools ran but nothing was said; asking the model once more", flush=True)
             # DeepSeek ran tools but did not emit spoken response tokens. Request a 1-sentence synthesis.
             try:
                 summary_msgs = list(messages)

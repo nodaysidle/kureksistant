@@ -218,8 +218,36 @@ def query_deepseek(
         return None
 
 
+def dropped_connection(exc: BaseException) -> bool:
+    """True when a pooled keep-alive connection was closed under the request, so nothing came back.
+    http.client.RemoteDisconnected is a ConnectionResetError; requests wraps it as
+    ConnectionError(ProtocolError("Connection aborted.", RemoteDisconnected(...)))."""
+    todo = [exc]
+    for _ in range(8):  # the wrapping is two deep; bounded so odd exception args cannot loop
+        if not todo:
+            break
+        e = todo.pop()
+        if isinstance(e, ConnectionResetError):
+            return True
+        todo.extend(a for a in e.args if isinstance(a, BaseException))
+    return False
+
+
+def post_once_more_if_dropped(session, *args, **kwargs):
+    """session.post, sent once more at once when the server had closed the pooled connection.
+    The server may already have received the request, so the resend is limited to connection
+    errors where no response began (a reset mid-body is a ChunkedEncodingError: not resent)."""
+    try:
+        return session.post(*args, **kwargs)
+    except Exception as e:
+        if not (isinstance(e, requests.ConnectionError) and dropped_connection(e)):
+            raise
+        print(f"[HTTP] pooled connection was closed ({e}); sending once more", flush=True)
+        return session.post(*args, **kwargs)
+
+
 def _open_deepseek_stream(key: str, payload: dict):
-    """POST a streaming request. Returns (resp, error, retryable)."""
+    """POST a streaming request. Returns (resp, error, retry_after); retry_after is None when a retry would not help."""
     try:
         resp = _HTTP.post(
             DEEPSEEK_URL,
@@ -232,13 +260,12 @@ def _open_deepseek_stream(key: str, payload: dict):
             timeout=30,
         )
     except Exception as e:
-        return None, str(e), True
+        return None, str(e), 0.0 if dropped_connection(e) else _STREAM_RETRY_BACKOFF_S
     if resp.status_code != 200:
         err_msg = f"HTTP {resp.status_code}: {resp.text}"
-        retryable = resp.status_code in _RETRYABLE_STATUS
         _close_quietly(resp)
-        return None, err_msg, retryable
-    return resp, None, False
+        return None, err_msg, _STREAM_RETRY_BACKOFF_S if resp.status_code in _RETRYABLE_STATUS else None
+    return resp, None, None
 
 
 def _close_quietly(resp) -> None:
@@ -268,7 +295,7 @@ def stream_deepseek(
       {"type": "done", "full_content": "...", "reasoning_content": ...}
       {"type": "error", "error": "..."}
 
-    Connection errors and HTTP 429/5xx are retried once (before any output).
+    Connection errors and HTTP 429/5xx are retried once, before any output: a pooled connection the server closed at once, the rest after 1 s.
     The HTTP response is always closed, including when the consumer stops
     iterating early. If the stream is cut off before ``[DONE]``/finish_reason:
     with no output (or with tool calls, whose arguments may be truncated) an
@@ -301,15 +328,18 @@ def stream_deepseek(
     if tools and tool_choice != "none":
         payload["tools"] = tools
 
-    resp, err, retryable = _open_deepseek_stream(key, payload)
-    if resp is None and retryable:
-        print(f"[DeepSeek Stream] {err} — retrying once in {_STREAM_RETRY_BACKOFF_S:g}s", flush=True)
-        time.sleep(_STREAM_RETRY_BACKOFF_S)
+    timing_mark("deepseek_request_sent")
+    resp, err, retry_after = _open_deepseek_stream(key, payload)
+    if resp is None and retry_after is not None:
+        print(f"[DeepSeek Stream] {err} — retrying once in {retry_after:g}s", flush=True)
+        if retry_after:
+            time.sleep(retry_after)
         resp, err, _ = _open_deepseek_stream(key, payload)
     if resp is None:
         print(f"[DeepSeek Stream] {err}")
         yield {"type": "error", "error": err}
         return
+    timing_mark("deepseek_headers")
 
     full_text = ""
     full_reasoning = ""
@@ -346,6 +376,8 @@ def stream_deepseek(
                 # Accumulate DeepSeek reasoning tokens if present
                 reasoning = delta.get("reasoning_content", "")
                 if reasoning:
+                    if not full_reasoning:
+                        timing_mark("deepseek_first_reasoning")
                     full_reasoning += reasoning
 
                 # Check for tool call stream chunks

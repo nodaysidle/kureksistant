@@ -155,7 +155,7 @@ nano .env
 | `KUREK_USER_NAME` | Optional | How Kurek addresses you. |
 | `HERMES_PROFILE` / `HERMES_MEMORIES_DIR` | Optional | Hermes memory continuity. |
 | `INPUT_DEVICE` | Optional | Microphone name substring. |
-| `KUREK_TIMING` | Optional | `1` logs per-query timing deltas. |
+| `KUREK_TIMING` | Optional | `1` logs per-turn timing marks: speech-to-text, the DeepSeek request and first tokens, each tool, the first sentence's speech synthesis and mpv start. |
 | `KUREK_REMOTE_BIND` | For phone | `tailscale` enables the remote bind (see below). |
 | `KUREK_REMOTE_TOKEN` | For phone | Bearer token, **at least 32 characters** (`openssl rand -hex 32`). |
 | `KUREK_REMOTE_ALLOW_EXEC` | Optional | `1` lets remote prompts use exec-capable tools and enables the `run` tool's unrestricted shell. |

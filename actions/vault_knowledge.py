@@ -172,11 +172,12 @@ def vault_knowledge(parameters: dict | None = None, **kwargs) -> str:
             try:
                 cmd = [
                     "rg",
+                    "--no-config",
                     "-i",
                     "--max-count", "3",
                     "--glob", "!.*",
                     "--glob", "!_audit/*",
-                    query,
+                    "-e", query,  # after -e, a query starting with "-" is text, never an option
                     str(vault_dir),
                 ]
                 res = subprocess.run(cmd, capture_output=True, text=True, timeout=3.0)

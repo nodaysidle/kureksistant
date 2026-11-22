@@ -1,6 +1,7 @@
 """Vault knowledge path safety, short-query search, and resolver hygiene."""
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -85,3 +86,16 @@ def test_add_inbox_never_overwrites_a_capture(vault_tmp: Path) -> None:
     ]
     assert "take 1" in (inbox / f"{d}-my-idea.md").read_text(encoding="utf-8")
     assert results[1] == f"Successfully saved to vault inbox: inbox/{d}-my-idea-2.md"
+
+
+def test_search_query_starting_with_dashes_is_text(vault_tmp: Path) -> None:
+    if not shutil.which("rg"):
+        pytest.skip("rg not installed")
+    (vault_tmp / "wiki" / "concepts" / "dashes.md").write_text(
+        "# Dashes\n\nThe marker --not-a-flag appears here.\n", encoding="utf-8"
+    )
+    result = vault_knowledge({"action": "search", "query": "--not-a-flag"})
+    # "occurrences" is the ripgrep path's answer; the Python fallback says "Found notes".
+    assert "Found 1 occurrences" in result
+    assert "dashes.md" in result and "--not-a-flag appears here" in result
+    assert "unexpected argument" not in result and "error" not in result.lower()

@@ -28,7 +28,7 @@ import requests
 
 import sounddevice as sd
 
-from core.timing import mark as timing_mark
+from core.timing import current_timing, mark as timing_mark, set_current as timing_set_current
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +343,7 @@ class TTSPlayer:
                     target=self._worker_loop, name="kurek-tts", daemon=True
                 )
                 self._worker.start()
-        self._queue.put((gen, text, play_local, on_audio))
+        self._queue.put((gen, text, play_local, on_audio, current_timing()))
 
     def wait_stream(self, timeout: float = 60.0) -> bool:
         """Block until every queued sentence was synthesized and handed to the
@@ -353,7 +353,8 @@ class TTSPlayer:
 
     def _worker_loop(self) -> None:
         while True:
-            gen, text, play_local, on_audio = self._queue.get()
+            gen, text, play_local, on_audio, qt = self._queue.get()
+            timing_set_current(qt)  # marks made for this sentence (here and in mpv_sink) land in its turn's clock
             try:
                 with self._lock:
                     stale = play_local and gen != self._generation
@@ -362,6 +363,7 @@ class TTSPlayer:
             except Exception as e:
                 print(f"[TTS Queue] Error: {e}")
             finally:
+                timing_set_current(None)
                 with self._idle:
                     self._pending -= 1
                     if play_local:
@@ -371,6 +373,7 @@ class TTSPlayer:
     def _process(self, gen: int, text: str, play_local: bool, on_audio) -> None:
         timing_mark("first_speak_chunk", once=True)
         audio = self.synthesize(text)
+        timing_mark("tts_synth_done", once=True)
         if on_audio is not None:
             try:
                 on_audio(audio)

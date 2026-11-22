@@ -19,6 +19,8 @@ from pathlib import Path
 
 import requests
 
+from core.llm_client import post_once_more_if_dropped
+
 
 def _get_base_dir() -> Path:
     if getattr(sys, "frozen", False):
@@ -30,6 +32,7 @@ BASE_DIR = _get_base_dir()
 DEEPSEEK_SEARCH_URL = "https://api.deepseek.com/v1/tools/search"
 DEEPSEEK_QUERY_MAX_CHARS = 128
 USER_LOCALE_CONTEXT = "User Location: Slovenia (Central European Time / CEST, UTC+2)."
+_HTTP = requests.Session()  # one TLS connection reused across searches; urllib3's pool is thread-safe (L2 runs searches in parallel)
 
 
 def _clean_html(t: str) -> str:
@@ -68,11 +71,8 @@ def _deepseek_search(query: str, original: str, max_results: int = 6) -> list[di
     if original != query:
         body["ori_question"] = original[:DEEPSEEK_QUERY_MAX_CHARS]
     try:
-        resp = requests.post(
-            DEEPSEEK_SEARCH_URL,
-            headers={"Authorization": f"Bearer {key}"},
-            json=body,
-            timeout=8,
+        resp = post_once_more_if_dropped(
+            _HTTP, DEEPSEEK_SEARCH_URL, headers={"Authorization": f"Bearer {key}"}, json=body, timeout=8
         )
         if resp.status_code != 200:
             print(f"[WebSearch] DeepSeek HTTP {resp.status_code}: {resp.text[:200]}")

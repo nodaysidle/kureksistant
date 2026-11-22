@@ -7,9 +7,19 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Read-only tool rounds run in parallel:** when every tool call in one model round is a read-only lookup (web search, weather, memory recall, vault list/read/search, codebase search/tree/read/find/outline), they run at the same time; results reach the model in the original order. Any other mix runs one by one, as before.
+- **Reused HTTPS connections** for speech-to-text uploads and DeepSeek web search. A connection the server had closed is resent once at once.
+- **DeepSeek stream retry:** a dropped connection is retried at once; HTTP 429/5xx still wait 1 s.
+
+### Added
+- **`KUREK_TIMING=1` covers the whole turn:** voice turns start at the stop click, so speech-to-text is measured; new marks for the DeepSeek request, headers and first reasoning token, each tool, the first sentence's speech synthesis, and mpv start. The speech marks now print (they ran on a thread without a clock).
+- A `[Kurek Summary Round]` log line each time the extra answer round runs after tools.
+
 ### Fixed
 - **Files land where you can find them:** a bare or relative file name (`notes.md`) is saved in `~/Downloads/KUREK/NOTES` (`KUREK_NOTES_DIR` overrides) instead of the daemon's working directory, the repo. Create and write results give the absolute path and say when an existing file was replaced and how long it was; `file_controller` exposes `append`.
 - **Vault inbox:** a second capture with the same title on the same day gets `-2`, `-3` instead of replacing the first.
+- **Vault search treats the query as text:** a query that starts with `-` is searched for, never read as a ripgrep option.
 - **A brain failure after tools ran** says what the tools did and keeps the turn in history, then names the failure.
 - **Phone streams always end:** a brain failure, an empty answer or a cancelled turn sends `error` and `done`, so Kurek Remote no longer waits.
 - **Cancelled turns** keep the tools they already ran in history, and no further tool of that turn starts. Nothing is said aloud, as before.

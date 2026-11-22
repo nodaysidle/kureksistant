@@ -68,3 +68,15 @@ def _isolated_claim_log(tmp_path, monkeypatch):
 def _no_user_vocabulary(tmp_path, monkeypatch):
     """Transcript corrections must not depend on the owner's real reverseduo dictionary."""
     monkeypatch.setenv("KUREK_VOCAB_FILE", str(tmp_path / "no-dictionary.json"))
+
+
+@pytest.fixture(autouse=True)
+def _pooled_sessions_follow_requests_post(monkeypatch):
+    """STT, web_search and the DeepSeek client post on module-level sessions; older tests fake
+    the network by replacing requests.post, so route those sessions through it (looked up at call time)."""
+    import requests
+    from actions import web_search
+    from core import llm_client, stt
+    for mod in (stt, web_search, llm_client):
+        # setitem on the instance dict: the undo deletes the key instead of leaving a bound method behind.
+        monkeypatch.setitem(vars(mod._HTTP), "post", lambda *a, **k: requests.post(*a, **k))
