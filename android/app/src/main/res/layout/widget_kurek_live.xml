@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:id="@android:id/background"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
@@ -18,16 +19,16 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:fontFamily="monospace"
+            android:fontFamily="sans-serif-medium"
             android:importantForAccessibility="no"
             android:text="@string/title"
             android:textColor="@color/text"
-            android:textSize="12sp" />
+            android:textSize="14sp" />
 
         <ImageView
             android:id="@+id/widgetDot"
-            android:layout_width="6dp"
-            android:layout_height="6dp"
+            android:layout_width="8dp"
+            android:layout_height="8dp"
             android:importantForAccessibility="no"
             android:src="@drawable/bg_dot" />
 
@@ -36,7 +37,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="6dp"
-            android:fontFamily="monospace"
+            android:fontFamily="sans-serif"
             android:importantForAccessibility="no"
             android:text="@string/widget_ready"
             android:textColor="@color/text_muted"
@@ -57,12 +58,17 @@
             android:layout_height="match_parent"
             android:layout_weight="1"
             android:background="@drawable/bg_widget_button_primary"
-            android:fontFamily="monospace"
+            tools:ignore="UseCompatTextViewDrawableXml"
+            android:drawableStart="@drawable/ic_mic_white"
+            android:drawablePadding="6dp"
+            android:fontFamily="sans-serif-medium"
             android:gravity="center"
             android:importantForAccessibility="no"
             android:minHeight="28dp"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
             android:text="@string/preset_live"
-            android:textColor="@color/surface_low"
+            android:textColor="@color/on_accent"
             android:textSize="14sp" />
 
         <Chronometer

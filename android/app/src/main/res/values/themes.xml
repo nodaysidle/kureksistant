@@ -1,53 +1,94 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Dark only on purpose: DESIGN.md follows the owner's Omarchy theme (Nodaysidle Miasma),
-         which has no light variant. Parent is explicitly Dark so a light system setting cannot flip it. -->
-    <style name="Theme.Kurek" parent="Theme.Material3.Dark.NoActionBar">
+    <!-- Light only on purpose. The values-v27 and values-v29 Theme.Kurek add the dark navigation-bar
+         icons and opt out of the system's forced dark mode, so the app stays light in dark mode. -->
+    <style name="Theme.Kurek.Base" parent="Theme.Material3.Light.NoActionBar">
         <item name="android:windowBackground">@color/background</item>
-        <item name="android:forceDarkAllowed">false</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <!-- Every Material colour role points at the palette, so no component falls back to a default purple. -->
+        <item name="android:colorBackground">@color/background</item>
         <item name="colorPrimary">@color/accent</item>
         <item name="colorOnPrimary">@color/on_accent</item>
+        <item name="colorPrimaryContainer">@color/accent_container</item>
+        <item name="colorOnPrimaryContainer">@color/text</item>
+        <item name="colorPrimaryVariant">@color/accent</item>
+        <item name="colorSecondary">@color/accent</item>
+        <item name="colorOnSecondary">@color/on_accent</item>
+        <item name="colorSecondaryContainer">@color/accent_container</item>
+        <item name="colorOnSecondaryContainer">@color/text</item>
+        <item name="colorSecondaryVariant">@color/accent</item>
+        <item name="colorTertiary">@color/accent</item>
+        <item name="colorOnTertiary">@color/on_accent</item>
+        <item name="colorTertiaryContainer">@color/accent_container</item>
+        <item name="colorOnTertiaryContainer">@color/text</item>
         <item name="colorAccent">@color/accent</item>
         <item name="colorControlActivated">@color/accent</item>
         <item name="colorControlHighlight">@color/outline</item>
         <item name="colorSurface">@color/surface</item>
         <item name="colorOnSurface">@color/text</item>
+        <item name="colorSurfaceVariant">@color/surface_low</item>
+        <item name="colorOnSurfaceVariant">@color/text_muted</item>
+        <item name="colorOnBackground">@color/text</item>
         <item name="colorOutline">@color/outline</item>
+        <item name="colorOutlineVariant">@color/outline</item>
         <item name="colorError">@color/error</item>
+        <item name="colorOnError">@color/on_accent</item>
+        <item name="colorErrorContainer">@color/error_container</item>
+        <item name="colorOnErrorContainer">@color/text</item>
         <item name="android:textColorHint">@color/text_muted</item>
     </style>
+
+    <style name="Theme.Kurek" parent="Theme.Kurek.Base" />
 
     <style name="Theme.Kurek.Trampoline" parent="@android:style/Theme.Translucent.NoTitleBar">
         <item name="android:windowAnimationStyle">@null</item>
         <item name="android:windowIsTranslucent">true</item>
     </style>
 
-    <style name="TextMono">
-        <item name="android:fontFamily">@font/jetbrains_mono</item>
+    <!-- Body: system sans, 16sp on a 22sp line. -->
+    <style name="TextBody">
+        <item name="android:fontFamily">sans-serif</item>
         <item name="android:textColor">@color/text</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:lineSpacingExtra">3sp</item>
+    </style>
+
+    <style name="TextTitle">
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:textSize">20sp</item>
+    </style>
+
+    <style name="TextLabel">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textColor">@color/text_muted</item>
         <item name="android:textSize">14sp</item>
     </style>
 
-    <style name="TextMeta" parent="TextMono">
+    <style name="TextMeta">
+        <item name="android:fontFamily">sans-serif</item>
         <item name="android:textColor">@color/text_muted</item>
         <item name="android:textSize">12sp</item>
     </style>
 
-    <style name="TextBody">
-        <item name="android:fontFamily">sans-serif</item>
-        <item name="android:textColor">@color/text</item>
-        <item name="android:textSize">15sp</item>
-        <item name="android:lineSpacingExtra">3dp</item>
+    <!-- Monospace only for what is literally technical: host, tool names, timestamps. -->
+    <style name="TextMono">
+        <item name="android:fontFamily">@font/jetbrains_mono</item>
+        <item name="android:textColor">@color/text_muted</item>
+        <item name="android:textSize">12sp</item>
     </style>
 
-    <!-- Quiet outlined control: 48dp target, border darkens on press, accent ring on focus. -->
-    <style name="PresetButton" parent="TextMono">
-        <item name="android:minHeight">48dp</item>
+    <!-- Pill chip: 40dp visible, the 48dp touch row comes from the parent padding. -->
+    <style name="ChipButton">
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:minHeight">40dp</item>
         <item name="android:minWidth">48dp</item>
         <item name="android:gravity">center</item>
         <item name="android:paddingStart">16dp</item>
         <item name="android:paddingEnd">16dp</item>
-        <item name="android:background">@drawable/bg_outlined</item>
+        <item name="android:background">@drawable/bg_chip</item>
         <item name="android:clickable">true</item>
         <item name="android:focusable">true</item>
     </style>
@@ -62,8 +103,10 @@
     <style name="FieldInput" parent="TextBody">
         <item name="android:background">@drawable/bg_field</item>
         <item name="android:minHeight">48dp</item>
-        <item name="android:paddingStart">12dp</item>
-        <item name="android:paddingEnd">12dp</item>
+        <item name="android:paddingStart">16dp</item>
+        <item name="android:paddingEnd">16dp</item>
+        <item name="android:paddingTop">12dp</item>
+        <item name="android:paddingBottom">12dp</item>
         <item name="android:textColorHint">@color/text_muted</item>
     </style>
 </resources>

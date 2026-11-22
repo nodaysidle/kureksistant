@@ -12,31 +12,32 @@ their desktop, not a separate product.
 
 Dial: ENERGY 1 / RHYTHM 1 / MOTION 1
 
-## Palette (Miasma)
+## Palette (light, 0.2.5)
 | Role | Hex | Use |
 |---|---|---|
-| background | `#141414` | window |
-| surface | `#1e1e1e` | input bar, Kurek messages, sheets |
-| surface-low | `#0e0e0e` | status bar / nav bar area, tool-call lines |
-| outline | `#363832` | 1dp dividers and borders |
-| text | `#e6e4d9` | primary text |
-| text-muted | `#8a8a7d` | secondary text, timestamps |
-| accent | `#87b070` | the one accent: online dot, primary action, focus ring, own messages edge |
-| warn (thinking) | `#e4c47a` | THINKING / CONNECTING state only |
-| error | `#e06c75` | errors and OFFLINE only |
+| background | `#F6F5F1` | window |
+| surface | `#FFFFFF` | header, input bar, Kurek messages, dialog |
+| surface-low | `#EEEDE8` | input field, tool-call rows |
+| outline | `#DAD7CF` | 1dp hairlines and borders |
+| text | `#1B1C1A` | primary text |
+| text-muted | `#5D605A` | secondary text |
+| accent | `#2E6B3A` | online dot, Send, primary action, focus ring |
+| accent-container | `#DDEBDD` | own messages |
+| warn / container | `#8A5A00` / `#F6E7C6` | Thinking, Busy, Connecting |
+| error / container | `#B3261E` / `#F9DEDC` | Error, error messages, recording |
+| offline | `#8B8E88` | Offline dot |
 
-One accent (moss green). Gold and red are status colors, never decoration.
+Light only, also when the system is in dark mode. The status word always shows next to the dot.
 
 ## Typography
-- **JetBrains Mono** (the owner's Foot font) for app chrome: top bar title, status, preset buttons,
-  tool-call lines, timestamps.
-- System sans (Roboto via `sans-serif`) for chat message bodies, for readability of long text.
-- Sizes: 12sp meta, 14sp labels, 15sp body, 18sp title. No all-caps with wide tracking.
+- System sans for all text: 20sp medium title, 16sp body on a 22sp line, 14sp buttons and labels, 12sp meta.
+- JetBrains Mono only for what is technical: the host, tool names and timestamps.
+- Sentence case, no all-caps. No emoji anywhere; icons are vector drawables.
 
 ## Layout
-- Top bar: `kurek` title + connection status (dot + word) on the left; actions on the right:
-  **Terminal** (opens Foot with herdr on the PC), speaker toggle, settings.
-- Preset row under the top bar, plain outlined buttons, monospace: **Open GrokBot**,
+- Top bar: `Kurek` title + connection status (dot + word + host) on the left; actions on the right:
+  speaker toggle, settings.
+- Preset row under the top bar, outlined pill chips: **Terminal** (herdr on the PC), **Open GrokBot**,
   **System activity**, **Projects**, **Screen**, **Talk live**.
 - Conversation fills the screen. Tool calls stay visible inline as monospace lines, like log output.
 - Input bar at the bottom: text field, send, mic. Respects keyboard (IME) and gesture-nav insets.

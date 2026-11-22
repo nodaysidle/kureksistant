@@ -7,6 +7,8 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.Vibrator;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
@@ -31,6 +33,7 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.LinearSmoothScroller;
 import androidx.recyclerview.widget.RecyclerView;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -59,6 +62,7 @@ public class MainActivity extends AppCompatActivity {
 
     private SpeechRecognizer speechRecognizer;
     private boolean isListeningSpeech = false;
+    private String dictationBase = ""; // what was typed in the field when listening began
 
     private TextToSpeech tts;
     private boolean isTtsInitialized = false;
@@ -66,6 +70,10 @@ public class MainActivity extends AppCompatActivity {
     private AudioQueuePlayer audioPlayer;
 
     private final KurekClient client = new KurekClient();
+    // After an error the status is re-checked at 2 s, 5 s and 15 s, then left alone. A prompt is never resent.
+    private static final int[] RECHECK_DELAYS_MS = {2000, 5000, 15000};
+    private final Handler recheckHandler = new Handler(Looper.getMainLooper());
+    private int recheckGen = 0;
     private TextView chipLive;
     private String host = "";
     private int port = 8790;
@@ -74,9 +82,10 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // The theme is dark whatever the system setting is, so pin light system-bar icons
-        // (SystemBarStyle.auto would follow the system and draw dark icons on dark bars).
-        EdgeToEdge.enable(this, SystemBarStyle.dark(Color.TRANSPARENT), SystemBarStyle.dark(Color.TRANSPARENT));
+        // The theme is light whatever the system setting is, so pin dark system-bar icons.
+        // The dark scrim only applies where the navigation bar cannot show dark icons (API 26).
+        EdgeToEdge.enable(this, SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
+                SystemBarStyle.light(Color.TRANSPARENT, Color.argb(0x80, 0x1B, 0x1C, 0x1A)));
         if (android.os.Build.VERSION.SDK_INT >= 29) {
             getWindow().setNavigationBarContrastEnforced(false);
         }
@@ -153,10 +162,10 @@ public class MainActivity extends AppCompatActivity {
     private void refreshConnectionUi() {
         if (!isConfigured()) {
             txtHostLabel.setText(R.string.host_unset);
-            setStatusState("SETUP", getColor(R.color.warn));
+            setStatusState("Setup", getColor(R.color.warn));
             return;
         }
-        txtHostLabel.setText("Workstation: " + host);
+        txtHostLabel.setText(host);
         pingServer();
     }
 
@@ -196,6 +205,22 @@ public class MainActivity extends AppCompatActivity {
         ChatMessage welcome = new ChatMessage(ChatMessage.TYPE_KUREK, welcomeText, getTime());
         messageList.add(welcome);
         chatAdapter.notifyItemInserted(0);
+    }
+
+    /** Scrolls so the bottom of the newest item, timestamp included, sits at the padded bottom edge,
+     *  also when that item is taller than the list (the default would line up its top instead). */
+    private void scrollToLatest() {
+        int last = chatAdapter.getItemCount() - 1;
+        RecyclerView.LayoutManager lm = recyclerChat.getLayoutManager();
+        if (last < 0 || lm == null) return;
+        LinearSmoothScroller scroller = new LinearSmoothScroller(this) {
+            @Override
+            protected int getVerticalSnapPreference() {
+                return SNAP_TO_END;
+            }
+        };
+        scroller.setTargetPosition(last);
+        lm.startSmoothScroll(scroller);
     }
 
     private void setupListeners() {
@@ -289,22 +314,39 @@ public class MainActivity extends AppCompatActivity {
             @Override public void onEndOfSpeech() { setListeningState(false); }
             @Override public void onError(int error) {
                 setListeningState(false);
-                if (error != SpeechRecognizer.ERROR_NO_MATCH && error != SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                // Whatever is already in the field, including partial text, stays as it is.
+                if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                    Toast.makeText(MainActivity.this, "Did not catch that", Toast.LENGTH_SHORT).show();
+                } else {
                     Toast.makeText(MainActivity.this, "Voice error: " + error, Toast.LENGTH_SHORT).show();
                 }
             }
             @Override
             public void onResults(Bundle results) {
                 setListeningState(false);
-                ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                if (matches != null && !matches.isEmpty()) {
-                    String recognized = matches.get(0);
-                    dispatchUserPrompt(recognized);
-                }
+                String text = firstMatch(results);
+                if (text != null) showDictation(text); // the owner presses Send himself
             }
-            @Override public void onPartialResults(Bundle partialResults) {}
+            @Override
+            public void onPartialResults(Bundle partialResults) {
+                String text = firstMatch(partialResults);
+                if (text != null) showDictation(text);
+            }
             @Override public void onEvent(int eventType, Bundle params) {}
         });
+    }
+
+    private static String firstMatch(Bundle results) {
+        ArrayList<String> matches = results == null
+                ? null : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+        return matches == null || matches.isEmpty() ? null : matches.get(0);
+    }
+
+    /** Shows the recognised text after what was typed before listening began, cursor at the end. */
+    private void showDictation(String text) {
+        String base = dictationBase.replaceAll("\\s+$", "");
+        editPrompt.setText(base.isEmpty() ? text : base + " " + text);
+        editPrompt.setSelection(editPrompt.getText().length());
     }
 
     private void toggleVoiceRecording() {
@@ -317,6 +359,12 @@ public class MainActivity extends AppCompatActivity {
             Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
             intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
             intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
+            // Some recogniser services ignore the silence and minimum-length hints.
+            intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 6000L);
+            intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 6000L);
+            intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 2000L);
+            intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+            dictationBase = editPrompt.getText().toString();
             speechRecognizer.startListening(intent);
             setListeningState(true);
             triggerHaptic(60);
@@ -326,6 +374,8 @@ public class MainActivity extends AppCompatActivity {
     private void setListeningState(boolean listening) {
         isListeningSpeech = listening;
         btnMic.setBackgroundResource(listening ? R.drawable.bg_mic_button_active : R.drawable.bg_mic_button);
+        btnMic.setImageTintList(android.content.res.ColorStateList.valueOf(
+                getColor(listening ? R.color.on_accent : R.color.text)));
     }
 
     private void dispatchUserPrompt(String prompt) {
@@ -335,6 +385,7 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
+        cancelRecheck();
         stopAudio();
         triggerHaptic(40);
         ChatMessage userMsg = new ChatMessage(ChatMessage.TYPE_USER, prompt, getTime());
@@ -347,9 +398,9 @@ public class MainActivity extends AppCompatActivity {
         messageList.add(kurekMsg);
         int kurekPos = messageList.size() - 1;
         chatAdapter.notifyItemInserted(kurekPos);
-        recyclerChat.smoothScrollToPosition(kurekPos);
+        scrollToLatest();
 
-        setStatusState("THINKING", getColor(R.color.warn));
+        setStatusState("Thinking", getColor(R.color.warn));
 
         final StringBuilder streamedContent = new StringBuilder();
         final int[] streamedSentencesCount = new int[]{0};
@@ -379,7 +430,7 @@ public class MainActivity extends AppCompatActivity {
                 kurekMsg.setText(streamedContent.toString());
                 kurekMsg.setPending(false);
                 chatAdapter.notifyItemChanged(kurekPos);
-                recyclerChat.smoothScrollToPosition(kurekPos);
+                scrollToLatest();
 
                 // Fallback to local TTS only if server didn't stream xAI audio chunks
                 if (speakOutLoud && !receivedAudioChunk[0]) {
@@ -394,8 +445,8 @@ public class MainActivity extends AppCompatActivity {
                 kurekMsg.setText(finalText);
                 kurekMsg.setPending(false);
                 chatAdapter.notifyItemChanged(kurekPos);
-                recyclerChat.smoothScrollToPosition(kurekPos);
-                setStatusState("ONLINE", getColor(R.color.accent));
+                scrollToLatest();
+                setStatusState("Online", getColor(R.color.accent));
 
                 if (speakOutLoud && streamedSentencesCount[0] == 0 && !receivedAudioChunk[0]) {
                     speakText(finalText);
@@ -404,10 +455,26 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onError(String error) {
-                kurekMsg.setText("Error: " + error);
-                kurekMsg.setPending(false);
-                chatAdapter.notifyItemChanged(kurekPos);
-                setStatusState("OFFLINE", getColor(R.color.error));
+                if (streamedContent.length() > 0) {
+                    // Keep what already streamed; the error goes in a separate row below it.
+                    // Appended at the end so the positions held by other pending replies stay valid.
+                    kurekMsg.setPending(false);
+                    chatAdapter.notifyItemChanged(kurekPos);
+                    messageList.add(new ChatMessage(ChatMessage.TYPE_KUREK, "Error: " + error, getTime()));
+                    chatAdapter.notifyItemInserted(messageList.size() - 1);
+                    scrollToLatest();
+                } else {
+                    kurekMsg.setText("Error: " + error);
+                    kurekMsg.setPending(false);
+                    chatAdapter.notifyItemChanged(kurekPos);
+                }
+                if (error != null && error.startsWith("Still finishing")) {
+                    // The daemon is busy with the previous request; the connection itself is fine.
+                    setStatusState("Busy", getColor(R.color.warn));
+                } else {
+                    setStatusState("Error", getColor(R.color.error));
+                }
+                recheckAfterError();
                 if (speakOutLoud && !receivedAudioChunk[0]) {
                     speakText("Error: " + error);
                 }
@@ -415,20 +482,51 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    private void cancelRecheck() {
+        recheckGen++;
+        recheckHandler.removeCallbacksAndMessages(null);
+    }
+
+    private void recheckAfterError() {
+        cancelRecheck();
+        scheduleRecheck(recheckGen, 0);
+    }
+
+    private void scheduleRecheck(int gen, int step) {
+        if (step >= RECHECK_DELAYS_MS.length) return;
+        recheckHandler.postDelayed(() -> {
+            if (gen != recheckGen || !isConfigured()) return;
+            client.checkStatus(host, port, token, new KurekClient.StatusCallback() {
+                @Override
+                public void onStatus(String state) {
+                    if (gen != recheckGen) return;
+                    setStatusState("Online", getColor(R.color.accent));
+                }
+
+                @Override
+                public void onError() {
+                    if (gen != recheckGen) return;
+                    setStatusState("Offline", getColor(R.color.offline));
+                    scheduleRecheck(gen, step + 1);
+                }
+            });
+        }, RECHECK_DELAYS_MS[step]);
+    }
+
     private void pingServer() {
         if (!isConfigured()) {
-            setStatusState("SETUP", getColor(R.color.warn));
+            setStatusState("Setup", getColor(R.color.warn));
             return;
         }
         client.checkStatus(host, port, token, new KurekClient.StatusCallback() {
             @Override
             public void onStatus(String state) {
-                setStatusState("ONLINE", getColor(R.color.accent));
+                setStatusState("Online", getColor(R.color.accent));
             }
 
             @Override
             public void onError() {
-                setStatusState("OFFLINE", getColor(R.color.error));
+                setStatusState("Offline", getColor(R.color.offline));
             }
         });
     }
@@ -537,11 +635,11 @@ public class MainActivity extends AppCompatActivity {
         switch (state) {
             case CONNECTING:
                 chipLive.setText(R.string.live_connecting);
-                setStatusState("CONNECTING", getColor(R.color.warn));
+                setStatusState("Connecting", getColor(R.color.warn));
                 break;
             case LIVE:
                 chipLive.setText(R.string.live_end_chip);
-                setStatusState("LIVE", getColor(R.color.accent));
+                setStatusState("Live", getColor(R.color.accent));
                 break;
             default:
                 chipLive.setText(R.string.preset_live);
@@ -585,6 +683,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
+    protected void onPause() {
+        cancelRecheck();
+        super.onPause();
+    }
+
+    @Override
     protected void onStop() {
         LiveCallService.removeListener(liveListener);
         super.onStop();
@@ -602,7 +706,7 @@ public class MainActivity extends AppCompatActivity {
         messageList.add(msg);
         int pos = messageList.size() - 1;
         chatAdapter.notifyItemInserted(pos);
-        recyclerChat.smoothScrollToPosition(pos);
+        scrollToLatest();
     }
 
     @Override

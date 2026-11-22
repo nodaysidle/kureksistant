@@ -18,7 +18,7 @@
         android:paddingEnd="4dp"
         android:paddingTop="4dp"
         android:paddingBottom="4dp"
-        android:background="@color/surface_low"
+        android:background="@drawable/bg_header"
         app:layout_constraintTop_toTopOf="parent">
 
         <LinearLayout
@@ -28,11 +28,10 @@
             android:orientation="vertical">
 
             <TextView
-                style="@style/TextMono"
+                style="@style/TextTitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/title"
-                android:textSize="18sp"
                 android:importantForAccessibility="no" />
 
             <LinearLayout
@@ -53,12 +52,13 @@
                     style="@style/TextMeta"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="6dp"
+                    android:layout_marginStart="8dp"
+                    android:singleLine="true"
                     android:text="@string/status_default" />
 
                 <TextView
                     android:id="@+id/txtHostLabel"
-                    style="@style/TextMeta"
+                    style="@style/TextMono"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
@@ -68,15 +68,6 @@
                     android:text="@string/host_unset" />
             </LinearLayout>
         </LinearLayout>
-
-        <TextView
-            android:id="@+id/btnTerminal"
-            style="@style/PresetButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:text="@string/terminal"
-            android:contentDescription="@string/terminal_desc" />
 
         <ImageButton
             android:id="@+id/btnSpeaker"
@@ -91,25 +82,18 @@
             android:contentDescription="@string/settings_desc" />
     </LinearLayout>
 
-    <View
-        android:id="@+id/dividerTop"
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="@color/outline"
-        app:layout_constraintTop_toBottomOf="@id/headerLayout" />
-
-    <!-- Preset prompts -->
+    <!-- Preset prompts: 40dp chips in a 48dp row; the end padding lets the last chip scroll fully into view. -->
     <HorizontalScrollView
         android:id="@+id/quickChipsScroll"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:scrollbars="none"
         android:clipToPadding="false"
-        android:paddingStart="12dp"
-        android:paddingEnd="12dp"
-        android:paddingTop="8dp"
-        android:paddingBottom="8dp"
-        app:layout_constraintTop_toBottomOf="@id/dividerTop">
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="4dp"
+        android:paddingBottom="4dp"
+        app:layout_constraintTop_toBottomOf="@id/headerLayout">
 
         <LinearLayout
             android:layout_width="wrap_content"
@@ -119,38 +103,46 @@
             android:divider="@drawable/space_8">
 
             <TextView
-                android:id="@+id/chipGrokbot"
-                style="@style/PresetButton"
+                android:id="@+id/btnTerminal"
+                style="@style/ChipButton"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
+                android:layout_height="40dp"
+                android:text="@string/terminal"
+                android:contentDescription="@string/terminal_desc" />
+
+            <TextView
+                android:id="@+id/chipGrokbot"
+                style="@style/ChipButton"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
                 android:text="@string/preset_grokbot" />
 
             <TextView
                 android:id="@+id/chipSysStatus"
-                style="@style/PresetButton"
+                style="@style/ChipButton"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
+                android:layout_height="40dp"
                 android:text="@string/preset_activity" />
 
             <TextView
                 android:id="@+id/chipProjects"
-                style="@style/PresetButton"
+                style="@style/ChipButton"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
+                android:layout_height="40dp"
                 android:text="@string/preset_projects" />
 
             <TextView
                 android:id="@+id/chipScreen"
-                style="@style/PresetButton"
+                style="@style/ChipButton"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
+                android:layout_height="40dp"
                 android:text="@string/preset_screen" />
 
             <TextView
                 android:id="@+id/chipLive"
-                style="@style/PresetButton"
+                style="@style/ChipButton"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
+                android:layout_height="40dp"
                 android:text="@string/preset_live"
                 android:contentDescription="@string/preset_live_desc" />
         </LinearLayout>
@@ -163,20 +155,21 @@
         android:paddingStart="16dp"
         android:paddingEnd="16dp"
         android:paddingTop="8dp"
-        android:paddingBottom="8dp"
+        android:paddingBottom="16dp"
         android:clipToPadding="false"
         app:layout_constraintTop_toBottomOf="@id/quickChipsScroll"
         app:layout_constraintBottom_toTopOf="@id/bottomInputLayout" />
 
-    <!-- Input bar. Bottom padding is raised by max(gesture-nav, IME) in MainActivity. -->
+    <!-- Input bar. Bottom padding is raised by max(gesture-nav, IME) in MainActivity.
+         16dp both sides; Send and Mic are equal 48dp circles, bottom-aligned when the field grows. -->
     <LinearLayout
         android:id="@+id/bottomInputLayout"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="bottom"
-        android:paddingStart="12dp"
-        android:paddingEnd="4dp"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
         android:paddingTop="8dp"
         android:paddingBottom="8dp"
         android:background="@drawable/bg_input_bar"
@@ -196,14 +189,19 @@
         <ImageButton
             android:id="@+id/btnSend"
             style="@style/IconButton"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_send_button"
             android:src="@drawable/ic_send"
+            app:tint="@color/on_accent"
             android:contentDescription="@string/send_desc" />
 
         <ImageButton
             android:id="@+id/btnMic"
             style="@style/IconButton"
+            android:layout_marginStart="8dp"
             android:background="@drawable/bg_mic_button"
             android:src="@drawable/ic_mic"
+            app:tint="@color/text"
             android:contentDescription="@string/mic_desc" />
     </LinearLayout>
 

@@ -1,39 +1,75 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- Kurek message: left-aligned, never wider than 82% of the row (the guideline). 4dp above and below
+     the root give the 8dp between messages. -->
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:gravity="start"
-    android:orientation="vertical"
-    android:paddingTop="8dp"
-    android:paddingBottom="8dp">
+    android:paddingTop="4dp"
+    android:paddingBottom="4dp">
 
-    <!-- Tool calls, one quiet log line each, above the reply -->
+    <androidx.constraintlayout.widget.Guideline
+        android:id="@+id/guideMaxWidth"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        app:layout_constraintGuide_percent="0.82" />
+
+    <!-- Tool calls, one quiet row each, above the reply -->
     <LinearLayout
         android:id="@+id/layoutToolCalls"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:visibility="gone"
-        android:layout_marginBottom="6dp" />
+        app:layout_constrainedWidth="true"
+        app:layout_constraintHorizontal_bias="0"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="@id/guideMaxWidth"
+        app:layout_constraintTop_toTopOf="parent" />
 
-    <TextView
-        android:id="@+id/txtKurekMessage"
-        style="@style/TextBody"
+    <LinearLayout
+        android:id="@+id/bubbleKurek"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:maxWidth="320dp"
+        android:layout_marginTop="8dp"
         android:background="@drawable/bg_kurek_message"
-        android:paddingStart="12dp"
-        android:paddingEnd="12dp"
-        android:paddingTop="10dp"
-        android:paddingBottom="10dp"
-        android:textIsSelectable="true" />
+        android:orientation="horizontal"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="12dp"
+        android:paddingBottom="12dp"
+        app:layout_goneMarginTop="0dp"
+        app:layout_constrainedWidth="true"
+        app:layout_constraintHorizontal_bias="0"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="@id/guideMaxWidth"
+        app:layout_constraintTop_toBottomOf="@id/layoutToolCalls">
+
+        <ImageView
+            android:id="@+id/iconKurekError"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:layout_marginTop="1dp"
+            android:layout_marginEnd="8dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_alert"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/txtKurekMessage"
+            style="@style/TextBody"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textIsSelectable="true" />
+    </LinearLayout>
 
     <TextView
         android:id="@+id/txtKurekTime"
-        style="@style/TextMeta"
+        style="@style/TextMono"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:layout_marginStart="12dp" />
-</LinearLayout>
+        app:layout_constraintStart_toStartOf="@id/bubbleKurek"
+        app:layout_constraintTop_toBottomOf="@id/bubbleKurek" />
+</androidx.constraintlayout.widget.ConstraintLayout>

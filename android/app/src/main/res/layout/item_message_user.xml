@@ -1,31 +1,42 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- User message: right-aligned, never wider than 82% of the row (the guideline). -->
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:gravity="end"
-    android:orientation="vertical"
-    android:paddingTop="8dp"
-    android:paddingBottom="8dp">
+    android:paddingTop="4dp"
+    android:paddingBottom="4dp">
+
+    <androidx.constraintlayout.widget.Guideline
+        android:id="@+id/guideMinStart"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        app:layout_constraintGuide_percent="0.18" />
 
     <TextView
         android:id="@+id/txtUserMessage"
         style="@style/TextBody"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:maxWidth="300dp"
         android:background="@drawable/bg_user_message"
-        android:paddingStart="4dp"
-        android:paddingEnd="12dp"
-        android:paddingTop="2dp"
-        android:paddingBottom="2dp"
-        android:gravity="end"
-        android:textIsSelectable="true" />
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="12dp"
+        android:paddingBottom="12dp"
+        android:textIsSelectable="true"
+        app:layout_constrainedWidth="true"
+        app:layout_constraintHorizontal_bias="1"
+        app:layout_constraintStart_toStartOf="@id/guideMinStart"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
 
     <TextView
         android:id="@+id/txtUserTime"
-        style="@style/TextMeta"
+        style="@style/TextMono"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:layout_marginEnd="12dp" />
-</LinearLayout>
+        app:layout_constraintEnd_toEndOf="@id/txtUserMessage"
+        app:layout_constraintTop_toBottomOf="@id/txtUserMessage" />
+</androidx.constraintlayout.widget.ConstraintLayout>

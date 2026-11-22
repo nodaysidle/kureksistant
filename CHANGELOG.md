@@ -8,6 +8,7 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Kurek Remote 0.2.5 (Android):** light redesign, same behaviour. Light theme with dark system-bar icons, system sans type (monospace only for the host, tool names and timestamps), vector icons instead of any emoji, message bubbles capped at 82% of the width, an input bar with two equal round buttons, and a Terminal chip that moved from the header into the preset row so the status line fits. Settings, the 2x1 widget and the live-call notification follow the same look. The app asks for no new permissions and keeps your saved host, port and token.
 - **Read-only tool rounds run in parallel:** when every tool call in one model round is a read-only lookup (web search, weather, memory recall, vault list/read/search, codebase search/tree/read/find/outline), they run at the same time; results reach the model in the original order. Any other mix runs one by one, as before.
 - **Reused HTTPS connections** for speech-to-text uploads and DeepSeek web search. A connection the server had closed is resent once at once.
 - **DeepSeek stream retry:** a dropped connection is retried at once; HTTP 429/5xx still wait 1 s.
@@ -25,6 +26,9 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 - **Clipboard history skips password-manager clips:** a clip a password manager marks (`x-kde-passwordManagerHint`, as `wl-copy --sensitive` does) is never read or saved. Other clips are kept as copied, so a pinned key can still be copied back. The watcher starts with the daemon, no longer when the tool is imported, so a test run no longer touches the real history.
 
 ### Fixed
+- **Kurek Remote dictation no longer sends by itself (behaviour change, on purpose):** the mic button now puts what you say into the prompt field, live as you speak, and you press Send. It waits about 6 seconds of silence before it stops listening (some phones ignore this hint), keeps what you already typed, and says "Did not catch that" instead of failing silently.
+- **Kurek Remote keeps a half-streamed reply:** when the connection drops or the PC ends a turn with an error after some of the answer arrived, that text stays and the error appears as its own row below it; audio already queued keeps playing.
+- **Kurek Remote no longer waits forever:** a reply stream that closes without `done` or `error` now shows an error. The daemon's "Still finishing the previous request" shows as Busy, not Offline. After an error the status is re-checked at 2, 5 and 15 seconds; a prompt is never resent by itself.
 - **Files land where you can find them:** a bare or relative file name (`notes.md`) is saved in `~/Downloads/KUREK/NOTES` (`KUREK_NOTES_DIR` overrides) instead of the daemon's working directory, the repo. Create and write results give the absolute path and say when an existing file was replaced and how long it was; `file_controller` exposes `append`.
 - **Vault inbox:** a second capture with the same title on the same day gets `-2`, `-3` instead of replacing the first.
 - **Vault search treats the query as text:** a query that starts with `-` is searched for, never read as a ripgrep option.

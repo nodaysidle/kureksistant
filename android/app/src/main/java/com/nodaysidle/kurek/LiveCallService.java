@@ -170,6 +170,7 @@ public class LiveCallService extends Service {
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         return new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_mic)
+                .setColor(getColor(R.color.accent))
                 .setContentTitle(getString(R.string.live_notification))
                 .setUsesChronometer(true)
                 .setWhen(System.currentTimeMillis())

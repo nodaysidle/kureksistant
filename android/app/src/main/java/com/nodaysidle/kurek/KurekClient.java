@@ -65,6 +65,7 @@ public class KurekClient {
     public void sendPrompt(String host, int port, String token, String prompt, boolean streamAudio, Callback cb) {
         new Thread(() -> {
             HttpURLConnection conn = null;
+            boolean finished = false; // a done or error callback was already posted; never post a second one
             try {
                 URL url = new URL("http://" + host + ":" + port + "/remote/prompt");
                 conn = (HttpURLConnection) url.openConnection();
@@ -130,17 +131,26 @@ public class KurekClient {
                         mainHandler.post(() -> cb.onSentence(sentence));
                     } else if ("done".equals(type)) {
                         String fullReply = event.optString("reply", "");
+                        finished = true;
                         mainHandler.post(() -> cb.onDone(fullReply));
                         break;
                     } else if ("error".equals(type)) {
                         String error = event.optString("error", "Unknown error");
+                        finished = true;
                         mainHandler.post(() -> cb.onError(error));
                         break;
                     }
                 }
                 reader.close();
+                if (!finished) {
+                    // The server closed the stream without a done or error event.
+                    finished = true;
+                    mainHandler.post(() -> cb.onError("Connection closed before the reply finished."));
+                }
             } catch (Exception e) {
-                mainHandler.post(() -> cb.onError("Connection failed: " + e.getMessage()));
+                if (!finished) {
+                    mainHandler.post(() -> cb.onError("Connection failed: " + e.getMessage()));
+                }
             } finally {
                 if (conn != null) conn.disconnect();
             }

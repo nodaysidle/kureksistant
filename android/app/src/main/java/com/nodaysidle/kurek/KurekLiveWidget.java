@@ -46,8 +46,7 @@ public class KurekLiveWidget extends AppWidgetProvider {
         v.setImageViewResource(R.id.widgetDot, state == LiveCallService.State.CONNECTING ? R.drawable.bg_dot_warn : R.drawable.bg_dot);
 
         v.setTextViewText(R.id.widgetButton, context.getString(idle ? R.string.preset_live : R.string.live_end));
-        v.setInt(R.id.widgetButton, "setBackgroundResource", idle ? R.drawable.bg_widget_button_primary : R.drawable.bg_widget_button_outlined);
-        v.setTextColor(R.id.widgetButton, context.getColor(idle ? R.color.surface_low : R.color.text));
+        v.setInt(R.id.widgetButton, "setBackgroundResource", idle ? R.drawable.bg_widget_button_primary : R.drawable.bg_widget_button_end);
 
         v.setViewVisibility(R.id.widgetTimer, live ? android.view.View.VISIBLE : android.view.View.GONE);
         v.setChronometer(R.id.widgetTimer, LiveCallService.getLiveBase(), null, live);
