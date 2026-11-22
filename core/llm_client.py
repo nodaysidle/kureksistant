@@ -346,6 +346,7 @@ def stream_deepseek(
     tool_calls_map: dict[int, dict] = {}
     has_tool_calls = False
     finished = False
+    finish_reason = None
     read_error: str | None = None
 
     try:
@@ -371,6 +372,7 @@ def stream_deepseek(
                     continue
                 if choices[0].get("finish_reason"):
                     finished = True
+                    finish_reason = choices[0]["finish_reason"]
                 delta = choices[0].get("delta") or {}
 
                 # Accumulate DeepSeek reasoning tokens if present
@@ -408,6 +410,7 @@ def stream_deepseek(
     finally:
         _close_quietly(resp)
 
+    truncated = None
     if not finished:
         if full_text and not has_tool_calls:
             reason = read_error or "no [DONE] marker"
@@ -416,12 +419,16 @@ def stream_deepseek(
                 f"keeping {len(full_text)} chars already streamed",
                 flush=True,
             )
+            truncated = "connection"  # the daemon says the answer is incomplete
         else:
             yield {
                 "type": "error",
                 "error": read_error or "DeepSeek stream ended unexpectedly",
             }
             return
+    elif finish_reason not in (None, "stop", "tool_calls") and not has_tool_calls:
+        truncated = finish_reason  # "length", "insufficient_system_resource", ...
+        print(f"[DeepSeek Stream] Answer ended early (finish_reason={finish_reason})", flush=True)
 
     reasoning_out = full_reasoning.strip() if full_reasoning else None
     if has_tool_calls:
@@ -443,11 +450,14 @@ def stream_deepseek(
             "reasoning_content": reasoning_out,
         }
     else:
-        yield {
+        done = {
             "type": "done",
             "full_content": full_text.strip(),
             "reasoning_content": reasoning_out,
         }
+        if truncated:
+            done["truncated"] = truncated
+        yield done
 
 
 def stream_deepseek_sentences(
@@ -466,6 +476,7 @@ def stream_deepseek_sentences(
     buffer = ""
     full_response = ""
     saw_token = False
+    truncated = None
 
     for event in stream_deepseek(
         prompt=prompt,
@@ -500,6 +511,8 @@ def stream_deepseek_sentences(
                     "full_content": full_response,
                 }
                 sentence, buffer = pop_complete_sentence(buffer)
+        elif event_type == "done":
+            truncated = event.get("truncated")
 
     # Flush any short / incomplete trailing sentence at stream end.
     trailing = flush_sentence_buffer(buffer)
@@ -511,4 +524,7 @@ def stream_deepseek_sentences(
             "full_content": full_response,
         }
 
-    yield {"type": "done", "full_content": full_response.strip()}
+    done = {"type": "done", "full_content": full_response.strip()}
+    if truncated:
+        done["truncated"] = truncated
+    yield done

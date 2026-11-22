@@ -80,6 +80,7 @@ class MpvPipeWireSink:
                 "--no-terminal",
                 "--really-quiet",
                 "--ao=pipewire",
+                "--load-scripts=no",  # no system-wide script (mpv-mpris) can let media keys pause Kurek
                 f"--input-ipc-server={self.sock_path}",
             ]
             try:
@@ -183,22 +184,32 @@ class MpvPipeWireSink:
         self._send_command(["playlist-clear"])
         return success
 
+    def _get_property(self, name: str):
+        """One mpv property, or None when mpv is unreachable or the property is unavailable. mpv sends
+        event lines to every client, so the reply is found by its request_id."""
+        if not self.sock_path.exists():
+            return None
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(0.1)
+                s.connect(str(self.sock_path))
+                s.sendall(json.dumps({"command": ["get_property", name], "request_id": 1}).encode() + b"\n")
+                with s.makefile("rb") as replies:
+                    for _ in range(20):  # bounded: a burst of events may come first
+                        msg = json.loads(replies.readline())
+                        if msg.get("request_id") == 1:
+                            return msg.get("data")
+        except Exception:
+            return None
+        return None
+
+    def position(self) -> float | None:
+        """Seconds into the clip mpv is playing (time-pos); it changes while audio advances."""
+        return self._get_property("time-pos")
+
     def is_playing(self) -> bool:
         """Check if mpv is currently playing audio."""
-        if not self.sock_path.exists():
-            return False
-        try:
-            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            s.settimeout(0.1)
-            s.connect(str(self.sock_path))
-            cmd = json.dumps({"command": ["get_property", "idle-active"]}).encode() + b"\n"
-            s.sendall(cmd)
-            resp = json.loads(s.recv(1024).decode())
-            s.close()
-            # If idle-active is False, mpv is actively playing
-            return resp.get("data") is False
-        except Exception:
-            return False
+        return self._get_property("idle-active") is False
 
     def shutdown(self):
         """Shut down the background mpv process and remove its socket.

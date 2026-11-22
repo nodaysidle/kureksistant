@@ -261,8 +261,10 @@ class TTSPlayer:
         self._stream_first = True
         self._pending = 0
         self._pending_local = 0
+        self._progress = 0  # +1 per synthesis pass and per finished queue item: see progress()
         self._idle = threading.Condition(self._lock)
         self._worker: threading.Thread | None = None
+        self.on_unvoiced: Optional[Callable[[str], None]] = None  # told about a sentence every cloud voice failed on
 
     @property
     def is_playing(self) -> bool:
@@ -351,6 +353,18 @@ class TTSPlayer:
         with self._idle:
             return self._idle.wait_for(lambda: self._pending == 0, timeout=timeout)
 
+    def progress(self) -> tuple:
+        """Changes whenever speech moves on: a sentence synthesized or finished, or mpv's play
+        position. The same value a while apart means nothing advanced."""
+        with self._lock:
+            done = self._progress
+        try:
+            from core.mpv_sink import get_mpv_sink
+            pos = get_mpv_sink().position()
+        except Exception:
+            pos = None
+        return done, pos
+
     def _worker_loop(self) -> None:
         while True:
             gen, text, play_local, on_audio, qt = self._queue.get()
@@ -368,11 +382,14 @@ class TTSPlayer:
                     self._pending -= 1
                     if play_local:
                         self._pending_local = max(0, self._pending_local - 1)
+                    self._progress += 1
                     self._idle.notify_all()
 
     def _process(self, gen: int, text: str, play_local: bool, on_audio) -> None:
         timing_mark("first_speak_chunk", once=True)
         audio = self.synthesize(text)
+        with self._lock:
+            self._progress += 1
         timing_mark("tts_synth_done", once=True)
         if on_audio is not None:
             try:
@@ -389,6 +406,11 @@ class TTSPlayer:
         if audio:
             _play_audio_bytes(audio, append=append)
             return
+        if self.on_unvoiced is not None and getattr(self._engine, "synthesize", None) is not None:
+            try:
+                self.on_unvoiced(text)  # every cloud voice failed: say so instead of skipping it silently
+            except Exception as e:
+                print(f"[TTS Queue] on_unvoiced callback error: {e}")
         # No bytes (engine without synthesize(), or every cloud voice failed):
         # speak locally, blocking this worker. Never re-run the cloud chain here.
         with self._lock:
@@ -458,3 +480,21 @@ def create_tts_player(config: dict) -> TTSPlayer:
     else:
         engine = SystemSpeechEngine(voice=config.get("tts_voice", ""))
     return TTSPlayer(engine)
+
+
+_announcer: Optional[Callable[[str], bool]] = None
+
+
+def set_announcer(fn: Optional[Callable[[str], bool]]) -> None:
+    """The daemon registers KurekEngine.announce here once its player exists."""
+    global _announcer
+    _announcer = fn
+
+
+def announce(text: str) -> bool:
+    """Say a background message (finished job, screen comment) after any reply in progress, never over
+    it. Blocks until spoken (True) or dropped (False). Without a daemon in this process it is only logged."""
+    if _announcer is None:
+        print(f"[Kurek Speech] (no daemon) {text}", flush=True)
+        return False
+    return _announcer(text)

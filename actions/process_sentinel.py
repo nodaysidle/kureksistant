@@ -61,22 +61,11 @@ def _notify_job_complete(label: str, elapsed_str: str, pid: int):
     except Exception as e:
         print(f"[Sentinel Memory Log Error] {e}")
 
-    # 3. Verbal Spoken Alert via xAI Grok TTS / System Audio
+    # 3. Spoken alert through the daemon's voice, after any reply in progress (never over it)
     spoken_text = f"Your {label} job just finished in {elapsed_str}."
     try:
-        from memory.config_manager import (
-            get_gemini_key,
-            get_openrouter_api_key,
-            get_xai_key,
-        )
-        from core.tts import create_tts_player
-        xai_key = get_xai_key() or get_openrouter_api_key() or get_gemini_key()
-        if xai_key:
-            tts = create_tts_player({"tts_engine": "xai", "tts_voice": "sal", "xai_api_key": xai_key})
-            tts.speak(spoken_text)
-        else:
-            tts = create_tts_player({"tts_engine": "mac_say"})
-            tts.speak(spoken_text)
+        from core.tts import announce
+        announce(spoken_text)
     except Exception as e:
         print(f"[Sentinel Speech Error] {e}")
 

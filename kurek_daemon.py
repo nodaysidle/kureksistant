@@ -56,7 +56,7 @@ from core.decision_client import (
 )
 from core.llm_client import brain_name, stream_deepseek_sentences
 from core.live_voice import live_voice_enabled, start_live_servers
-from core.tts import create_tts_player
+from core.tts import create_tts_player, set_announcer
 from core.stt import DeepgramSTT, FallbackSTT, OpenRouterSTT, STTError, WhisperSTT
 from core.action_loader import discover_actions
 from core.hyprland_watcher import get_hyprland_watcher
@@ -190,6 +190,10 @@ def _run_tool_prompt_line() -> str:
 # HTTP remote-access hardening
 HTTP_MAX_BODY_BYTES = 64 * 1024
 SSE_HEARTBEAT_S = 15.0  # an SSE comment this often keeps Kurek Remote's 90 s read timeout from firing
+SSE_WRITE_STALL_FACTOR = 4  # an SSE write may wait 4x the request-read timeout (30 s -> 120 s) for the phone to take bytes
+# Sockets of phone turns in progress. A local prompt that barges in shuts them down, so a write blocked on a
+# dead phone (up to that 120 s) cannot hold up the PC.
+_PHONE_STREAMS: set = set()
 REMOTE_TOKEN_MIN_LEN = 32
 # Tools that execute model-generated code or shell commands — blocked for remote
 # clients unless KUREK_REMOTE_ALLOW_EXEC=1.
@@ -490,9 +494,19 @@ def classify_confirmation_reply(text: str) -> bool | None:
     return None
 
 
-# A new prompt cancels the running turn and waits this long for it to finish.
-QUERY_WAIT_S = 30.0
+# A new prompt cancels the running turn and waits this long for it to unwind: a tool may run 120 s
+# (ActionRegistry.run timeout in core/action_loader.py) and a DeepSeek read may block 30 s.
+QUERY_WAIT_S = 150.0
+# Speech that shows no progress this long is stuck: one sentence's voice chain is at most 84 s (xAI 12 +
+# OpenRouter 12 + 4 Gemini x 15) and a local player at most 125 s (spd-say -w 120 s + its 5 s probe).
+TTS_STALL_S = 180.0
+ANNOUNCE_MAX_WAIT_S = 300.0  # a background message waits this long for a quiet moment, then becomes a notification
+ANNOUNCE_POLL_S = 0.25
 CANCELLED_REPLY = "Interrupted before replying."
+TRUNCATED_NOTICES = {
+    "connection": "The connection dropped, so that answer is incomplete.",
+    "length": "That answer hit the length limit, so it is incomplete.",
+}
 
 
 class KurekEngine:
@@ -502,6 +516,8 @@ class KurekEngine:
         self.audio_buffer = []
         self.is_recording = False
         self.record_stream = None
+        self._mic_lock = threading.Lock()  # one start or stop of the microphone at a time
+        self._overflows = 0
         self.record_start_time = 0.0
         self.last_sound_time = time.time()
         self.has_speech = False
@@ -599,16 +615,15 @@ class KurekEngine:
         else:
             print("[Kurek] No cloud voice key — using local spd-say voice")
             self.tts = create_tts_player({"tts_engine": "system"})
+        self.tts.on_unvoiced = lambda text: self._notify_failure(f"Could not voice: {text[:150]}")
 
         # Wire sustained resource watcher (300-second CPU/RAM) alert callback
         try:
             from actions.system_monitor import _GLOBAL_WATCHER
             def _on_resource_alert(msg: str):
                 print(f"[Kurek] Sustained resource spike detected: {msg}", flush=True)
-                if self.state in ("idle", "speaking"):
-                    self.set_state("speaking")
-                    self.tts.speak(msg)
-                    self.set_state("idle")
+                # Said after any reply in progress, never over it; the watcher's own loop does not wait.
+                threading.Thread(target=self.announce, args=(msg,), name="kurek-announce", daemon=True).start()
             _GLOBAL_WATCHER.alert_callback = _on_resource_alert
             print("[Kurek] Sustained resource watcher alert callback attached.")
         except Exception as e:
@@ -623,6 +638,7 @@ class KurekEngine:
         self._engine_lock = threading.Lock()
         self._query_lock = self._engine_lock
         self._speaker_lock = threading.Lock()
+        set_announcer(self.announce)
 
         # Pre-warm PipeWire mpv sink & start Hyprland event watcher
         try:
@@ -720,6 +736,57 @@ class KurekEngine:
             self.tts.speak(reply)
         return reply
 
+    def _wait_speech(self, busy, cancelled) -> bool:
+        """Wait while busy() and speech keeps advancing (self.tts.progress()). True once busy() is false
+        twice in a row (one late mpv reply reads as "not playing"); False when cancelled() is true (checked
+        every 50 ms, so a barge-in ends it at once) or after TTS_STALL_S without progress. No total
+        deadline: a reply that keeps playing is never cut."""
+        progress = getattr(self.tts, "progress", None)  # test fakes have none: busy() and cancelled() decide
+        last, since, quiet = None, time.monotonic(), 0
+        while True:
+            quiet = 0 if busy() else quiet + 1
+            if quiet >= 2:
+                return True
+            if cancelled():
+                return False
+            mark = progress() if callable(progress) else None
+            if mark != last:
+                last, since = mark, time.monotonic()
+            elif time.monotonic() - since > TTS_STALL_S:
+                return False
+            time.sleep(0.05)
+
+    def announce(self, text: str) -> bool:
+        """Say a background message (resource alert, finished job, screen comment) in a quiet moment:
+        no turn, reply, recording or other message in progress. Appended to mpv, never replacing a
+        reply; the owner's click or new prompt stops it like any reply. Blocks: True once spoken (or
+        stopped by the owner); False after ANNOUNCE_MAX_WAIT_S, when it becomes a notification."""
+        deadline = time.monotonic() + ANNOUNCE_MAX_WAIT_S
+        while time.monotonic() < deadline:
+            if self._speaker_lock.acquire(timeout=ANNOUNCE_POLL_S):  # never the engine lock
+                try:
+                    epoch = self._speaker_epoch  # read first: a prompt or click during the checks below moves it
+                    if (self.state == KurekState.IDLE and not self.is_recording
+                            and not self._engine_lock.locked()
+                            and not getattr(self.tts, "is_playing", False)):
+                        self.set_state(KurekState.SPEAKING)
+                        self.tts.enqueue(text)
+                        if self._speaker_epoch != epoch:
+                            self.tts.stop()  # the owner's prompt or click came in meanwhile: it wins at once
+                        else:
+                            done = self._wait_speech(lambda: getattr(self.tts, "is_playing", False),
+                                                     lambda: self._speaker_epoch != epoch or self.is_recording)
+                            if not done and self._speaker_epoch == epoch:
+                                self.tts.stop()  # the owner started recording (his voice wins), or speech was stuck
+                        if self.state == KurekState.SPEAKING:
+                            self.set_state(KurekState.IDLE)
+                        return True
+                finally:
+                    self._speaker_lock.release()
+            time.sleep(ANNOUNCE_POLL_S)
+        self._notify_failure(f"Not said aloud, Kurek was busy: {text}")
+        return False
+
     def _save_history(self):
         try:
             with self._history_lock:
@@ -732,6 +799,8 @@ class KurekEngine:
 
     def set_state(self, new_state: str):
         with self.state_lock:
+            if self.is_recording and new_state != KurekState.LISTENING:
+                return  # the owner is recording: no other turn takes LISTENING away; his own stop clears is_recording first
             if (
                 new_state == KurekState.IDLE
                 and self._speaker_lock.locked()
@@ -807,57 +876,91 @@ class KurekEngine:
             self.set_state(KurekState.IDLE)
 
     def start_listening(self):
-        self.audio_buffer = []
-        self.has_speech = False
-        self.speech_chunks = 0
-        self.noise_floor = 0.004
-        self.peak_rms = 0.0
-        self.record_start_time = time.time()
-        self.last_sound_time = time.time()
-        self.is_recording = True
-        self.set_state(KurekState.LISTENING)
-
-        def audio_callback(indata, frames, time_info, status):
-            if not self.is_recording:
-                return
-            audio_chunk = indata[:, 0]
-            self.audio_buffer.append(audio_chunk.copy())
-            # Remove DC offset to calculate true AC speech RMS
-            ac_chunk = audio_chunk - np.mean(audio_chunk)
-            rms = float(np.sqrt(np.mean(ac_chunk ** 2)))
-            self.peak_rms = max(self.peak_rms, rms)
-            warmup = (time.time() - self.record_start_time) < VAD_WARMUP_S
-            self.noise_floor, self.speech_chunks, self.has_speech, sound_now = vad_update(
-                self.noise_floor, self.speech_chunks, self.has_speech, rms, warmup=warmup
-            )
-            if sound_now:
-                self.last_sound_time = time.time()
-
+        if not self._mic_lock.acquire(blocking=False):
+            return  # a start or stop of the microphone is already running (a double click)
         try:
-            self.record_stream = sd.InputStream(
-                device=self.input_device,
-                samplerate=SAMPLE_RATE,
-                channels=CHANNELS,
-                dtype="float32",
-                callback=audio_callback,
-            )
-            self.record_stream.start()
-        except Exception as e:
-            print(f"[Kurek] Mic error: {e}")
-            self.set_state(KurekState.IDLE)
+            if self.is_recording:
+                return
+            leftover, self.record_stream = self.record_stream, None
+            if leftover is not None:
+                for end in (leftover.stop, leftover.close):
+                    try:
+                        end()
+                    except Exception:
+                        pass
+            self.audio_buffer = []
+            self.has_speech = False
+            self.speech_chunks = 0
+            self.noise_floor = 0.004
+            self.peak_rms = 0.0
+            self._overflows = 0
+
+            def audio_callback(indata, frames, time_info, status):
+                if getattr(status, "input_overflow", False):
+                    self._overflows += 1  # logged once at stop; no I/O here
+                if not self.is_recording:
+                    return
+                audio_chunk = indata[:, 0]
+                self.audio_buffer.append(audio_chunk.copy())
+                # Remove DC offset to calculate true AC speech RMS
+                ac_chunk = audio_chunk - np.mean(audio_chunk)
+                rms = float(np.sqrt(np.mean(ac_chunk ** 2)))
+                self.peak_rms = max(self.peak_rms, rms)
+                warmup = (time.time() - self.record_start_time) < VAD_WARMUP_S
+                self.noise_floor, self.speech_chunks, self.has_speech, sound_now = vad_update(
+                    self.noise_floor, self.speech_chunks, self.has_speech, rms, warmup=warmup
+                )
+                if sound_now:
+                    self.last_sound_time = time.time()
+
+            stream = None
+            try:
+                stream = sd.InputStream(
+                    device=self.input_device,
+                    samplerate=SAMPLE_RATE,
+                    channels=CHANNELS,
+                    dtype="float32",
+                    callback=audio_callback,
+                )
+                self.record_start_time = time.time()  # after the device opened: the VAD warm-up covers real audio
+                self.last_sound_time = self.record_start_time
+                self.is_recording = True
+                stream.start()
+            except Exception as e:
+                self.is_recording = False
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
+                print(f"[Kurek] Mic error: {e}", flush=True)
+                self._notify_failure(f"The microphone did not start: {str(e)[:200]}")
+                return
+            self.record_stream = stream
+            self.set_state(KurekState.LISTENING)  # "Speak now" only once audio is flowing: the first syllable is kept
+        finally:
+            self._mic_lock.release()
 
     def stop_listening_and_process(self):
-        if not self.is_recording:
-            return
         t0 = time.perf_counter()  # a voice turn is timed from the stop click / auto-submit, so STT counts
-        self.is_recording = False
+        self.tts.stop()  # his stop silences Kurek at once, before any speech recognition
+        if not self._mic_lock.acquire(blocking=False):
+            return  # the other stop (click or silence watchdog) or a start is already running
         try:
-            if self.record_stream:
-                self.record_stream.stop()
-                self.record_stream.close()
-                self.record_stream = None
-        except Exception:
-            pass
+            if not self.is_recording:
+                return
+            try:
+                if self.record_stream:
+                    self.record_stream.stop()
+                    self.record_stream.close()
+                    self.record_stream = None
+            except Exception:
+                pass
+            self.is_recording = False  # after stop(): PortAudio delivers the last buffers during stop()
+            if self._overflows:
+                print(f"[Kurek Mic] {self._overflows} input overflow(s) in this recording: some audio was dropped.", flush=True)
+        finally:
+            self._mic_lock.release()
 
         if not self.audio_buffer:
             print("[Kurek] No audio captured.")
@@ -894,6 +997,11 @@ class KurekEngine:
                 traceback.print_exc()
                 stt_failure = "My speech recognition failed, so I couldn't understand that."
         timing_mark("stt_done")
+        if self.is_recording:
+            # The owner interrupted this turn and is recording again: his new words win. Not answered (that
+            # would talk over his recording), but shown in full, so nothing he said vanishes.
+            self._notify_failure(f"Not answered, you started a new recording: {transcript or '(nothing heard)'}")
+            return
 
         if stt_failure:
             self._notify_failure(stt_failure)
@@ -941,6 +1049,23 @@ class KurekEngine:
         except Exception:
             pass
 
+    def _report_busy(self, user_prompt: str, callback, mute_speaker: bool) -> None:
+        """The previous turn did not unwind within QUERY_WAIT_S. Say so (aloud on the PC for a local
+        prompt) and keep the prompt's words in the notification, so nothing the owner said vanishes."""
+        busy = "Still finishing the previous request. Try again in a moment."
+        self._notify_failure(f"{busy} Not sent: {user_prompt[:200]}")
+        if callback:
+            try:
+                callback({"type": "error", "error": busy})
+                callback({"type": "done", "reply": busy})
+            except Exception:
+                pass
+        if not mute_speaker and not self.is_recording:  # never spoken over his recording; the notification stays
+            try:
+                self.tts.speak(busy)  # the barge-in above already stopped the stuck turn's speech
+            except Exception as e:
+                print(f"[Kurek] TTS error: {e}")
+
     def handle_text_query(
         self,
         user_prompt: str,
@@ -961,15 +1086,15 @@ class KurekEngine:
                     self.tts.stop()
                 except Exception:
                     pass
+                if callback is None:  # a local prompt: the PC wins over a phone turn blocked on a dead phone
+                    for conn in list(_PHONE_STREAMS):
+                        try:
+                            conn.shutdown(socket.SHUT_RDWR)  # a blocked write returns at once
+                        except OSError:
+                            pass
+        entry_epoch = self._speaker_epoch  # a click or newer prompt while this one waits moves it
         if not self._engine_lock.acquire(timeout=QUERY_WAIT_S):
-            busy = "Still finishing the previous request. Try again in a moment."
-            self._notify_failure(busy)
-            if callback:
-                try:
-                    callback({"type": "error", "error": busy})
-                    callback({"type": "done", "reply": busy})
-                except Exception:
-                    pass
+            self._report_busy(user_prompt, callback, mute_speaker)
             return None
 
         speaker_acquired = False
@@ -977,16 +1102,20 @@ class KurekEngine:
         try:
             if not mute_speaker:
                 if not self._speaker_lock.acquire(timeout=QUERY_WAIT_S):
-                    busy = "Still finishing the previous request. Try again in a moment."
-                    self._notify_failure(busy)
+                    self._report_busy(user_prompt, callback, mute_speaker)
+                    return None
+                speaker_acquired = True
+                if self._speaker_epoch != entry_epoch or self.is_recording:
+                    # Superseded while it waited, or the owner is recording again: answering now would talk
+                    # over his recording or his newer request. Not answered; his words stay in a notification.
+                    self._notify_failure(f"Not answered: {user_prompt}")
                     if callback:
                         try:
-                            callback({"type": "error", "error": busy})
-                            callback({"type": "done", "reply": busy})
+                            callback({"type": "error", "error": CANCELLED_REPLY})
+                            callback({"type": "done", "reply": CANCELLED_REPLY})
                         except Exception:
                             pass
                     return None
-                speaker_acquired = True
                 my_speaker_epoch = self._speaker_epoch
                 self._cancel_requested = False
                 self.tts.begin_stream()
@@ -1028,15 +1157,10 @@ class KurekEngine:
                 # Wait for local TTS playback to drain outside _engine_lock so
                 # concurrent mute_speaker=True queries do not block or interrupt.
                 try:
-                    deadline = time.time() + 180.0
-                    while getattr(self.tts, "is_playing", False) and time.time() < deadline:
-                        if self._cancel_requested or my_speaker_epoch != self._speaker_epoch:
-                            break
-                        time.sleep(0.05)
-                    if (
-                        getattr(self.tts, "is_playing", False)
-                        and time.time() >= deadline
-                    ):
+                    interrupted = lambda: self._cancel_requested or my_speaker_epoch != self._speaker_epoch  # noqa: E731
+                    if not self._wait_speech(lambda: getattr(self.tts, "is_playing", False), interrupted) and not interrupted():
+                        print(f"[Kurek] Speech made no progress for {TTS_STALL_S:g} s; stopped it.", flush=True)
+                        self._notify_failure("Speech got stuck, so I stopped it.")
                         self.tts.stop()
                 except Exception:
                     pass
@@ -1218,6 +1342,7 @@ class KurekEngine:
         max_tool_turns = 15
         sentence_count = 0
         stream_error: str | None = None
+        truncated: str | None = None
         turn_tools = list(self.openai_tools)
 
         for turn_idx in range(max_tool_turns):
@@ -1319,11 +1444,13 @@ class KurekEngine:
 
                 elif ev_type == "sentence":
                     raw_sentence = ev.get("sentence", "")
-                    # The model copied the history's tool note or cancelled-turn marker: speak nothing from there on.
-                    if TOOL_NOTE in raw_sentence or CANCELLED_REPLY in raw_sentence:
+                    # The model copied the history's tool note: speak nothing from there on.
+                    if TOOL_NOTE in raw_sentence:
                         note_copied = True
                     if note_copied:
                         continue
+                    # The model copied the cancelled-turn marker: drop the marker, keep the rest of the answer.
+                    raw_sentence = raw_sentence.replace(CANCELLED_REPLY, "").strip()
                     clean_sentence = self.sanitize_text_for_speech(raw_sentence)
                     if clean_sentence and not self._cancel_requested:
                         self._observe_claims(raw_sentence, outcomes)
@@ -1336,6 +1463,7 @@ class KurekEngine:
 
                 elif ev_type == "done":
                     reply_text = ev.get("full_content", "") or " ".join(streamed_sentences)
+                    truncated = ev.get("truncated") or truncated
                     break
 
             if stream_error:
@@ -1412,6 +1540,7 @@ class KurekEngine:
                             streamed_sentences.append(raw_sentence)
                     elif ev.get("type") == "done":
                         reply_text = ev.get("full_content", "") or " ".join(streamed_sentences)
+                        truncated = ev.get("truncated") or truncated
                         break
             except Exception as e:
                 print(f"[Kurek] Summary synthesis notice: {e}")
@@ -1434,8 +1563,13 @@ class KurekEngine:
         reply_text = re.sub(r"<[｜|].*?[｜|]>", "", reply_text)
         reply_text = re.sub(r"</[｜|].*?[｜|]>", "", reply_text)
         reply_text = re.sub(rf"\({TOOL_NOTE}.*", "", reply_text, flags=re.DOTALL)
-        reply_text = re.sub(rf"{re.escape(CANCELLED_REPLY)}.*", "", reply_text, flags=re.DOTALL)
+        reply_text = reply_text.replace(CANCELLED_REPLY, "")
         reply_text = reply_text.strip()
+        cut_notice = None
+        answer_text = reply_text  # what later turns send the model: never the notice, which it would copy
+        if truncated:
+            cut_notice = TRUNCATED_NOTICES.get(truncated, f"{brain_name()} stopped early, so that answer is incomplete.")
+            reply_text = f"{reply_text} {cut_notice}".strip()  # the PC and the phone get the notice: never a cut answer passed off as whole
         if not reply_text:
             # Successful tool path with no spoken content — not a transport failure.
             reply_text = "All set."
@@ -1450,7 +1584,8 @@ class KurekEngine:
         ts = datetime.now().isoformat(timespec="seconds")
         with self._history_lock:
             self.history.append({"role": "user", "content": user_prompt, "ts": ts})
-            self.history.append({"role": "assistant", "content": reply_text, "tools": tools_run, "ts": ts})
+            # shortcut: an answer cut before its first word keeps the notice alone, as nothing else is honest.
+            self.history.append({"role": "assistant", "content": answer_text or reply_text, "tools": tools_run, "ts": ts})
         self._save_history()
 
         # Muse Daily Log & Asynchronous Jev Memory Triage
@@ -1468,12 +1603,22 @@ class KurekEngine:
             except Exception as e:
                 print(f"[Kurek] TTS error: {e}")
 
+        if cut_notice and sentence_count > 0 and not self._cancel_requested:
+            self._queue_sentence(cut_notice, cut_notice, sentence_count, mute_speaker=mute_speaker,
+                                 callback=callback, stream_audio=stream_audio)
+            sentence_count += 1
+
         if callback:
             if stream_audio:
-                # Let queued sentence audio reach the phone before "done".
-                self.tts.wait_stream(timeout=60)
+                # Every queued sentence's audio reaches the phone before "done": wait while sentences are
+                # still being synthesized and sent; a cancel or TTS_STALL_S without progress ends the wait.
+                if not self._wait_speech(lambda: not self.tts.wait_stream(timeout=0.05),
+                                         lambda: self._cancel_requested) and not self._cancel_requested:
+                    print(f"[Kurek Remote] Phone audio made no progress for {TTS_STALL_S:g} s; sending done without the rest.", flush=True)
             try:
                 done_payload = {"type": "done", "reply": reply_text}
+                if truncated:
+                    done_payload["truncated"] = truncated
                 if stream_audio and sentence_count == 0 and reply_text:
                     clean_reply = self.sanitize_text_for_speech(reply_text)
                     audio_bytes = self.synthesize_speech_bytes(clean_reply)
@@ -1548,9 +1693,9 @@ class KurekEngine:
         text = re.sub(r'https?://\S+', '', text)
         text = re.sub(r'\bwww\.[a-zA-Z0-9.-]+\S*', '', text)
         text = re.sub(r'\b[a-zA-Z0-9.-]+\.(?:com|org|net|gov|edu|io|co|ai|si|de|uk)/\S*', '', text)
-        # 3. Strip code blocks and inline code
+        # 3. Strip code blocks; inline code keeps its text, only the backticks go
         text = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
-        text = re.sub(r'`[^`]*`', '', text)
+        text = re.sub(r'`([^`]*)`', r'\1', text)
         # 4. Strip markdown syntax symbols
         text = re.sub(r'[*#_`~>|]', '', text)
         # 5. Clean list bullets and numbering
@@ -1712,8 +1857,8 @@ class KurekHTTPHandler(BaseHTTPRequestHandler):
     force_remote_client: bool | None = None
     # Socket timeout for each read and write (StreamRequestHandler.setup applies it): a request that
     # stops arriving is dropped after 30 s. An SSE reply is not cut by gaps: between events no socket
-    # call is pending. Events go out in 16 KB slices, each its own send, so the stream ends only when
-    # the phone accepts nothing for 30 s, however large the event (a sentence's audio).
+    # call is pending. Events go out in 16 KB slices, each its own send, so the stream ends only when the
+    # phone accepts nothing for SSE_WRITE_STALL_FACTOR x 30 s = 120 s, however large the event (a sentence's audio).
     timeout = 30
 
     def log_message(self, format, *args):
@@ -1891,6 +2036,9 @@ class KurekHTTPHandler(BaseHTTPRequestHandler):
             # unterminated body (no Content-Length) after the stream ends.
             self.send_header("Connection", "close")
             self.end_headers()
+            # The request is fully read; only writes follow. A phone that is briefly frozen or on a weak
+            # link gets SSE_WRITE_STALL_FACTOR x the read timeout to accept the next bytes.
+            self.connection.settimeout(self.timeout * SSE_WRITE_STALL_FACTOR)
 
             stream_lock = threading.Lock()
             finished = threading.Event()  # set by "done", a failed write, or the end of the turn
@@ -1924,6 +2072,7 @@ class KurekHTTPHandler(BaseHTTPRequestHandler):
             heartbeat = threading.Thread(target=_heartbeat, name="kurek-sse-heartbeat", daemon=True)
             heartbeat.start()
             is_remote = not self._peer_is_loopback()
+            _PHONE_STREAMS.add(self.connection)
             try:
                 # Execute query synchronously inside this HTTP thread so the SSE connection stays open
                 self.engine.handle_text_query(
@@ -1934,8 +2083,9 @@ class KurekHTTPHandler(BaseHTTPRequestHandler):
                     stream_audio=stream_audio,
                 )
             finally:
+                _PHONE_STREAMS.discard(self.connection)
                 finished.set()
-                heartbeat.join()  # bounded: a pending write gives up after KurekHTTPHandler.timeout
+                heartbeat.join()  # bounded: a pending write gives up after SSE_WRITE_STALL_FACTOR x KurekHTTPHandler.timeout
             return
 
         self.send_response(404)

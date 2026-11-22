@@ -262,7 +262,7 @@ Full details and how to report issues: **[SECURITY.md](SECURITY.md)**.
 - **Token:** if the remote token is missing or shorter than 32 characters, the daemon **refuses** to bind remotely. Non-loopback requests need `Authorization: Bearer <token>`, compared in constant time (`hmac.compare_digest`).
 - **Browser requests:** cross-origin/CSRF requests carrying an `Origin` header are rejected, and there is no `CORS *`.
 - **Body limit:** request bodies are capped at 64 KB.
-- **Slow requests:** a request that stops arriving for 30 s is dropped; a running phone stream ends only if the phone accepts nothing for 30 s.
+- **Slow requests:** a request that stops arriving for 30 s is dropped; a running phone stream ends only if the phone accepts nothing for 120 s.
 - **Exec tools:** remote prompts can't use exec-capable tools (`desktop_control`, `code_helper`, `dev_agent`) unless `KUREK_REMOTE_ALLOW_EXEC=1`.
 - **Phone confirmations:** a remote client with the token can confirm pending confirmations, as described above. Treat the token like a password, and rotate it (`openssl rand -hex 32`) if it was ever shared or shipped in a build.
 - **Local access:** the loopback API is unauthenticated by design. Any local process can call it.
@@ -297,6 +297,7 @@ The older `KUREK_UNRESTRICTED_SHELL` / `KUREK_ALLOW_SHELL` variables no longer e
 - **Not offline:** reasoning (DeepSeek-Flash) needs internet. Speech-to-text falls back to local `faster-whisper`, and voice falls back from xAI to OpenRouter, then Gemini (voice Charon; the free tier allows only a few sentences a minute, so longer replies can lose sentences), then the robotic `spd-say` if a synthesizer is installed. Live voice needs xAI directly.
 - **Desktop scope:** Hyprland/Omarchy comes first. Other Wayland compositors need their own keybinds, and the Hyprland-specific window actions won't apply there.
 - **Timed-out tools keep running:** they can't be killed. After 120 s Kurek reports the timeout, but the tool may finish in the background.
+- **Background messages wait:** resource alerts, finished jobs and screen-watch comments are spoken only when no reply, prompt or recording is in progress; after 5 minutes they become a notification instead.
 - **Confirmation wording:** after a "yes", Kurek replies "Confirmed, doing it now." as the action starts; a failure is logged and shown as a notification.
 - **Memory headroom:** the service can run close to `MemoryHigh=512M` with faster-whisper and Chromium loaded. If it exceeds `MemoryMax=600M`, systemd restarts it, and an in-flight request is dropped.
 - **Local tool permissions:** tools run with your user's permissions. Creating files is unrestricted, and deleting needs confirmation.

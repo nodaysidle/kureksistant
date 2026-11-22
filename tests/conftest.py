@@ -80,3 +80,19 @@ def _pooled_sessions_follow_requests_post(monkeypatch):
     for mod in (stt, web_search, llm_client):
         # setitem on the instance dict: the undo deletes the key instead of leaving a bound method behind.
         monkeypatch.setitem(vars(mod._HTTP), "post", lambda *a, **k: requests.post(*a, **k))
+
+
+@pytest.fixture(autouse=True)
+def _isolated_runtime_dir(tmp_path_factory, monkeypatch):
+    """XDG_RUNTIME_DIR is a private per-test temp dir, so no test can reach the live daemon's kurek.sock
+    or its mpv (kurek_mpv.sock, e.g. through the real TTSPlayer.stop()), whatever env pytest starts from."""
+    from core import mpv_sink
+
+    run_dir = tmp_path_factory.mktemp("run")  # short path: AF_UNIX socket paths are limited to 108 bytes
+    run_dir.chmod(0o700)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(run_dir))
+    monkeypatch.setattr(mpv_sink, "_GLOBAL_SINK", None)  # the shared sink resolves its socket in this dir
+    yield
+    sink = mpv_sink._GLOBAL_SINK
+    if isinstance(sink, mpv_sink.MpvPipeWireSink):
+        sink.shutdown()  # an mpv this test started ends with it instead of piling up until exit

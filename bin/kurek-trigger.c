@@ -19,6 +19,7 @@
 #define CONNECT_TIMEOUT_MS 5000
 #define CONNECT_POLL_MS 100
 #define IO_TIMEOUT_USEC 500000
+#define MAX_PROMPT_BYTES (64 * 1024) /* the daemon's HTTP body cap: longer is refused, never cut */
 
 /* Escape src into dest as a JSON string body (no surrounding quotes).
  * Returns 0 on success, -1 if dest is too small.
@@ -239,41 +240,82 @@ static void try_start_daemon(void) {
     }
 }
 
-static int build_message(char *msg, size_t msg_size, const char *action, int argc, char **argv) {
+/* Build the JSON line for the daemon in a malloc'd buffer (caller frees). The prompt (args joined by
+ * one space) is never cut: over MAX_PROMPT_BYTES, or on any failure, NULL. *prompt_len gets its length.
+ */
+static char *build_message(const char *action, int argc, char **argv, size_t *prompt_len) {
     char action_esc[256];
+    *prompt_len = 0;
     if (json_escape(action, action_esc, sizeof(action_esc)) != 0) {
-        return -1;
+        return NULL;
     }
 
     if (strcmp(action, "prompt") == 0 && argc >= 3) {
-        char prompt_buf[4096];
-        size_t offset = 0;
-        prompt_buf[0] = '\0';
+        size_t len = 0;
         for (int i = 2; i < argc; i++) {
-            size_t len = strlen(argv[i]);
-            if (offset + len + 2 >= sizeof(prompt_buf)) {
-                break;
-            }
-            if (offset > 0) {
-                prompt_buf[offset++] = ' ';
-            }
-            memcpy(prompt_buf + offset, argv[i], len);
-            offset += len;
+            len += strlen(argv[i]) + (i > 2 ? 1 : 0);
         }
-        prompt_buf[offset] = '\0';
+        *prompt_len = len;
+        if (len > MAX_PROMPT_BYTES) {
+            return NULL;
+        }
 
-        char prompt_esc[6144];
-        if (json_escape(prompt_buf, prompt_esc, sizeof(prompt_esc)) != 0) {
-            return -1;
+        char *joined = malloc(len + 1);
+        if (joined == NULL) {
+            return NULL;
         }
-        if (snprintf(msg, msg_size, "{\"action\":\"%s\",\"prompt\":\"%s\"}\n", action_esc, prompt_esc) >= (int)msg_size) {
-            return -1;
+        size_t offset = 0;
+        for (int i = 2; i < argc; i++) {
+            size_t arg_len = strlen(argv[i]);
+            if (offset > 0) {
+                joined[offset++] = ' ';
+            }
+            memcpy(joined + offset, argv[i], arg_len);
+            offset += arg_len;
         }
-        return 0;
+        joined[offset] = '\0';
+
+        size_t esc_size = len * 6 + 1; /* worst case: every byte becomes \u00XX */
+        char *prompt_esc = malloc(esc_size);
+        if (prompt_esc == NULL || json_escape(joined, prompt_esc, esc_size) != 0) {
+            free(prompt_esc);
+            free(joined);
+            return NULL;
+        }
+        free(joined);
+
+        size_t msg_size = len * 6 + strlen(action_esc) + 32;
+        char *msg = malloc(msg_size);
+        if (msg == NULL ||
+            snprintf(msg, msg_size, "{\"action\":\"%s\",\"prompt\":\"%s\"}\n", action_esc, prompt_esc) >= (int)msg_size) {
+            free(msg);
+            free(prompt_esc);
+            return NULL;
+        }
+        free(prompt_esc);
+        return msg;
     }
 
-    if (snprintf(msg, msg_size, "{\"action\":\"%s\"}\n", action_esc) >= (int)msg_size) {
-        return -1;
+    size_t msg_size = strlen(action_esc) + 16;
+    char *msg = malloc(msg_size);
+    if (msg == NULL || snprintf(msg, msg_size, "{\"action\":\"%s\"}\n", action_esc) >= (int)msg_size) {
+        free(msg);
+        return NULL;
+    }
+    return msg;
+}
+
+static int write_all(int fd, const char *buf, size_t len) {
+    while (len > 0) {
+        ssize_t n = write(fd, buf, len);
+        if (n <= 0) {
+            if (n < 0 && errno == EINTR) {
+                continue;
+            }
+            return -1;
+        }
+        buf += n;
+        len -= (size_t)n;
     }
     return 0;
 }
@@ -284,13 +326,27 @@ int main(int argc, char *argv[]) {
         action = argv[1];
     }
 
+    /* Built before connecting: a prompt that cannot be sent whole never starts or reaches the daemon. */
+    size_t prompt_len = 0;
+    char *msg = build_message(action, argc, argv, &prompt_len);
+    if (msg == NULL) {
+        if (prompt_len > MAX_PROMPT_BYTES) {
+            fprintf(stderr, "kurek-trigger: prompt not sent: it is %zu bytes, over the %d-byte limit\n",
+                    prompt_len, MAX_PROMPT_BYTES);
+            return 5;
+        }
+        return 3;
+    }
+
     char sock_path[512];
     if (get_sock_path(sock_path, sizeof(sock_path)) != 0) {
+        free(msg);
         return 1;
     }
 
     struct sockaddr_un addr;
     if (fill_addr(&addr, sock_path) != 0) {
+        free(msg);
         return 1;
     }
 
@@ -299,22 +355,17 @@ int main(int argc, char *argv[]) {
         try_start_daemon();
         fd = connect_with_poll(&addr, CONNECT_TIMEOUT_MS);
         if (fd < 0) {
+            free(msg);
             return 2;
         }
     }
 
-    char msg[8192];
-    if (build_message(msg, sizeof(msg), action, argc, argv) != 0) {
-        close(fd);
-        return 3;
-    }
-
-    size_t msg_len = strlen(msg);
-    ssize_t sent = write(fd, msg, msg_len);
-    if (sent < 0 || (size_t)sent != msg_len) {
+    if (write_all(fd, msg, strlen(msg)) != 0) {
+        free(msg);
         close(fd);
         return 4;
     }
+    free(msg);
 
     char resp[512];
     ssize_t n = read(fd, resp, sizeof(resp) - 1);

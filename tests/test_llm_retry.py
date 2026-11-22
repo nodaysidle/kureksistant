@@ -72,7 +72,9 @@ class _ResetAfterOutput(_Resp):
 def test_reset_after_output_is_not_retried(monkeypatch) -> None:
     calls, _slept, events = _run(monkeypatch, [_ResetAfterOutput()])
     assert len(calls) == 1
-    assert events[-1] == {"type": "done", "full_content": "Partial answer.", "reasoning_content": None}
+    assert events[-1] == {
+        "type": "done", "full_content": "Partial answer.", "reasoning_content": None, "truncated": "connection",
+    }
 
 
 def test_dropped_connection_classifier() -> None:

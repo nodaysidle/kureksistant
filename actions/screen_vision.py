@@ -214,15 +214,11 @@ def query_vision(jpeg_bytes: bytes, prompt: str) -> str:
 
 def _watch_loop(topic: str, interval: int = 4):
     global _WATCH_RUNNING, _LAST_IMAGE_HASH
-    from core.tts import create_tts_player
-    from memory.config_manager import get_xai_key
+    from core.tts import announce
     from core.llm_client import query_deepseek
 
     print(f"[Kurek Vision Watcher] Started observing topic: '{topic}'", flush=True)
-    xai_key = get_xai_key()
-    tts = create_tts_player({"tts_engine": "xai", "tts_voice": "sal", "xai_api_key": xai_key})
-
-    tts.speak(f"Watching your screen now for {topic}. I will chime in when I notice something.")
+    announce(f"Watching your screen now for {topic}. I will chime in when I notice something.")
 
     while _WATCH_RUNNING:
         try:
@@ -252,7 +248,7 @@ def _watch_loop(topic: str, interval: int = 4):
 
                 if isinstance(comment, str) and "SILENT" not in comment and len(comment.strip()) > 5:
                     print(f"[Kurek Vision Watcher] Speaking observation: {comment}", flush=True)
-                    tts.speak(comment.strip())
+                    announce(comment.strip())
 
         except Exception as e:
             print(f"[Kurek Vision Watcher] Loop notice: {e}", flush=True)
@@ -263,7 +259,7 @@ def _watch_loop(topic: str, interval: int = 4):
             time.sleep(0.5)
 
     print("[Kurek Vision Watcher] Observation stopped.", flush=True)
-    tts.speak("I've stopped watching the screen.")
+    announce("I've stopped watching the screen.")
 
 
 def screen_vision(parameters: dict, player=None, session_memory=None) -> str:
