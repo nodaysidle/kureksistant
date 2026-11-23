@@ -5,7 +5,7 @@
     <string name="terminal_desc">Open herdr on the workstation</string>
     <string name="speaker_desc">Toggle speak out loud</string>
     <string name="settings_desc">Server settings</string>
-    <string name="preset_grokbot">Open GrokBot</string>
+    <string name="preset_camera">Check camera</string>
     <string name="preset_activity">System activity</string>
     <string name="preset_projects">Projects</string>
     <string name="preset_screen">Screen</string>

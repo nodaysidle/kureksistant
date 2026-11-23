@@ -103,6 +103,7 @@ public class MainActivity extends AppCompatActivity {
         setupTts();
 
         refreshConnectionUi();
+        CameraAlertService.startIfConfigured(this);
     }
 
     /** Top bar grows under the status bar, input bar sits above the gesture bar or the keyboard. */
@@ -148,6 +149,7 @@ public class MainActivity extends AppCompatActivity {
         this.speakOutLoud = speak;
         updateSpeakerButtonUi();
         refreshConnectionUi();
+        CameraAlertService.startIfConfigured(this);
     }
 
     private void savePreferences(String h, int p, String t) {
@@ -185,7 +187,7 @@ public class MainActivity extends AppCompatActivity {
         chipLive = findViewById(R.id.chipLive);
         chipLive.setOnClickListener(v -> toggleLive());
         findViewById(R.id.btnTerminal).setOnClickListener(v -> dispatchUserPrompt("Open herdr on my workstation."));
-        findViewById(R.id.chipGrokbot).setOnClickListener(v -> dispatchUserPrompt("Open Grokbot on my workstation"));
+        findViewById(R.id.chipCamera).setOnClickListener(v -> dispatchUserPrompt("Check the entrance camera right now."));
         findViewById(R.id.chipSysStatus).setOnClickListener(v -> dispatchUserPrompt("Tell me my workstation's system activity: CPU load, memory, and temperatures."));
         findViewById(R.id.chipProjects).setOnClickListener(v -> dispatchUserPrompt("List all active projects in my nodaysidle vault"));
         findViewById(R.id.chipScreen).setOnClickListener(v -> dispatchUserPrompt("Inspect what is on the workstation screen right now"));

@@ -22,6 +22,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1957,14 +1958,62 @@ class KurekHTTPHandler(BaseHTTPRequestHandler):
             return None
         return data
 
+    def _authorize_remote_bearer(self) -> bool:
+        """Require strong Bearer token (APK/Tailscale path), even on loopback."""
+        if self._peer_is_loopback() and self._loopback_csrf_blocked():
+            self._send_json(403, {"error": "Forbidden"})
+            return False
+        configured = get_remote_token()
+        if not remote_token_is_strong(configured):
+            self._send_json(401, {"error": "Unauthorized: remote token not configured"})
+            return False
+        provided = parse_bearer_token(self.headers.get("Authorization"))
+        if provided is None or not tokens_match(provided, configured):
+            self._send_json(401, {"error": "Unauthorized: invalid or missing token"})
+            return False
+        return True
+
     def do_GET(self):
-        if self.path != "/status":
-            self.send_response(404)
+        parsed = urllib.parse.urlsplit(self.path)
+        if parsed.path == "/status":
+            if not self._authorize(allow_unauth_remote_status=True):
+                return
+            self._send_json(200, {"state": self.engine.state})
+            return
+
+        if parsed.path == "/remote/alerts":
+            if not self._authorize_remote_bearer():
+                return
+            qs = urllib.parse.parse_qs(parsed.query)
+            try:
+                since_id = int((qs.get("since") or ["0"])[0])
+            except ValueError:
+                since_id = 0
+            from core.camera_watcher import get_camera_watcher
+
+            alerts = get_camera_watcher().get_alerts_since(since_id)
+            self._send_json(200, {"alerts": alerts})
+            return
+
+        if parsed.path == "/remote/camera/snapshot":
+            if not self._authorize_remote_bearer():
+                return
+            from core.camera_watcher import get_camera_watcher
+
+            jpeg = get_camera_watcher().get_latest_snapshot()
+            if not jpeg:
+                self._send_json(404, {"error": "No snapshot available"})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(jpeg)))
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
+            self.wfile.write(jpeg)
             return
-        if not self._authorize(allow_unauth_remote_status=True):
-            return
-        self._send_json(200, {"state": self.engine.state})
+
+        self.send_response(404)
+        self.end_headers()
 
     def do_OPTIONS(self):
         # No CORS: the Android app does not need browser cross-origin access.
@@ -2451,5 +2500,12 @@ if __name__ == "__main__":
                     engine.stop_listening_and_process()
 
     threading.Thread(target=silence_watchdog, daemon=True).start()
+
+    try:
+        from core.camera_watcher import start_camera_watcher_if_configured
+
+        start_camera_watcher_if_configured()
+    except Exception as exc:
+        print(f"[CameraWatcher] Startup skipped: {exc}", flush=True)
 
     run_server(engine)

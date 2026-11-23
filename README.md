@@ -15,14 +15,14 @@
 
 ---
 
-Kurek (`kurek_daemon.py`) runs quietly in the background as a systemd user service. You summon it with a middle-click, a floating one-line prompt, the `kurek` CLI, or your phone. It listens, thinks with DeepSeek-Flash, speaks back sentence by sentence with xAI Grok (voice **Sol**), and acts on your system through 27 tool modules in [`actions/`](actions/).
+Kurek (`kurek_daemon.py`) runs quietly in the background as a systemd user service. You summon it with a middle-click, a floating one-line prompt, the `kurek` CLI, or your phone. It listens, thinks with DeepSeek-Flash, speaks back sentence by sentence with xAI Grok (voice **Sol**), and acts on your system through 28 tool modules in [`actions/`](actions/).
 
 ```text
 Middle-click / SUPER+SHIFT+K / CLI / Phone
   -> listen       room-adaptive VAD (or skip straight to text)
   -> transcribe   OpenRouter Whisper -> Deepgram Nova-2 -> local faster-whisper
   -> think        DeepSeek-Flash with your rules, memory ledger, and recent chat
-  -> act          27 desktop, file, web, code, and system tools (read-only calls run in parallel)
+  -> act          28 desktop, file, web, code, camera, and system tools (read-only calls run in parallel)
   -> speak        xAI Grok (Sol) streaming sentence-by-sentence into mpv on PipeWire
 ```
 
@@ -34,13 +34,14 @@ Middle-click / SUPER+SHIFT+K / CLI / Phone
 | **Typed box** | `SUPER + SHIFT + K` opens `kurek-ask` in a tiny floating terminal for names the mic gets wrong. Empty line closes it. |
 | **Launcher** | `Super + Space`, type `Kurek`, Enter. |
 | **CLI** | `kurek [toggle\|start\|stop\|status\|prompt <text>\|logs [-f]\|doctor]` |
-| **Phone remote** | **Kurek Remote** (Android) streams prompts over Tailscale, with opt-in real-time live voice. |
+| **Phone remote** | **Kurek Remote** (Android) streams prompts over Tailscale, with opt-in real-time live voice and camera alerts. |
 
 ## What it can do
 
 - **Hyprland and desktop:** focus apps, toggle fullscreen, maximize, snap windows left/right, turn displays off, adjust volume/brightness/Wi-Fi/dark mode (with `undo`), and inspect the active window with `grim` + Gemini Flash. "Close tab" closes the tab; only an explicit "close window" kills the window.
 - **Files, clipboard, and notes:** read, organize, and search files (secret files like `.env`, `*.pem`, and `~/.ssh` are blocked), manage clipboard history without touching password-manager secrets, dictate drafts to `wl-copy`, and query your Obsidian vault.
 - **Code and projects:** read-only codebase inspection, git status across `~/dev` (`workstation_radar`), a sandboxed command runner (`run`), and background build/test watchdogs (`process_sentinel`).
+- **Home & entrance camera (`camera_watch`):** watches a local RTSP camera (such as an EZVIZ/Hikvision camera) using `yolov8n.onnx` on CPU to detect arriving vehicles inside a configurable Region of Interest while ignoring pets and parked cars. Supports live vision checks (*"Check the entrance camera"*), mute/unmute, and automatic snapshot archiving to PC and Android.
 - **Web and daily utilities:** search, Playwright browser control, weather, reminders, YouTube, and flights.
 - **Confirmations before risky actions:** destructive steps like deleting a file pause for a plain "yes" or "no" (on PC or from an authenticated phone).
 
@@ -48,7 +49,7 @@ Middle-click / SUPER+SHIFT+K / CLI / Phone
 
 - **Click-only or adaptive listening:** set `KUREK_AUTO_SUBMIT=off` so only your second click ends a recording, or use the default adaptive pause window (3.0 s + 0.3 s per second spoken). "Speak now" only appears once audio is actually flowing.
 - **Replies finish playing:** Kurek waits as long as speech is playing instead of cutting off on a fixed timer.
-- **Background alerts wait their turn:** system alerts and finished-job announcements wait until a reply or recording ends.
+- **Background alerts wait their turn:** system alerts, camera arrivals, and finished-job announcements wait until a reply or recording ends.
 - **Honest failures:** if DeepSeek stops early, Kurek appends a sentence telling you the answer is incomplete. If a tool hits its 120 s limit, it reports a timeout rather than retrying or faking success.
 
 ## Memory you control
@@ -76,7 +77,7 @@ Or download the verified release tarball from [Releases](https://github.com/noda
 
 `install_linux.sh` is safe to re-run and never overwrites `.env` or memory. It creates `.venv`, installs dependencies and Playwright Chromium, compiles `kurek-trigger`, installs `kurek` / `kurek-ask` / `kurek-trigger` to `~/.local/bin`, and sets up `kurek.service` (flags: `--no-enable`, `--dev`, `--locked`).
 
-Add your keys to `.env` (minimum: `DEEPSEEK_API_KEY` and `XAI_API_KEY`; `GEMINI_API_KEY` recommended for screen vision), then run:
+Add your keys to `.env` (minimum: `DEEPSEEK_API_KEY` and `XAI_API_KEY`; `GEMINI_API_KEY` recommended for screen and camera vision), then run:
 
 ```bash
 kurek doctor
@@ -101,6 +102,31 @@ Remote access is **off by default** (loopback only on `127.0.0.1:8790`). To pair
 3. Enter your PC's Tailscale IPv4 or MagicDNS name, port `8790`, and your token in the app settings.
 
 Remote prompts stay silent on the PC by default (`KUREK_REMOTE_LOCAL_TTS=1` opts in) and block exec-capable tools unless `KUREK_REMOTE_ALLOW_EXEC=1`. Set `KUREK_LIVE_VOICE=1` to enable real-time voice calls over `ws://<host>:8791/live` (read-only tools only; billed per minute by xAI).
+
+## Local RTSP camera watcher
+
+Opt-in and 100% local (no camera cloud required). Create `~/.config/kurek/camera.json` (`chmod 600`):
+
+```json
+{
+  "enabled": true,
+  "name": "Entrance",
+  "rtsp_url": "rtsp://admin:YOUR_CODE@192.168.1.x:554/h264_stream",
+  "roi": [0.14, 0.15, 0.72, 0.88],
+  "poll_seconds": 2.0,
+  "confidence": 0.45,
+  "confirm_frames": 2,
+  "clear_frames": 3,
+  "cooldown_seconds": 60,
+  "speak_on_pc": true,
+  "model_path": "~/.local/share/kurek/models/yolov8n.onnx"
+}
+```
+
+- **Vehicle-only filtering:** Detects COCO vehicle classes (`car`, `motorcycle`, `bus`, `truck`) inside `roi` via `onnxruntime` and ignores pets (`cat`/`dog`) and parked cars outside the zone.
+- **Arrival state machine:** Alerts once on entry (after `confirm_frames` consecutive detections following `clear_frames` clear frames) instead of spamming while a vehicle stays parked.
+- **PC & Android alerts + archiving:** Fires `notify-send` + spoken Kurek alert on the PC, pushes a `BigPictureStyle` photo notification to Kurek Remote over Tailscale (`/remote/alerts`, `/remote/camera/snapshot`), and saves timestamped snapshots to `~/Downloads/KUREK/doorcam/` on PC and `Pictures/doorcam/` on Android.
+- **On-demand control:** Tap **Check camera** in Kurek Remote or ask Kurek *"Check the entrance camera"*, *"Mute entrance alerts for an hour"*, or *"Entrance camera status"*.
 
 ## Documentation
 

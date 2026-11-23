@@ -111,11 +111,11 @@
                 android:contentDescription="@string/terminal_desc" />
 
             <TextView
-                android:id="@+id/chipGrokbot"
+                android:id="@+id/chipCamera"
                 style="@style/ChipButton"
                 android:layout_width="wrap_content"
                 android:layout_height="40dp"
-                android:text="@string/preset_grokbot" />
+                android:text="@string/preset_camera" />
 
             <TextView
                 android:id="@+id/chipSysStatus"
