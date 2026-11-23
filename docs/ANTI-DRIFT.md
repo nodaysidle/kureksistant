@@ -21,7 +21,7 @@ Read this before changing anything that reads or writes memory, rules or the pro
 
 Retired: the old personal-context store (`entries` table, `memory/long_term.json` import) and
 `~/memory/bank/`. Nothing reads them into the prompt or into recall. Names for each store are in
-[GLOSSARY.md](../GLOSSARY.md).
+[GLOSSARY.md](GLOSSARY.md).
 
 **Who wins.** The system prompt ranks the sources: rules, the user's current message, learned
 memory, reference facts and Hermes, then earlier chat and daily logs. Prompt wording alone cannot

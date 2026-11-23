@@ -54,4 +54,4 @@ Default five labels: needs-triage, needs-info, ready-for-agent, ready-for-human,
 
 ### Domain docs
 
-Single-context: root `GLOSSARY.md` + `docs/adr/` (created lazily). See `docs/agents/domain.md`.
+Single-context: `docs/GLOSSARY.md` + `docs/adr/` (created lazily). See `docs/agents/domain.md`.
