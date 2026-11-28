@@ -7,7 +7,8 @@ on:
 
 jobs:
   lint-and-smoke:
-    runs-on: ubuntu-latest
+    # shortcut: 26.04's libportaudio2 has a PulseAudio backend that fails at import with no server; when 24.04 retires, start pulseaudio in the job and set PULSE_SERVER
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
 
     steps:

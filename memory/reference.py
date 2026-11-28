@@ -1,8 +1,10 @@
 """
 memory/reference.py — the reference files Kurek reads but never rewrites.
 
-Hermes USER.md / MEMORY.md (see HERMES_* in .env), ~/MEMORY.md and the legacy
-~/ALIGNMENT_SYNTHESIS.md. The prompt gets them capped; recall searches them whole.
+Hermes USER.md (see HERMES_* in .env) and ~/MEMORY.md. The prompt gets them capped;
+recall searches them whole. Hermes MEMORY.md is never read: it is Hermes's own working
+memory and instructions, not facts about the user. ~/ALIGNMENT_SYNTHESIS.md is retired
+and never read.
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ from memory.config_manager import resolve_hermes_memory_dirs
 
 MEMORY_FILE_MAX_CHARS = int(os.environ.get("KUREK_MEMORY_FILE_MAX_CHARS", "6000"))
 
-_HERMES_FILES = ("USER.md", "MEMORY.md")
+_HERMES_FILE = "USER.md"
 _warned_truncated: set[tuple[Path, int]] = set()
 
 
@@ -38,42 +40,38 @@ def read_capped(path: Path, limit: int = MEMORY_FILE_MAX_CHARS) -> str:
 
 
 def prompt_block() -> str:
-    """Hermes [USER]/[MEMORY], then [MUSE_CORE_MEMORY] and [MUSE_ALIGNMENT_SYNTHESIS], each capped."""
+    """Hermes [USER], then [MUSE_CORE_MEMORY] (~/MEMORY.md), each capped."""
     parts = []
     if hdir := hermes_dir():
-        for fname in _HERMES_FILES:
-            fpath = hdir / fname
-            if fpath.exists():
-                try:
-                    clean = "\n".join(b.strip() for b in read_capped(fpath).split("§") if b.strip())
-                    if clean:
-                        parts.append(f"[{fname.replace('.md', '')}]\n{clean}")
-                except Exception as e:
-                    print(f"[Kurek Hermes] Error reading {fname}: {e}")
-
-    home = Path.home()
-    for tag, fpath in (("MUSE_CORE_MEMORY", home / "MEMORY.md"),
-                       ("MUSE_ALIGNMENT_SYNTHESIS", home / "ALIGNMENT_SYNTHESIS.md")):
+        fpath = hdir / _HERMES_FILE
         if fpath.exists():
             try:
-                parts.append(f"[{tag}]\n{read_capped(fpath)}")
+                clean = "\n".join(b.strip() for b in read_capped(fpath).split("§") if b.strip())
+                if clean:
+                    parts.append(f"[{_HERMES_FILE.replace('.md', '')}]\n{clean}")
             except Exception as e:
-                print(f"[Kurek Muse] Error reading ~/{fpath.name}: {e}")
+                print(f"[Kurek Hermes] Error reading {_HERMES_FILE}: {e}")
+
+    fpath = Path.home() / "MEMORY.md"
+    if fpath.exists():
+        try:
+            parts.append(f"[MUSE_CORE_MEMORY]\n{read_capped(fpath)}")
+        except Exception as e:
+            print(f"[Kurek Muse] Error reading ~/{fpath.name}: {e}")
     return "\n\n".join(parts)
 
 
 def entries() -> list[tuple[str, str]]:
-    """(label, text) for every Hermes block and every '-' line of ~/MEMORY.md, for recall."""
+    """(label, text) for every Hermes USER.md block and every '-' line of ~/MEMORY.md, for recall."""
     found = []
     if hdir := hermes_dir():
-        for fname in _HERMES_FILES:
-            fpath = hdir / fname
-            if fpath.exists():
-                try:
-                    for block in fpath.read_text(encoding="utf-8").split("§"):
-                        found.append((f"Hermes {fname}", " ".join(block.split())))
-                except Exception:
-                    pass
+        fpath = hdir / _HERMES_FILE
+        if fpath.exists():
+            try:
+                for block in fpath.read_text(encoding="utf-8").split("§"):
+                    found.append((f"Hermes {_HERMES_FILE}", " ".join(block.split())))
+            except Exception:
+                pass
 
     reference = Path.home() / "MEMORY.md"
     if reference.exists():

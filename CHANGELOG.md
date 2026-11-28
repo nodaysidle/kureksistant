@@ -7,6 +7,27 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Camera watcher (`core/camera_watcher.py`):** watches a local RTSP camera for vehicles entering the region of interest, archives timestamped snapshots to the PC and Android, and sends alerts to Kurek Remote through the Android `CameraAlertService`.
+- **Camera watcher precision:** fewer false positives, from class-agnostic NMS, geometry and exclusion-zone filters, parked-vehicle memory and directional entry checks.
+- **Helium browser support (`actions/browser_control.py`):** Helium is detected as the default browser and has its own Chromium-engine entry and profile directory, so "open the browser" works when Helium is the default.
+- **App aliases (`actions/open_app.py`):** `monstar`, `craft anything`, `cutcap`, `nodaysidle browser linux`.
+
+### Changed
+- **Default terminal, not a hardcoded one (`actions/open_app.py`, `actions/computer_settings.py`):** terminal programs (btop, htop, herdr) and the task manager open through `xdg-terminal-exec`, so they follow the system default terminal. The fallback list used only when `xdg-terminal-exec` is missing now starts with monstar instead of Ghostty; "open ghostty" still launches Ghostty itself.
+- **Kurek reads only Hermes `USER.md` (`memory/reference.py`, `core/context.py`):** Hermes `MEMORY.md` (Hermes's own working memory and instructions) and the legacy `~/ALIGNMENT_SYNTHESIS.md` no longer reach the prompt or recall, and `docs/ANTI-DRIFT.md` and `docs/GLOSSARY.md` say so.
+- **Website and file-manager aliases on Linux (`actions/open_app.py`):** netflix, instagram and tiktok open their URL in the default browser, and safari opens the default browser. explorer, file explorer and finder open the home folder with `xdg-open`, and "task manager" opens btop, instead of pointing at Firefox and Nautilus, which may not be installed.
+- **CI runs on `ubuntu-24.04` (`.github/workflows/ci.yml`):** the PortAudio package on Ubuntu 26.04 has a PulseAudio backend that fails at import when no audio server runs, which stopped test collection on `ubuntu-latest`.
+
+### Fixed
+- **"Open btop" and "open htop" (`actions/open_app.py`):** they were started without a terminal, so nothing appeared while Kurek reported success. A terminal program that is not installed now reports failure.
+- **Aliases with arguments (`actions/open_app.py`):** an alias such as `cutcap open` or `libreoffice --writer` is launched as a command with arguments instead of being looked up as one program name.
+- **Hyprland window commands on a Lua-config Hyprland (`actions/open_app.py`, `actions/computer_control.py`, `actions/computer_settings.py`):** old-style `hyprctl dispatch` calls fail to parse on Hyprland with a Lua config but still exit 0, so focus, workspace and close commands reported success and did nothing. Dispatches now use the Lua form first, fall back to the old form, and report a failed dispatch.
+- **Tests on a machine that exports its live settings (`tests/conftest.py`, `tests/test_installer_templating.py`):** `KUREK_*` variables and API keys are removed before test modules import the daemon, so import-time constants such as the recording ceiling use their defaults. The installer test shadows a system-wide `uv` with a stub instead of dropping its `PATH` directory.
+
+### Security
+- **The shell tool refuses to change the rules file (`actions/run.py`):** a command that names `rules.toml` runs only when it is plainly read-only (`cat`, `grep`, `head` and similar, no redirection, heredoc or substitution). The file tool already refused it; the shell tool did not, and an indirect write through a script or a glob is not caught.
+
 ## [0.2.5] - 2026-11-22
 
 ### Changed

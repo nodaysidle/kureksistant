@@ -8,6 +8,8 @@ import platform
 import shutil
 from pathlib import Path
 
+from actions._hypr import hypr_dispatch
+
 
 _SYSTEM = platform.system()
 
@@ -22,7 +24,7 @@ _APP_ALIASES: dict[str, dict[str, str]] = {
     "firefox":            {"Windows": "firefox",                 "Darwin": "Firefox",              "Linux": "firefox"},
     "edge":               {"Windows": "msedge",                  "Darwin": "Microsoft Edge",       "Linux": "microsoft-edge"},
     "brave":              {"Windows": "brave",                   "Darwin": "Brave Browser",        "Linux": "brave-browser"},
-    "safari":             {"Windows": "msedge",                  "Darwin": "Safari",               "Linux": "firefox"},
+    "safari":             {"Windows": "msedge",                  "Darwin": "Safari",               "Linux": "default-browser"},
     "opera":              {"Windows": "opera",                   "Darwin": "Opera",                "Linux": "opera"},
     "whatsapp":           {"Windows": "WhatsApp",                "Darwin": "WhatsApp",             "Linux": "whatsapp"},
     "telegram":           {"Windows": "Telegram",                "Darwin": "Telegram",             "Linux": "telegram"},
@@ -34,13 +36,17 @@ _APP_ALIASES: dict[str, dict[str, str]] = {
     "signal":             {"Windows": "signal",                  "Darwin": "Signal",               "Linux": "signal"},
     "spotify":            {"Windows": "Spotify",                 "Darwin": "Spotify",              "Linux": "spotify"},
     "vlc":                {"Windows": "vlc",                     "Darwin": "VLC",                  "Linux": "vlc"},
-    "netflix":            {"Windows": "Netflix",                 "Darwin": "Netflix",              "Linux": "firefox"},
+    "netflix":            {"Windows": "Netflix",                 "Darwin": "Netflix",              "Linux": "https://www.netflix.com"},
     "vscode":             {"Windows": "code",                    "Darwin": "Visual Studio Code",   "Linux": "code"},
     "visual studio code": {"Windows": "code",                    "Darwin": "Visual Studio Code",   "Linux": "code"},
     "code":               {"Windows": "code",                    "Darwin": "Visual Studio Code",   "Linux": "code"},
     "ghostty":            {"Windows": "ghostty",                 "Darwin": "Ghostty",              "Linux": "ghostty"},
     "herdr":              {"Windows": "herdr",                   "Darwin": "herdr",                "Linux": "herdr"},
-    "fish":               {"Windows": "powershell.exe",          "Darwin": "fish",                 "Linux": "ghostty -e fish"},
+    "monstar":            {"Linux": "monstar"},
+    "craft anything":     {"Linux": "craft-anything-app"},
+    "cutcap":             {"Linux": "cutcap open"},
+    "nodaysidle browser linux": {"Linux": "nodaysidle-browser"},
+    "fish":               {"Windows": "powershell.exe",          "Darwin": "fish",                 "Linux": "fish"},
     "terminal":           {"Windows": "wt",                      "Darwin": "Terminal",             "Linux": "x-terminal-emulator"},
     "cmd":                {"Windows": "cmd.exe",                 "Darwin": "Terminal",             "Linux": "bash"},
     "powershell":         {"Windows": "powershell.exe",          "Darwin": "Terminal",             "Linux": "bash"},
@@ -54,15 +60,15 @@ _APP_ALIASES: dict[str, dict[str, str]] = {
     "libreoffice":        {"Windows": "soffice",                 "Darwin": "LibreOffice",          "Linux": "libreoffice"},
     "notepad":            {"Windows": "notepad.exe",             "Darwin": "TextEdit",             "Linux": "gedit"},
     "textedit":           {"Windows": "notepad.exe",             "Darwin": "TextEdit",             "Linux": "gedit"},
-    "explorer":           {"Windows": "explorer.exe",            "Darwin": "Finder",               "Linux": "nautilus"},
-    "file explorer":      {"Windows": "explorer.exe",            "Darwin": "Finder",               "Linux": "nautilus"},
-    "finder":             {"Windows": "explorer.exe",            "Darwin": "Finder",               "Linux": "nautilus"},
-    "task manager":       {"Windows": "taskmgr.exe",             "Darwin": "Activity Monitor",     "Linux": "gnome-system-monitor"},
+    "explorer":           {"Windows": "explorer.exe",            "Darwin": "Finder",               "Linux": str(Path.home())},
+    "file explorer":      {"Windows": "explorer.exe",            "Darwin": "Finder",               "Linux": str(Path.home())},
+    "finder":             {"Windows": "explorer.exe",            "Darwin": "Finder",               "Linux": str(Path.home())},
+    "task manager":       {"Windows": "taskmgr.exe",             "Darwin": "Activity Monitor",     "Linux": "btop"},
     "settings":           {"Windows": "ms-settings:",            "Darwin": "System Preferences",   "Linux": "gnome-control-center"},
     "calculator":         {"Windows": "calc.exe",                "Darwin": "Calculator",           "Linux": "gnome-calculator"},
     "paint":              {"Windows": "mspaint.exe",             "Darwin": "Preview",              "Linux": "gimp"},
-    "instagram":          {"Windows": "Instagram",               "Darwin": "Instagram",            "Linux": "firefox"},
-    "tiktok":             {"Windows": "TikTok",                  "Darwin": "TikTok",               "Linux": "firefox"},
+    "instagram":          {"Windows": "Instagram",               "Darwin": "Instagram",            "Linux": "https://www.instagram.com"},
+    "tiktok":             {"Windows": "TikTok",                  "Darwin": "TikTok",               "Linux": "https://www.tiktok.com"},
     "notion":             {"Windows": "Notion",                  "Darwin": "Notion",               "Linux": "notion"},
     "obsidian":           {"Windows": "Obsidian",                "Darwin": "Obsidian",             "Linux": "obsidian"},
     "capcut":             {"Windows": "CapCut",                  "Darwin": "CapCut",               "Linux": "capcut"},
@@ -147,7 +153,7 @@ def _launch_macos(app_name: str) -> bool:
 
 
 _LINUX_TERMINAL_FALLBACKS = [
-    "ghostty", "herdr", "alacritty", "kitty", "foot", "wezterm",
+    "monstar", "ghostty", "alacritty", "kitty", "foot", "wezterm",
     "x-terminal-emulator", "gnome-terminal", "konsole", "xfce4-terminal", "xterm",
 ]
 
@@ -176,12 +182,16 @@ def _focus_hyprland_app(app_query: str) -> bool:
             return False
 
         ws_id = match.get("workspace", {}).get("id")
+        done = True
         if ws_id is not None:
-            subprocess.run(["hyprctl", "dispatch", "workspace", str(ws_id)], capture_output=True, timeout=2.0)
+            done = hypr_dispatch(f"hl.dsp.focus({{ workspace = {int(ws_id)} }})", ["workspace", str(ws_id)])
         addr = match.get("address")
         if addr:
-            subprocess.run(["hyprctl", "dispatch", "focuswindow", f"address:{addr}"], capture_output=True, timeout=2.0)
-        return True
+            done = hypr_dispatch(f"hl.dsp.focus({{ window = {json.dumps(f'address:{addr}')} }})",
+                                 ["focuswindow", f"address:{addr}"]) and done
+        if not done:
+            print(f"[open_app] Hyprland did not accept the focus request for {app_query!r}")
+        return done
     except Exception as e:
         print(f"[open_app] Hyprland focus check failed: {e}")
         return False
@@ -225,6 +235,9 @@ def _find_linux_desktop_file(app_name: str) -> Path | None:
 
 
 _GENERIC_TERMINAL_NAMES = ("terminal", "x-terminal-emulator", "shell", "bash", "gnome-terminal")
+_TERMINAL_PROGRAMS = ("btop", "htop", "herdr")
+# Aliases that carry arguments ("cutcap open"): a bare which() on the whole string finds nothing.
+_ARGV_ALIASES = {v["Linux"] for v in _APP_ALIASES.values() if " " in v.get("Linux", "")}
 
 
 def _launch_default_terminal(command: list[str] | None = None) -> bool:
@@ -254,12 +267,14 @@ def _launch_linux(app_name: str) -> bool:
     clean_name = app_name.strip().lower()
     if clean_name in _GENERIC_TERMINAL_NAMES and _launch_default_terminal():
         return True
-    if clean_name in ("fish", "ghostty -e fish") and _launch_default_terminal([shutil.which("fish") or "fish"]):
+    if clean_name == "fish" and _launch_default_terminal([shutil.which("fish") or "fish"]):
         return True
-    # herdr is a TUI: run it inside the default terminal (Ghostty here), not as a bare window.
-    if clean_name == "herdr" and _launch_default_terminal([shutil.which("herdr") or "herdr"]):
-        return True
-    if clean_name in ("terminal", "x-terminal-emulator", "ghostty", "herdr", "shell", "bash", "gnome-terminal"):
+    # TUIs have no window of their own: run them inside the default terminal.
+    if clean_name in _TERMINAL_PROGRAMS:
+        exe = shutil.which(clean_name)
+        if exe and _launch_default_terminal([exe]):
+            return True
+    if clean_name in _GENERIC_TERMINAL_NAMES:
         for term in _LINUX_TERMINAL_FALLBACKS:
             if shutil.which(term):
                 try:
@@ -276,7 +291,7 @@ def _launch_linux(app_name: str) -> bool:
                 except Exception:
                     continue
 
-    if clean_name in ("fish", "ghostty -e fish"):
+    if clean_name == "fish":
         for term in _LINUX_TERMINAL_FALLBACKS:
             if shutil.which(term):
                 fish_bin = shutil.which("fish") or "fish"
@@ -293,6 +308,33 @@ def _launch_linux(app_name: str) -> bool:
                     return True
                 except Exception:
                     continue
+
+    if app_name in _ARGV_ALIASES and shutil.which(app_name.split()[0]):
+        try:
+            subprocess.Popen(
+                app_name.split(),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            time.sleep(1.0)
+            _focus_hyprland_app(app_name)
+            return True
+        except Exception:
+            pass
+
+    # The default browser itself, no page: launch the desktop entry xdg-settings reports.
+    if clean_name == "default-browser":
+        try:
+            entry = subprocess.run(
+                ["xdg-settings", "get", "default-web-browser"],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+            if entry and subprocess.run(["gtk-launch", entry], capture_output=True, timeout=5).returncode == 0:
+                return True
+        except Exception:
+            pass
 
     # 3. Direct binary check (including camelCase / kebab-case splits)
     candidates = [

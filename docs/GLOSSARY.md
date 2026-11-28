@@ -40,7 +40,7 @@ A hand-written sheet of who the user is, their setup and their projects. Kurek r
 _Avoid_: Core memory, Muse core
 
 **Hermes memory**:
-Notes kept by Hermes, another of the user's agents. Kurek reads them and never adds to them.
+Notes kept by Hermes, another of the user's agents. Kurek reads only its `USER.md` profile of the user and never adds to it. Hermes's own `MEMORY.md` is not read.
 
 **Project**:
 One of the user's git repositories under `~/dev/nodaysidle`, called by its portfolio name. Nothing else counts as a project.

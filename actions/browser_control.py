@@ -78,6 +78,7 @@ def _real_profile_dir(browser: str) -> str:
                 "Brave-Browser" if shutil.which("brave-browser") or shutil.which("brave") else "Brave-Origin"
             )],
             "vivaldi":  [cfg / "vivaldi"],
+            "helium":   [cfg / "net.imput.helium"],
             "opera":    [cfg / "opera"],
             "operagx":  [cfg / "opera-gx"],
         }
@@ -151,6 +152,7 @@ _BROWSER_SPECS: dict[str, dict] = {
         "operagx":  {"engine": "chromium", "channel": None, "bins": ["opera", "opera-stable"]},
         "brave":    {"engine": "chromium", "channel": None, "bins": ["brave-browser", "brave", "brave-origin"]},
         "vivaldi":  {"engine": "chromium", "channel": None, "bins": ["vivaldi-stable", "vivaldi"]},
+        "helium":   {"engine": "chromium", "channel": None, "bins": ["helium-browser", "helium"]},
         "safari":   None,
     },
 }
@@ -230,7 +232,7 @@ def _detect_default_browser() -> str:
                     ["omarchy-cmd-default-browser"],
                     capture_output=True, text=True, timeout=5,
                 ).stdout.lower()
-            for kw in ("firefox", "opera", "brave", "vivaldi", "chrome", "edge"):
+            for kw in ("firefox", "opera", "brave", "vivaldi", "helium", "chrome", "edge"):
                 if kw in out:
                     return kw
     except Exception:
@@ -967,7 +969,7 @@ TOOL = {
             },
             "browser": {
                 "type": "STRING",
-                "description": "Target browser: chrome | edge | firefox | opera | operagx | brave | vivaldi | safari. Omit to use the currently active browser."
+                "description": "Target browser: chrome | edge | firefox | opera | operagx | brave | vivaldi | helium | safari. Omit to use the currently active browser."
             },
             "url": {
                 "type": "STRING",

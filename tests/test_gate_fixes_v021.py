@@ -54,7 +54,7 @@ def test_maximize_uses_fullscreen_mode_1_on_hyprland(monkeypatch):
     monkeypatch.setattr(computer_settings, "_is_hyprland", lambda: True)
     monkeypatch.setattr(computer_settings.subprocess, "run", run)
     computer_settings.maximize_window()
-    assert ["hyprctl", "dispatch", "fullscreen", "1"] in run.calls
+    assert run.calls == [["hyprctl", "dispatch", 'hl.dsp.window.fullscreen({ mode = "maximized" })']]
 
 
 def test_close_tab_uses_ctrl_w_and_close_window_uses_killactive(monkeypatch):
@@ -72,7 +72,7 @@ def test_close_tab_uses_ctrl_w_and_close_window_uses_killactive(monkeypatch):
     computer_settings.close_tab()
     assert keys == [("ctrl", "w")] and run.calls == []
     computer_settings.close_window()
-    assert run.calls == [["hyprctl", "dispatch", "killactive"]]
+    assert run.calls == [["hyprctl", "dispatch", "hl.dsp.window.close()"]]
 
 
 @pytest.mark.parametrize("phrase,action", [
@@ -89,10 +89,9 @@ def _assert_valid_hypr(calls):
     for c in calls:
         assert c[0] == "hyprctl"
         assert "eval" not in c
-        assert not any("hl.dsp" in part for part in c)
     disp = [c for c in calls if c[:2] == ["hyprctl", "dispatch"]]
-    assert ["hyprctl", "dispatch", "workspace", "3"] in disp
-    assert ["hyprctl", "dispatch", "focuswindow", "address:0xabc"] in disp
+    assert ["hyprctl", "dispatch", "hl.dsp.focus({ workspace = 3 })"] in disp
+    assert ["hyprctl", "dispatch", 'hl.dsp.focus({ window = "address:0xabc" })'] in disp
 
 
 def test_open_app_focus_uses_valid_dispatchers(monkeypatch):
@@ -120,8 +119,8 @@ def test_open_app_focus_uses_valid_dispatchers(monkeypatch):
 def test_computer_control_source_has_no_invalid_hypr_syntax():
     import inspect
     src = inspect.getsource(computer_control._focus_window)
-    assert "hl.dsp" not in src and '"eval"' not in src
-    assert '"focuswindow"' in src
+    assert '"eval"' not in src
+    assert "hypr_dispatch(" in src and '"focuswindow"' in src
 
 
 def test_timed_out_tool_is_not_success_and_not_retried():
@@ -171,13 +170,11 @@ def test_hyprland_snap_is_real_half_screen(monkeypatch, side, x):
     monkeypatch.setattr(computer_settings, "_is_hyprland", lambda: True)
     monkeypatch.setattr(computer_settings.subprocess, "run", fake_run)
     (computer_settings.snap_left if side == "left" else computer_settings.snap_right)()
-    batch = [c for c in calls if c[:2] == ["hyprctl", "--batch"]]
-    assert batch, calls
-    b = batch[0][2]
-    assert "movewindow" not in b
-    assert "dispatch setfloating active" in b
-    assert "dispatch resizeactive exact 1270 1410" in b
-    assert f"dispatch moveactive exact {x} 30" in b
+    disp = [c[2] for c in calls if c[:2] == ["hyprctl", "dispatch"]]
+    assert not any("movewindow" in d for d in disp)
+    assert disp == ['hl.dsp.window.float({ action = "set" })',
+                    "hl.dsp.window.resize({ x = 1270, y = 1410 })",
+                    f"hl.dsp.window.move({{ x = {x}, y = 30 }})"]
 
 
 @pytest.mark.parametrize("state,target", [
@@ -205,8 +202,9 @@ def test_hyprland_fullscreen_toggles(monkeypatch, state, target):
     monkeypatch.setattr(computer_settings, "_is_hyprland", lambda: True)
     monkeypatch.setattr(computer_settings.subprocess, "run", fake_run)
     computer_settings.full_screen()
-    assert ["hyprctl", "dispatch", "fullscreenstate", target, "-1"] in calls
-    assert ["hyprctl", "dispatch", "fullscreen", "0"] not in calls
+    assert ["hyprctl", "dispatch",
+            f"hl.dsp.window.fullscreen_state({{ internal = {target}, client = -1 }})"] in calls
+    assert not any(c[:3] == ["hyprctl", "dispatch", "fullscreen"] for c in calls)
 
 
 _ASK_CLOSE = ('Not done: "close it" does not say what to close. '

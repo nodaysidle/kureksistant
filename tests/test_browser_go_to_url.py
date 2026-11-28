@@ -31,3 +31,23 @@ def test_brave_origin_is_found_and_used_as_default(monkeypatch, tmp_path) -> Non
     (tmp_path / ".config" / "BraveSoftware" / "Brave-Browser").mkdir(parents=True)
     monkeypatch.setattr(bc.Path, "home", lambda: tmp_path)
     assert bc._real_profile_dir("brave") == str(tmp_path / ".config" / "BraveSoftware" / "Brave-Origin")
+
+
+def test_helium_is_detected_and_launched_without_url(monkeypatch, tmp_path) -> None:
+    import subprocess
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(bc, "_OS", "Linux")
+    monkeypatch.setattr(bc.shutil, "which", lambda b: f"/usr/bin/{b}" if b == "helium-browser" else None)
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **_k: SimpleNamespace(stdout="helium.desktop\n"))
+    assert bc._detect_default_browser() == "helium"
+    spec = bc._resolve_browser("helium")
+    assert spec["engine"] == "chromium" and spec["exe"] == "/usr/bin/helium-browser"
+    (tmp_path / ".config" / "net.imput.helium").mkdir(parents=True)
+    monkeypatch.setattr(bc.Path, "home", lambda: tmp_path)
+    assert bc._real_profile_dir("helium") == str(tmp_path / ".config" / "net.imput.helium")
+
+    launched: list = []
+    monkeypatch.setattr(bc.subprocess, "Popen", lambda cmd, **_k: launched.append(cmd))
+    assert bc._open_native("", None) == "Opened helium."
+    assert launched == [["/usr/bin/helium-browser"]]
