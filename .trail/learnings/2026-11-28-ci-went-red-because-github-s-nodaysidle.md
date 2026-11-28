@@ -3,7 +3,7 @@ title: "CI went red because GitHub's ubuntu-latest moved to 26.04, whose PortAud
 author: Nodaysidle
 date: 2026-11-28
 branch: main
-cost: { minutes: 133, tokens: 1196636 }
+cost: { minutes: 194, tokens: 1443972 }
 id: l-3f8c86af
 scope: repo
 status: active
@@ -26,6 +26,7 @@ touches:
 2026-11-28: every hyprctl dispatch in Kurek goes through one helper that sends the Lua form first, reads the reply text, and falls back to the old form for non-Lua Hyprland. The exit code is never trusted.
 2026-11-28, owner: (1) The shell tool refuses any command that names rules.toml unless it is plainly read-only. On 2026-11-08, asked to change how it addresses the owner, the model ran a python heredoc through the shell tool and rewrote the rules file; the file tool refused that file, the shell tool had no check. (2) Kurek reads only Hermes USER.md. Hermes MEMORY.md is Hermes's own working memory: it carried a managed block of sprint-team instructions in which "Boris" is a Hermes agent, and Kurek's model received it every turn. (3) The legacy ~/ALIGNMENT_SYNTHESIS.md is no longer read at all.
 2026-11-28: (1) Kurek keeps reading the reverseduo dictionary for speech corrections. An audit suggested switching to Reverseuno's store; that was wrong. (2) Owner: the vault tool reads nodaysidle-vault, and the old nodaysidle-knowledge folder is archived. The X promo notes (x-promo-strategy, moc-x-promo, reel-clip-workflow) are a dead project and were dropped from the prompt on purpose.
+2026-11-28, owner approved: his memory-talk rule gained one sentence ("A stray word that fits nothing in the sentence is a mishearing: ignore it and answer the rest."). The stray-word eval case went from 7 of 10 to 10 of 10 and the full eval to 90 of 90. Same day: the Jev triage step uses the Liquid key and model when the server is Liquid, and the proposal queue refuses duplicates of memory, over-long text and dream-cycle proposals with no words of the user behind them.
 
 ## Tried and ruled out
 - Lazy sounddevice import in the daemon: the daemon imports sounddevice before numpy on purpose (import deadlock), so the order must stay.
@@ -39,6 +40,9 @@ touches:
 - rg and less in the read-only command set: rg --pre runs a program, less -o writes a file.
 - Pointing the vocabulary at ~/.config/reverseuno/store.json: the current Reverseuno is a Qt rewrite with no replacement dictionary (its SPEC and README say so). That store file is a leftover of the old Electron app, and using it would drop 133 of 149 corrections, including Kurek-name spellings.
 - Using Reverseuno's vocabulary keyword list: it has no replacement targets, and keyword hints reach only Deepgram, which is not the active engine.
+- Pinning the rule (repeating it after every user message): 7 of 10 before, 7 of 10 after. Undone.
+- Sending the TypeSafe key to the Liquid server: 401. Sending the Liquid key with the SDK's default model: 404, the model name there is different.
+- Refusing proposals over 300 characters: that would lose the owner's longer spoken sentences. The limit is 1500.
 
 ## Watch out
 - Collection has been failing since 2026-11-22, so nothing after that date was ever tested on CI until the pin ran.
@@ -63,3 +67,9 @@ In the code: actions/run.py (_rules_file_refusal), tests/test_run_rules_guard.py
 - A permission rule forbids reading inside the old knowledge folder; do not try.
 
 In the code: core/vocabulary.py, actions/vault_knowledge.py, core/context.py (the portfolio block), tests/test_vault_knowledge.py.
+- To test a wording without touching the owner's rules file, copy it, edit the copy, and run the eval with KUREK_RULES_FILE pointing at the copy. Only write his file after he says yes to the exact sentence, and check the written file is byte-identical to the copy that was measured.
+- A single eval run is 3 repetitions per case; one miss moves the total by one and different cases miss on different runs. Use --only <case> --reps 10 to judge one behaviour.
+- The Jev step now runs again and proposes whole sentences at low confidence, so the queue will grow; it stops accepting entries at 50.
+- The session environment, not the repo's .env, supplies TYPESAFE_BASE_URL, LIQUID_API_KEY and TYPESAFE_MODEL to the daemon.
+
+In the code: scripts/rules_eval.py, core/rules.py (KUREK_RULES_FILE), memory/config_manager.py (typesafe_client), core/proposals.py (MAX_TEXT_CHARS, the ledger guard), core/dream_cycle.py.
