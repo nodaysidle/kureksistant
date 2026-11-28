@@ -8,7 +8,7 @@ import pytest
 import core.dream_cycle as dream_cycle
 import core.proposals as proposals
 from memory import ledger
-from tests.test_core_dream_cycle import _fake_llm, home  # noqa: F401  (fixture)
+from tests.test_core_dream_cycle import _fake_llm, _log, _yesterday, home  # noqa: F401  (fixture)
 
 
 def test_propose_writes_the_type(tmp_path: Path) -> None:
@@ -40,10 +40,11 @@ def test_items_follow_their_section() -> None:
 def test_dream_sees_todays_memory_and_splits_kinds(monkeypatch, home: Path) -> None:  # noqa: F811
     ledger.append("fact", "terminal_emulator: Master Alan's terminal emulator is Ghostty.",
                   "test", key="terminal_emulator")
+    _log(home, _yesterday(), ("I have a 4K monitor", "ok"), ("read numbers digit by digit", "ok"))
     prompts = _fake_llm(monkeypatch, [
         "Dream.",
-        "## Facts about the user\n- has a 4K monitor\n"
-        "## Rules for how Kurek should behave\n- read numbers digit by digit\n",
+        "## Facts about the user\n- has a 4K monitor || I have a 4K monitor\n"
+        "## Rules for how Kurek should behave\n- read numbers digit by digit || read numbers digit by digit\n",
     ])
     res = dream_cycle.execute_dream_cycle()
     assert "Ghostty" in prompts[1], "the proposal step must see current learned memory"
@@ -57,10 +58,12 @@ def test_dream_sees_todays_memory_and_splits_kinds(monkeypatch, home: Path) -> N
 def test_dream_drops_what_memory_or_rules_already_say(monkeypatch, home: Path) -> None:  # noqa: F811
     (home / "rules.toml").write_text('[[rule]]\nid = "a"\ntext = "never push to main"\n')
     ledger.append("fact", "terminal_emulator: Master Alan's terminal emulator is Ghostty.", "test")
+    _log(home, _yesterday(), ("keep a changelog", "ok"))
     _fake_llm(monkeypatch, [
         "Dream.",
-        "## Facts about the user\n- Master Alan's terminal emulator is Ghostty\n"
-        "## Rules for how Kurek should behave\n- Never push to main.\n- keep a changelog\n",
+        "## Facts about the user\n- Master Alan's terminal emulator is Ghostty || keep a changelog\n"
+        "## Rules for how Kurek should behave\n- Never push to main. || keep a changelog\n"
+        "- keep a changelog || keep a changelog\n",
     ])
     res = dream_cycle.execute_dream_cycle()
     text = (home / "kurek_proposed_rules.md").read_text()

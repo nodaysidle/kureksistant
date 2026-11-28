@@ -10,7 +10,9 @@ Flow (runs early morning, reflects on the previous day by default):
      ~/kurek_proposed_rules.md (core/proposals.py), each marked fact or rule. It
      sees current learned memory and rules first, so anything already known or
      since corrected is not proposed again. It never writes a file that reaches
-     the prompt.
+     the prompt. A proposal needs the user's own words: the model must quote a
+     User line of the day's log, the quote is checked in code and stored as
+     "Heard (verbatim)", and a proposal without a real quote is dropped.
   5. Updates ~/ALIGNMENT_STATE.yaml when it exists.
 """
 from __future__ import annotations
@@ -95,6 +97,15 @@ def _already_known(item: str, known: str) -> bool:
     return len(flat) > 8 and flat in " ".join(known.split()).casefold()
 
 
+def _fold(text: str) -> str:
+    return " ".join(text.split()).casefold()
+
+
+def _user_turns(log: str) -> list[str]:
+    """What the user said, one folded string per turn, from the daily log's **User:** lines."""
+    return [_fold(t) for t in re.findall(r"\*\*User:\*\*(.*?)(?=\n\*\*Kurek:\*\*|\n### \[|\Z)", log, re.DOTALL)]
+
+
 def _existing_rules() -> str:
     try:
         return load_rules().render()
@@ -125,6 +136,7 @@ def execute_dream_cycle(force: bool = False, day: str | None = None) -> dict:
     daily_file = MEMORY_DIR / f"{target_day}.md"
     if daily_file.exists():
         recent_content += daily_file.read_text(encoding="utf-8")
+    user_turns = _user_turns(recent_content)  # before the fallbacks below: only the real log counts
 
     if not recent_content.strip():
         # Fallback to recent core memory
@@ -180,14 +192,14 @@ Rules the user already has. Do not repeat or rephrase any of them:
 What Kurek knows about the user TODAY (it may have been corrected after {target_day}; it wins over that day's conversation):
 {known_now or "(nothing)"}
 
-Return a concise Markdown block with exactly these two sections:
+Return a concise Markdown block with exactly these two sections. End every bullet with " || " and the user's exact words, copied from a **User:** line above:
 ## Facts about the user
-- (lasting facts: identity, setup, tools, places, preferences, one per bullet)
+- (lasting facts: identity, setup, tools, places, preferences, one per bullet) || (exact words from a **User:** line)
 
 ## Rules for how Kurek should behave
-- (standing instructions the user stated or clearly demonstrated, one per bullet)
+- (standing instructions the user stated or clearly demonstrated, one per bullet) || (exact words from a **User:** line)
 
-Leave out anything the rules or today's knowledge already say, anything they contradict (it was corrected), one-off tasks, and remarks about Kurek's own mistakes. If there is nothing new, return exactly: NONE
+Only the user's own words count: leave out anything you saw only in a **Kurek:** line. Leave out anything the rules or today's knowledge already say, anything they contradict (it was corrected), one-off tasks, and remarks about Kurek's own mistakes. If there is nothing new, return exactly: NONE
 """
     align_resp = query_deepseek(
         messages=[{"role": "user", "content": align_prompt}],
@@ -195,11 +207,23 @@ Leave out anything the rules or today's knowledge already say, anything they con
     )
     guidance = text_from_llm_response(align_resp)
     known = f"{rules_now}\n{known_now}"
-    proposed = sum(
-        propose(f"dream cycle ({target_day})", bullet, source=f"memory/{target_day}.md", kind=kind)
-        for kind, bullet in guidance_items(guidance)
-        if not _already_known(bullet, known)
-    )
+    proposed = no_quote = not_found = 0
+    for kind, bullet in guidance_items(guidance):
+        statement, _, quote = bullet.partition("||")
+        statement, quote = statement.strip(), quote.strip().strip("\"“”'").strip()
+        if _already_known(statement, known):
+            continue
+        if not quote:
+            no_quote += 1
+        elif not any(_fold(quote) in turn for turn in user_turns):
+            not_found += 1
+        else:
+            proposed += propose(f"dream cycle ({target_day})", statement, heard=quote,
+                                source=f"memory/{target_day}.md", kind=kind)
+    if no_quote or not_found:
+        print(f"[Muse Dream] dropped {no_quote + not_found} proposal(s) without the user's own words: "
+              f"{no_quote} with no quote, {not_found} whose quote is not in a User line of "
+              f"memory/{target_day}.md", flush=True)
     print(f"[Muse Dream] 📝 {proposed} proposal(s) written to {PROPOSALS_PATH.name}", flush=True)
 
     # 5. Update companion YAML (only if the user created it)

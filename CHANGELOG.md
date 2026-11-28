@@ -8,6 +8,9 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- **No proposal for what memory already holds (`core/proposals.py`, `actions/memory_tool.py`):** `propose` refuses text that is an active ledger row (whitespace and case ignored, with or without its `key: ` prefix). `manage_memory` no longer proposes a boundary it has just saved to the ledger, which was the source of those duplicates.
+- **No cut-off proposals (`core/proposals.py`):** entries were sliced to 300 characters, so a long sentence was stored as a fragment with nothing logged. The limit (`MAX_TEXT_CHARS`) is now 1500 characters, and text over it is refused with a logged warning that names the limit instead of being stored cut.
+- **Dream cycle proposes only what the user said (`core/dream_cycle.py`):** every proposal must quote the user's own words from a User line of that day's log; the quote is checked in code and stored as `Heard (verbatim)`. Proposals with no quote, or a quote found only in Kurek's replies or nowhere, are dropped and the count is logged.
 - **Jev triage on the Liquid server (`memory/config_manager.py`):** when `TYPESAFE_BASE_URL` points at `api.liquid.ai`, the client uses `LIQUID_API_KEY` and the model from `TYPESAFE_DEFAULT_MODEL` or `TYPESAFE_MODEL`. A TypeSafe key got 401 there and the SDK's default model 404, so memory proposals from speech were silently off.
 
 ## [0.2.6] - 2026-11-28
