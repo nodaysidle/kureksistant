@@ -7,7 +7,6 @@ and the daily logs of past conversations. Hermes files are read only, never writ
 import re
 from datetime import datetime
 
-from core.proposals import propose
 from memory import ledger, recall_index, reference
 
 
@@ -121,11 +120,6 @@ def manage_memory(parameters: dict, **kwargs) -> str:
         )
     except ledger.LedgerError as e:
         return f"Nothing was saved: {e}."
-
-    # A hard boundary is only proposed; the user promotes it to rules.toml
-    if jev_meta and jev_meta.get("kind") == "boundary":
-        if propose("manage_memory (jev boundary)", f"{key}: {value}", source="manage_memory tool call"):
-            print("[Memory Tool] Boundary proposed in kurek_proposed_rules.md.")
 
     return f"Remembered: {kind}/{key} = {value} (saved as memory #{memory_id})."
 

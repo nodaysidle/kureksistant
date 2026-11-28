@@ -32,12 +32,13 @@ def test_execute_dream_cycle_handles_str_dict_none(monkeypatch, tmp_path: Path) 
     from datetime import datetime
 
     today = datetime.now().strftime("%Y-%m-%d")
-    (memory / f"{today}.md").write_text("Built the streaming TTS path.\n", encoding="utf-8")
+    (memory / f"{today}.md").write_text(
+        "\n### [10:00:00] turn\n**User:** Prefer concise replies\n**Kurek:** ok\n", encoding="utf-8")
 
     responses = iter(
         [
             "Atmospheric dream prose about the workstation.",
-            {"content": "- Prefer concise replies\n"},
+            {"content": "- Prefer concise replies || Prefer concise replies\n"},
         ]
     )
 

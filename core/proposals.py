@@ -17,9 +17,11 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
+from memory import ledger
+
 PROPOSALS_PATH = Path.home() / "kurek_proposed_rules.md"
 MAX_PENDING = 50
-MAX_TEXT_CHARS = 300
+MAX_TEXT_CHARS = 1500  # a long spoken paragraph fits whole; the old 300 cut real sentences
 
 KINDS = ("rule", "fact")
 
@@ -29,18 +31,47 @@ _ENTRY = re.compile(r"^## (P-\d{4}-\d{2}-\d{2}-\d{2}) · (\w+)\b.*$", re.MULTILI
 
 
 def _one_line(text: str) -> str:
-    """Collapse to a single bounded line so source text can't forge entry headings."""
-    return " ".join(str(text).split())[:MAX_TEXT_CHARS]
+    """Collapse to a single line so source text can't forge entry headings."""
+    return " ".join(str(text).split())
+
+
+def _fold(text: str) -> str:
+    return _one_line(text).casefold()
+
+
+def _in_ledger(rule: str) -> bool:
+    """True when the ledger already holds this text as an active row, with or without its `key: `."""
+    want = _fold(rule)
+    try:
+        rows = ledger.active()
+    except Exception as e:  # a broken ledger must not stop proposing
+        print(f"[Proposals] could not read the ledger to check for duplicates: {e}", flush=True)
+        return False
+    for row in rows:
+        if row["kind"] == "retract":  # a retraction row is the reason it was withdrawn, not a memory
+            continue
+        text, key = _fold(row["text"]), row["key"]
+        if want == text or (key and text.startswith(f"{key}: ") and want == text[len(key) + 2:]):
+            return True
+    return False
 
 
 def propose(proposed_by: str, rule: str, *, source: str, heard: str | None = None,
             path: Path | None = None, kind: str = "rule") -> bool:
-    """Append a pending proposal. False when empty, duplicate or the queue is full."""
+    """Append a pending proposal. False when empty, too long, already known, duplicate or the queue is full."""
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {KINDS}")
     path = path or PROPOSALS_PATH
     rule = _one_line(rule).lstrip("-*• ").strip()
     if not rule:
+        return False
+    # Storing a cut sentence would let a fragment be approved as written (ANTI-DRIFT rule 5).
+    for label, text in (("proposal", rule), ("heard quote", _one_line(heard or ""))):
+        if len(text) > MAX_TEXT_CHARS:
+            print(f"[Proposals] refused: {label} is {len(text)} chars, over the {MAX_TEXT_CHARS}-char "
+                  f"limit (MAX_TEXT_CHARS); it would have been stored cut off: {text[:40]}...", flush=True)
+            return False
+    if _in_ledger(rule):
         return False
 
     with _lock:
