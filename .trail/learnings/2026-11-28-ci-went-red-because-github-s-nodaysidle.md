@@ -3,7 +3,7 @@ title: "CI went red because GitHub's ubuntu-latest moved to 26.04, whose PortAud
 author: Nodaysidle
 date: 2026-11-28
 branch: main
-cost: { minutes: 75, tokens: 938115 }
+cost: { minutes: 133, tokens: 1196636 }
 id: l-3f8c86af
 scope: repo
 status: active
@@ -25,6 +25,7 @@ touches:
 2026-11-28: pin the CI job to ubuntu-24.04. Nothing in the repo caused the failure: the last green run (2026-11-04) was on the ubuntu-24.04 image, the first red one (2026-11-22, the v0.2.5 release commit) on ubuntu-26.04. On 26.04 libportaudio2 is built with a PulseAudio backend; with no PulseAudio server, Pa_Initialize fails, and sounddevice calls it at import. 40 test modules import the daemon or the TTS module at the top, so collection stops with 40 identical errors.
 2026-11-28: every hyprctl dispatch in Kurek goes through one helper that sends the Lua form first, reads the reply text, and falls back to the old form for non-Lua Hyprland. The exit code is never trusted.
 2026-11-28, owner: (1) The shell tool refuses any command that names rules.toml unless it is plainly read-only. On 2026-11-08, asked to change how it addresses the owner, the model ran a python heredoc through the shell tool and rewrote the rules file; the file tool refused that file, the shell tool had no check. (2) Kurek reads only Hermes USER.md. Hermes MEMORY.md is Hermes's own working memory: it carried a managed block of sprint-team instructions in which "Boris" is a Hermes agent, and Kurek's model received it every turn. (3) The legacy ~/ALIGNMENT_SYNTHESIS.md is no longer read at all.
+2026-11-28: (1) Kurek keeps reading the reverseduo dictionary for speech corrections. An audit suggested switching to Reverseuno's store; that was wrong. (2) Owner: the vault tool reads nodaysidle-vault, and the old nodaysidle-knowledge folder is archived. The X promo notes (x-promo-strategy, moc-x-promo, reel-clip-workflow) are a dead project and were dropped from the prompt on purpose.
 
 ## Tried and ruled out
 - Lazy sounddevice import in the daemon: the daemon imports sounddevice before numpy on purpose (import deadlock), so the order must stay.
@@ -36,6 +37,8 @@ touches:
 - Filtering only the managed block out of Hermes MEMORY.md: the rest of that file is also Hermes's operating rules, and a future managed block would leak again. Dropping the file is the fix.
 - Importing the rules path into the shell tool: the anti-drift test forbids RULES_PATH in any action module, so the guard matches the file name in the command text instead.
 - rg and less in the read-only command set: rg --pre runs a program, less -o writes a file.
+- Pointing the vocabulary at ~/.config/reverseuno/store.json: the current Reverseuno is a Qt rewrite with no replacement dictionary (its SPEC and README say so). That store file is a leftover of the old Electron app, and using it would drop 133 of 149 corrections, including Kurek-name spellings.
+- Using Reverseuno's vocabulary keyword list: it has no replacement targets, and keyword hints reach only Deepgram, which is not the active engine.
 
 ## Watch out
 - Collection has been failing since 2026-11-22, so nothing after that date was ever tested on CI until the pin ran.
@@ -54,3 +57,9 @@ In the code: actions/open_app.py, actions/computer_control.py, actions/computer_
 - The owner's personal eval cases (~/.config/kurek/rules_eval.toml) assert his facts (terminal, city, name). Update them with the facts or the eval reports false failures.
 
 In the code: actions/run.py (_rules_file_refusal), tests/test_run_rules_guard.py, memory/reference.py, core/context.py (WHO_WINS), docs/ANTI-DRIFT.md, scripts/rules_eval.py.
+- In the current vault, read and search must stay inside wiki/ and inbox/. plans/, graft/, tools/, .raw/ and wiki/meta/ are not knowledge.
+- Page names there are Title-Case with hyphens; the model says them lowercase with spaces, so matching ignores case and treats spaces, hyphens and underscores alike.
+- A capture written to the vault's inbox/ is a tracked, uncommitted vault file until someone commits it, and the vault check reports it.
+- A permission rule forbids reading inside the old knowledge folder; do not try.
+
+In the code: core/vocabulary.py, actions/vault_knowledge.py, core/context.py (the portfolio block), tests/test_vault_knowledge.py.
