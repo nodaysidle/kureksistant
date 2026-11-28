@@ -2,7 +2,7 @@
 core/context.py — what the model sees each turn, built from every memory store.
 
 The system prompt is the persona, then [USER RULES], the portfolio anchor and the
-memory block (Hermes, ~/MEMORY.md, learned memory). WHO_WINS tells the model how
+memory block (Hermes USER.md, ~/MEMORY.md, learned memory). WHO_WINS tells the model how
 those blocks rank; the persona embeds it, and it lives here so the ranking and the
 blocks it names change together.
 """
@@ -24,7 +24,7 @@ WHO_WINS = (
     "1. [USER RULES]. "
     "2. The user's current message. If it goes against a lasting fact in [LEARNED MEMORY] (their terminal, name, city, where files go), do not act at all this turn (no tool calls, not even with the remembered value): say what memory holds, ask once whether it changed, and wait for the answer. Save the change with manage_memory (replaces=<#id>) only after they confirm. Something said only for now ('I'm in Koper today', 'use the phone tonight') you simply follow and never save. "
     "3. [LEARNED MEMORY]. "
-    "4. [MUSE_CORE_MEMORY] reference facts and Hermes [USER] / [MEMORY]. If one disagrees with learned memory, follow learned memory and tell the user in one sentence so they can fix it. "
+    "4. [MUSE_CORE_MEMORY] reference facts and Hermes [USER]. If one disagrees with learned memory, follow learned memory and tell the user in one sentence so they can fix it. "
     "5. Earlier chat turns and past conversations found by recall: what was said, never proof of what is true now. "
 )
 

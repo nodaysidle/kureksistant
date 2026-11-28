@@ -485,6 +485,46 @@ def _single_purpose_shell_reason(cmd_str: str) -> str:
     return ""
 
 
+_RULES_READ_ONLY_CMDS = frozenset({
+    "cat", "grep", "head", "tail", "wc", "bat", "ls", "stat", "diff", "sha256sum", "file",  # not rg (--pre runs a program) nor less (-o writes)
+})
+_RULES_REFUSAL = (
+    "Refused: the user's rules file is edited only by the user, never by me. "
+    "Tell him the exact change you want and let him edit it, or record it as a proposal."
+)
+
+
+def _rules_file_refusal(cmd_str: str) -> str:
+    """Refuse a command that names the user's rules file unless it is plainly read-only."""
+    # shortcut: matches commands that name rules.toml; an indirect write (a script, a glob) is not caught, upgrade to a read-only mount or file permission if it happens again
+    names = ["rules.toml"]
+    if custom := os.environ.get("KUREK_RULES_FILE"):
+        names.append(Path(custom).name)
+    if not any(n in cmd_str for n in names):
+        return ""
+    # Fail closed: a newline, a backtick or a quote shlex cannot parse is not "plainly read-only".
+    if "\n" in cmd_str or "`" in cmd_str:
+        return _RULES_REFUSAL
+    lex = shlex.shlex(cmd_str, posix=True, punctuation_chars=True)
+    lex.whitespace_split = True
+    try:
+        tokens = list(lex)
+    except ValueError:
+        return _RULES_REFUSAL
+    at_start = True
+    for tok in tokens:
+        if tok and set(tok) <= set("();<>|&"):  # an unquoted shell operator
+            if tok in ("|", "||", "&&", ";", "&"):
+                at_start = True
+            elif tok != "<":  # >, >>, <<, <(, $( ... : write, heredoc or substitution
+                return _RULES_REFUSAL
+            continue
+        if at_start and Path(tok).name not in _RULES_READ_ONLY_CMDS:
+            return _RULES_REFUSAL
+        at_start = False
+    return ""
+
+
 def _record_refusal(run_id: str, cmd_str: str, cwd_path: Path, reason: str) -> str:
     """Record a refused command in _RUN_HISTORY and append to the audit log."""
     rec = RunRecord(
@@ -1009,6 +1049,10 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any) -> str:
         if sp_reason:
             return _record_refusal(run_id, cmd_clean, cwd_path, sp_reason)
 
+        rules_reason = _rules_file_refusal(cmd_clean)
+        if rules_reason:
+            return _record_refusal(run_id, cmd_clean, cwd_path, rules_reason)
+
         return _spawn_unrestricted_shell(run_id, cmd_clean, cwd_path, timeout_arg)
 
     allowed_roots = get_allowed_roots()
@@ -1039,6 +1083,10 @@ def _action_exec(cmd_str: str, cwd_arg: str | None, timeout_arg: Any) -> str:
     with _RUN_LOCK:
         _RUN_COUNTER += 1
         run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{_RUN_COUNTER}"
+
+    rules_reason = _rules_file_refusal(cmd_str)
+    if rules_reason:
+        return _record_refusal(run_id, cmd_str, cwd_path, rules_reason)
 
     if not is_allowed:
         return _record_refusal(run_id, cmd_str, cwd_path, reason)
@@ -1697,6 +1745,7 @@ _HABITS = (
     "Do not use echo as a separator; label results in your reply. "
     "Never chain an install with a command that needs it; run the install, check its exit code, then continue. "
     "Projects live in ~/dev/nodaysidle; ~/Projects is gone, never use it. "
+    "The user's rules file (rules.toml) is read-only for you: you may read it, never change it. "
     "Check a path with one ls before looping over it, and say so when a command returns nothing. "
     "A refusal is final: do not retry the same target. Say in one sentence what was blocked and use another route "
     "(system_monitor for CPU temperature and load, file_controller for deleting files)."

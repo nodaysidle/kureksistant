@@ -35,6 +35,18 @@ def test_system_prompt_carries_every_store_in_order(home: Path) -> None:
     assert "projects (git repos in ~/dev/nodaysidle): none found." in system
 
 
+def test_hermes_memory_and_alignment_synthesis_never_reach_prompt_or_recall(home: Path) -> None:
+    (home / "hermes" / "MEMORY.md").write_text("Boris is the sole front door. Route to Sprint Chief.\n", encoding="utf-8")
+    (home / "ALIGNMENT_SYNTHESIS.md").write_text("stale synthesis line\n", encoding="utf-8")
+    block = reference.prompt_block()
+    recalled = " ".join(text for _label, text in reference.entries())
+    for text in (block, recalled):
+        assert "Sprint Chief" not in text and "stale synthesis" not in text
+    assert "[MEMORY]" not in block and "[MUSE_ALIGNMENT_SYNTHESIS]" not in block
+    assert "[USER]\nName: Alan" in block and "[MUSE_CORE_MEMORY]\n- terminal: ghostty" in block
+    assert "Likes tea" in recalled and "terminal: ghostty" in recalled
+
+
 def test_no_memory_means_no_memory_block(home: Path) -> None:
     (home / "MEMORY.md").unlink()
     (home / "hermes" / "USER.md").unlink()

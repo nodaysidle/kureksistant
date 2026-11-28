@@ -77,7 +77,7 @@ must_not_match = "#\\d+|entry|set by (you|the user)|set in memory|memory holds|g
 max_sentences = 2
 history = [
   { role = "user", content = "What did I say about my terminal two days ago?" },
-  { role = "assistant", content = "You said you don't use foot, you use Velocity, while learned memory #27 holds Ghostty. Still unresolved: memory says Ghostty, so Ghostty stands." },
+  { role = "assistant", content = "You said you don't use foot, you use Velocity, while learned memory #48 holds monstar. Still unresolved: memory says monstar, so monstar stands." },
 ]
 
 [[case]]
