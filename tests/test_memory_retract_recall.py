@@ -109,6 +109,11 @@ def _fake_typesafe(kind: str, salience: float, noul: float):
     }
 
     class Client:
+        made: list[dict] = []
+
+        def __init__(self, **kw):
+            Client.made.append(kw)
+
         def system_one(self, **_kw):
             return SimpleNamespace(answers=answers)
 
@@ -190,3 +195,29 @@ def test_prompt_shows_where_each_memory_came_from():
     assert "said in chat) coffee: black" in block
     assert "inferred from chat) city: Koper" in block
     assert "'set by the user' were confirmed by the user outside the chat" in block
+
+
+
+def test_jev_client_uses_the_liquid_key_and_model_on_the_liquid_server(monkeypatch):
+    import memory.config_manager as cm
+
+    fake = _fake_typesafe("fact", 2.0, 0.9)
+    monkeypatch.setitem(sys.modules, "typesafe_sdk", fake)
+    monkeypatch.setattr(cm, "load_api_keys", lambda *a, **k: None)
+
+    assert cm.typesafe_client() is None  # no key at all: Jev triage stays off
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ts-key")
+    monkeypatch.setenv("LIQUID_API_KEY", "liquid-key")
+    cm.typesafe_client()
+    assert fake.TypeSafeClient.made[-1] == {"api_key": "ts-key"}  # default server: the TypeSafe key
+
+    monkeypatch.setenv("TYPESAFE_BASE_URL", "https://api.liquid.ai")
+    monkeypatch.setenv("TYPESAFE_MODEL", "d1.2-ultra")
+    cm.typesafe_client()
+    assert fake.TypeSafeClient.made[-1] == {"api_key": "liquid-key", "model": "d1.2-ultra"}
+
+    monkeypatch.setenv("TYPESAFE_DEFAULT_MODEL", "d1")
+    monkeypatch.delenv("LIQUID_API_KEY")
+    cm.typesafe_client()
+    assert fake.TypeSafeClient.made[-1] == {"api_key": "ts-key", "model": "d1"}  # no Liquid key: fall back

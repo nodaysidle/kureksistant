@@ -139,13 +139,11 @@ def _as_int(value) -> int | None:
 
 def _triage_with_jev(key: str, value: str) -> dict | None:
     try:
-        import os
-        from memory.config_manager import load_api_keys
-        load_api_keys()
-        if not os.environ.get("TYPESAFE_API_KEY"):
+        from memory.config_manager import typesafe_client
+        client = typesafe_client()
+        if client is None:
             return None
-        from typesafe_sdk import TypeSafeClient, Choice, Score
-        client = TypeSafeClient()
+        from typesafe_sdk import Choice, Score
         resp = client.system_one(
             state={"key": key, "value": value},
             questions={

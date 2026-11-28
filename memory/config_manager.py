@@ -110,6 +110,23 @@ def get_typesafe_key() -> str | None:
     keys = load_api_keys()
     return keys.get("TYPESAFE_API_KEY") or keys.get("typesafe_api_key") or os.environ.get("TYPESAFE_API_KEY")
 
+
+def typesafe_client():
+    """The client for Jev triage, or None when no key is set.
+
+    When TYPESAFE_BASE_URL points at api.liquid.ai the server wants its own key (LIQUID_API_KEY)
+    and its own model names: a TypeSafe key gets 401 there and the SDK's default model 404."""
+    import os
+    load_api_keys()
+    on_liquid = "liquid.ai" in (os.environ.get("TYPESAFE_BASE_URL") or "")
+    key = (os.environ.get("LIQUID_API_KEY") if on_liquid else None) or os.environ.get("TYPESAFE_API_KEY")
+    if not key:
+        return None
+    from typesafe_sdk import TypeSafeClient
+    # The SDK only reads TYPESAFE_DEFAULT_MODEL; TYPESAFE_MODEL is the name other tools set.
+    model = os.environ.get("TYPESAFE_DEFAULT_MODEL") or os.environ.get("TYPESAFE_MODEL")
+    return TypeSafeClient(api_key=key, model=model) if model else TypeSafeClient(api_key=key)
+
 def get_openrouter_api_key() -> str | None:
     """OpenRouter key for STT and the Jev / Decision-1 decision layer (env or api_keys.json)."""
     import os
