@@ -17,6 +17,11 @@ _LIVE_ENV = (
     "DEEPGRAM_API_KEY", "TYPESAFE_API_KEY",
 )
 
+# Import-time constants (e.g. MAX_RECORD_SECONDS) are read before fixtures run, so scrub at import too.
+for _name in list(os.environ):
+    if _name.startswith("KUREK_") or _name in _LIVE_ENV:
+        del os.environ[_name]
+
 
 @pytest.fixture(autouse=True)
 def _clean_kurek_env(monkeypatch):

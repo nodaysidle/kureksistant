@@ -98,6 +98,7 @@ def test_installer_writes_install_path_and_renders_unit(tmp_path: Path) -> None:
         "pacman": "#!/bin/sh\nexit 0\n",
         "update-desktop-database": "#!/bin/sh\nexit 0\n",
         "systemctl": "#!/bin/sh\nexit 0\n",
+        "uv": "#!/bin/sh\nexit 0\n",  # shadows a real system uv so pip_install stays offline
     }.items():
         p = shim_dir / name
         p.write_text(body, encoding="utf-8")
@@ -111,11 +112,7 @@ def test_installer_writes_install_path_and_renders_unit(tmp_path: Path) -> None:
     env["HOME"] = str(home)
     env["XDG_CONFIG_HOME"] = str(config)
     env["XDG_RUNTIME_DIR"] = str(xdg_run)
-    path_parts = [str(shim_dir)]
-    for part in env.get("PATH", "").split(":"):
-        if part and not (Path(part) / "uv").exists() and "uv" not in part.lower():
-            path_parts.append(part)
-    env["PATH"] = ":".join(path_parts)
+    env["PATH"] = f"{shim_dir}:{env.get('PATH', '')}"
     env.pop("VIRTUAL_ENV", None)
 
     proc = subprocess.run(
