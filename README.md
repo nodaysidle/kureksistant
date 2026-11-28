@@ -1,89 +1,61 @@
 <div align="center">
   <img src="desktop/kurek.png" width="128" alt="Kureksistant icon">
   <h1>Kureksistant</h1>
-  <p><strong>A headless voice assistant daemon for Arch Linux, Omarchy, and Hyprland, paired with an Android remote over Tailscale.</strong></p>
-  <p>Middle-click, talk, get an answer out loud, and let it act on your desktop. No GUI on purpose.</p>
+  <p><strong>A headless voice assistant for Arch Linux and Hyprland that acts on your desktop.</strong></p>
+  <p>Summon it with a middle-click or a typed prompt, ask for something, and hear the answer. It has no GUI on purpose.</p>
 
   <p>
-    <a href="https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.5"><img src="https://img.shields.io/badge/release-v0.2.5-4c8c6b?style=flat-square" alt="Release v0.2.5"></a>
+    <a href="https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.6"><img src="https://img.shields.io/badge/release-v0.2.6-4c8c6b?style=flat-square" alt="Release v0.2.6"></a>
     <img src="https://img.shields.io/badge/Linux-Arch%20%2F%20Omarchy%20%2F%20Hyprland-1793D1?style=flat-square&logo=arch-linux&logoColor=white" alt="Arch / Omarchy / Hyprland">
-    <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+">
-    <img src="https://img.shields.io/badge/Android-Kurek%20Remote%200.2.5-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Kurek Remote 0.2.5">
+    <img src="https://img.shields.io/badge/Android-Kurek%20Remote%200.2.6-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Kurek Remote 0.2.6">
     <img src="https://img.shields.io/badge/license-CC%20BY--NC%204.0-lightgrey?style=flat-square" alt="CC BY-NC 4.0">
   </p>
 </div>
 
 ---
 
-Kurek (`kurek_daemon.py`) runs quietly in the background as a systemd user service. You summon it with a middle-click, a floating one-line prompt, the `kurek` CLI, or your phone. It listens, thinks with DeepSeek-Flash, speaks back sentence by sentence with xAI Grok (voice **Sol**), and acts on your system through 28 tool modules in [`actions/`](actions/).
+Kurek runs in the background as a systemd user service. When you summon it, it listens, transcribes what you said, thinks with DeepSeek, acts through tool modules in [`actions/`](actions/), and speaks the answer. Kurek Remote, an Android app, can send it prompts over Tailscale.
+
+Kurek is for someone who runs Arch Linux with Hyprland and wants to control windows, files and small chores by voice. The installer is written for Arch-family systems only.
+
+## How it works
 
 ```text
-Middle-click / SUPER+SHIFT+K / CLI / Phone
-  -> listen       room-adaptive VAD (or skip straight to text)
-  -> transcribe   OpenRouter Whisper -> Deepgram Nova-2 -> local faster-whisper
-  -> think        DeepSeek-Flash with your rules, memory ledger, and recent chat
-  -> act          28 desktop, file, web, code, camera, and system tools (read-only calls run in parallel)
-  -> speak        xAI Grok (Sol) streaming sentence-by-sentence into mpv on PipeWire
+Middle-click / SUPER+SHIFT+K / kurek CLI / Kurek Remote
+  -> listen       voice activity detection with room calibration, or plain text
+  -> transcribe   OpenRouter Whisper or Deepgram Nova-2 when a key is set, else local faster-whisper
+  -> think        DeepSeek-Flash, with your rules, memory ledger and recent chat
+  -> act          28 tool modules in actions/
+  -> speak        xAI Grok voice Sol, then OpenRouter, then Gemini, then spd-say
 ```
 
-## Ways to summon it
+## What you can say
 
-| Trigger | How it works |
-|---|---|
-| **Middle-click** | `mouse:274` calls `kurek-trigger toggle` over `$XDG_RUNTIME_DIR/kurek.sock`. First click starts listening, second stops and sends. |
-| **Typed box** | `SUPER + SHIFT + K` opens `kurek-ask` in a tiny floating terminal for names the mic gets wrong. Empty line closes it. |
-| **Launcher** | `Super + Space`, type `Kurek`, Enter. |
-| **CLI** | `kurek [toggle\|start\|stop\|status\|prompt <text>\|logs [-f]\|doctor]` |
-| **Phone remote** | **Kurek Remote** (Android) streams prompts over Tailscale, with opt-in real-time live voice and camera alerts. |
+- "Make this window fullscreen."
+- "Turn the volume up."
+- "What is the weather tomorrow?"
+- "Remind me in twenty minutes to stretch."
+- "Search the web for the latest Python release."
+- "Find the budget spreadsheet in my Documents folder."
+- "Show the git status of my projects."
+- "Check the entrance camera." (needs the camera watcher, see below)
 
-## What it can do
+## Requirements
 
-- **Hyprland and desktop:** focus apps, toggle fullscreen, maximize, snap windows left/right, turn displays off, adjust volume/brightness/Wi-Fi/dark mode (with `undo`), and inspect the active window with `grim` + Gemini Flash. "Close tab" closes the tab; only an explicit "close window" kills the window.
-- **Files, clipboard, and notes:** read, organize, and search files (secret files like `.env`, `*.pem`, and `~/.ssh` are blocked), manage clipboard history without touching password-manager secrets, dictate drafts to `wl-copy`, and query your Obsidian vault.
-- **Code and projects:** read-only codebase inspection, git status across `~/dev` (`workstation_radar`), a sandboxed command runner (`run`), and background build/test watchdogs (`process_sentinel`).
-- **Home & entrance camera (`camera_watch`):** watches a local RTSP camera (such as an EZVIZ/Hikvision camera) using `yolov8n.onnx` on CPU to detect arriving vehicles inside a configurable Region of Interest while ignoring pets and parked cars. Supports live vision checks (*"Check the entrance camera"*), mute/unmute, and automatic snapshot archiving to PC and Android.
-- **Web and daily utilities:** search, Playwright browser control, weather, reminders, YouTube, and flights.
-- **Confirmations before risky actions:** destructive steps like deleting a file pause for a plain "yes" or "no" (on PC or from an authenticated phone).
-
-## Built not to cut you off
-
-- **Click-only or adaptive listening:** set `KUREK_AUTO_SUBMIT=off` so only your second click ends a recording, or use the default adaptive pause window (3.0 s + 0.3 s per second spoken). "Speak now" only appears once audio is actually flowing.
-- **Replies finish playing:** Kurek waits as long as speech is playing instead of cutting off on a fixed timer.
-- **Background alerts wait their turn:** system alerts, camera arrivals, and finished-job announcements wait until a reply or recording ends.
-- **Honest failures:** if DeepSeek stops early, Kurek appends a sentence telling you the answer is incomplete. If a tool hits its 120 s limit, it reports a timeout rather than retrying or faking success.
-
-## Memory you control
-
-| Store | Owner | Role |
-|---|---|---|
-| `~/.config/kurek/rules.toml` | You, by hand | Injected verbatim as `[USER RULES]`. `pin = true` repeats a rule right after your message. No code writes this file. |
-| `~/.local/share/kurek/kurek_memory.db` | `manage_memory` | Append-only SQLite ledger. Corrections supersede old rows without deleting history. |
-| `~/kurek_proposed_rules.md` | Dream cycle / triage | Suggestions only; never read into prompts until you copy one into `rules.toml`. |
-| `~/memory/YYYY-MM-DD.md` | Daemon | Daily logs indexed with FTS5 for past-conversation recall ("what did I say two days ago?"). |
-
-Priority order: your rules, what you say right now, learned memory, reference files (`~/MEMORY.md` / Hermes), then recent chat and daily logs. Say "Kurek, fresh start" to clear only the recent chat. Deep dive: [docs/ANTI-DRIFT.md](docs/ANTI-DRIFT.md) and [docs/GLOSSARY.md](docs/GLOSSARY.md).
+- Arch Linux or an Arch-based distribution, with Hyprland on Wayland. Omarchy is the setup the installer targets.
+- PipeWire, `mpv`, `grim`, `wl-clipboard`, `libnotify` and `gcc`. The installer checks for these.
+- Python 3.10 or newer (`pyproject.toml`).
+- A microphone.
+- Keys: `DEEPSEEK_API_KEY` and `XAI_API_KEY` are needed for the default setup. `GEMINI_API_KEY` is recommended for screen and camera vision. `DEEPGRAM_API_KEY` and `OPENROUTER_API_KEY` are optional.
+- Without cloud keys, speech recognition runs locally. Speech output then falls back to `spd-say`.
 
 ## Install
 
-Requires Arch Linux (Omarchy / Hyprland recommended), Python 3.10+, `mpv`, `grim`, `wl-clipboard`, `libnotify`, and `gcc`.
-
-```bash
-git clone https://github.com/nodaysidle/kureksistant.git
-cd kureksistant
-./install_linux.sh
-```
-
-Or download the verified release tarball from [Releases](https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.5).
-
-`install_linux.sh` is safe to re-run and never overwrites `.env` or memory. It creates `.venv`, installs dependencies and Playwright Chromium, compiles `kurek-trigger`, installs `kurek` / `kurek-ask` / `kurek-trigger` to `~/.local/bin`, and sets up `kurek.service` (flags: `--no-enable`, `--dev`, `--locked`).
-
-Add your keys to `.env` (minimum: `DEEPSEEK_API_KEY` and `XAI_API_KEY`; `GEMINI_API_KEY` recommended for screen and camera vision), then run:
-
-```bash
-kurek doctor
-```
-
-### Hyprland bindings
+1. Clone the repository: `git clone https://github.com/nodaysidle/kureksistant.git && cd kureksistant`.
+2. Run `./install_linux.sh`. It creates `.venv`, installs dependencies, and sets up the `kurek.service` user unit.
+3. Add your keys to `.env`, which the installer creates from `.env.example`.
+4. Run `kurek doctor` and fix anything it reports.
+5. Add these Hyprland bindings, then reload Hyprland:
 
 ```lua
 -- ~/.config/hypr/bindings.lua
@@ -93,46 +65,34 @@ o.bind("SUPER + SHIFT + K", "Type to Kurek", "uwsm-app -- xdg-terminal-exec --ap
 o.window({ class = "^com.nodaysidle.kurek-ask$" }, { float = true, center = true, size = { 640, 90 } })
 ```
 
-## Phone remote (Kurek Remote)
+Flags, what the installer changes, and the troubleshooting steps are in [docs/INSTALL.md](docs/INSTALL.md).
 
-Remote access is **off by default** (loopback only on `127.0.0.1:8790`). To pair the Android app over Tailscale:
+## Summon it
 
-1. In `.env`, set `KUREK_REMOTE_TOKEN=$(openssl rand -hex 32)` (32+ chars required) and `KUREK_REMOTE_BIND=tailscale`, then run `systemctl --user restart kurek`.
-2. Install `kurek-remote-v0.2.5-debug.apk` from [v0.2.5](https://github.com/nodaysidle/kureksistant/releases/tag/v0.2.5), or build from [`android/`](android/) with `./gradlew :app:assembleDebug`.
-3. Enter your PC's Tailscale IPv4 or MagicDNS name, port `8790`, and your token in the app settings.
+Middle-click starts listening, and a second middle-click stops and sends. `SUPER + SHIFT + K` opens a small typed prompt for names the microphone gets wrong. The `kurek` CLI and the Kurek Remote app do the same job. Kurek is built not to cut you off while you are speaking or while a reply plays. Details are in [docs/SUMMON.md](docs/SUMMON.md) and [docs/FEATURES.md](docs/FEATURES.md).
 
-Remote prompts stay silent on the PC by default (`KUREK_REMOTE_LOCAL_TTS=1` opts in) and block exec-capable tools unless `KUREK_REMOTE_ALLOW_EXEC=1`. Set `KUREK_LIVE_VOICE=1` to enable real-time voice calls over `ws://<host>:8791/live` (read-only tools only; billed per minute by xAI).
+## Memory and rules you control
 
-## Local RTSP camera watcher
+Your rules live in a file you write by hand, and Kurek never edits it. What Kurek learns goes to an append-only ledger, and a correction supersedes an old entry without deleting it. Kurek proposes rules but never applies one until you copy it in. The full list of stores and their write rules is in [docs/ANTI-DRIFT.md](docs/ANTI-DRIFT.md).
 
-Opt-in and 100% local (no camera cloud required). Create `~/.config/kurek/camera.json` (`chmod 600`):
+## Phone remote
 
-```json
-{
-  "enabled": true,
-  "name": "Entrance",
-  "rtsp_url": "rtsp://admin:YOUR_CODE@192.168.1.x:554/h264_stream",
-  "roi": [0.14, 0.15, 0.72, 0.88],
-  "poll_seconds": 2.0,
-  "confidence": 0.45,
-  "confirm_frames": 2,
-  "clear_frames": 3,
-  "cooldown_seconds": 60,
-  "speak_on_pc": true,
-  "model_path": "~/.local/share/kurek/models/yolov8n.onnx"
-}
-```
+Kurek Remote can send prompts to the daemon over Tailscale. Remote access is off by default, so the daemon listens on loopback only until you set a token and a bind mode. Setup and the security settings are in [docs/REMOTE.md](docs/REMOTE.md).
 
-- **Vehicle-only filtering:** Detects COCO vehicle classes (`car`, `motorcycle`, `bus`, `truck`) inside `roi` via `onnxruntime` and ignores pets (`cat`/`dog`) and parked cars outside the zone.
-- **Arrival state machine:** Alerts once on entry (after `confirm_frames` consecutive detections following `clear_frames` clear frames) instead of spamming while a vehicle stays parked.
-- **PC & Android alerts + archiving:** Fires `notify-send` + spoken Kurek alert on the PC, pushes a `BigPictureStyle` photo notification to Kurek Remote over Tailscale (`/remote/alerts`, `/remote/camera/snapshot`), and saves timestamped snapshots to `~/Downloads/KUREK/doorcam/` on PC and `Pictures/doorcam/` on Android.
-- **On-demand control:** Tap **Check camera** in Kurek Remote or ask Kurek *"Check the entrance camera"*, *"Mute entrance alerts for an hour"*, or *"Entrance camera status"*.
+## Camera watcher
+
+An opt-in watcher reads a local RTSP camera, detects vehicles in a region you set, and alerts once when one arrives. Detection runs on this machine with `onnxruntime` on the CPU. Setup is in [docs/CAMERA.md](docs/CAMERA.md).
 
 ## Documentation
 
-- [docs/REFERENCE.md](docs/REFERENCE.md): full `.env` configuration, file paths, security model, troubleshooting, and stack details
+- [docs/INSTALL.md](docs/INSTALL.md): installer steps, flags, service unit, troubleshooting
+- [docs/SUMMON.md](docs/SUMMON.md): every way to start Kurek, and the `kurek` CLI
+- [docs/FEATURES.md](docs/FEATURES.md): what the tool modules do, speech timing, memory priority
+- [docs/REFERENCE.md](docs/REFERENCE.md): full `.env` configuration, file paths, security model, stack
 - [docs/ANTI-DRIFT.md](docs/ANTI-DRIFT.md): memory invariants and rule-following evaluation
 - [docs/GLOSSARY.md](docs/GLOSSARY.md): canonical names for every memory store
+- [docs/REMOTE.md](docs/REMOTE.md): Kurek Remote pairing, phone settings and live voice
+- [docs/CAMERA.md](docs/CAMERA.md): RTSP camera watcher configuration and behaviour
 - [.github/SECURITY.md](.github/SECURITY.md): security policy and vulnerability reporting
 - [CHANGELOG.md](CHANGELOG.md): release history
 

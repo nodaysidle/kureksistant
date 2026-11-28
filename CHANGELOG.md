@@ -7,6 +7,8 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-11-28
+
 ### Added
 - **Camera watcher (`core/camera_watcher.py`):** watches a local RTSP camera for vehicles entering the region of interest, archives timestamped snapshots to the PC and Android, and sends alerts to Kurek Remote through the Android `CameraAlertService`.
 - **Camera watcher precision:** fewer false positives, from class-agnostic NMS, geometry and exclusion-zone filters, parked-vehicle memory and directional entry checks.
@@ -19,6 +21,7 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 - **Website and file-manager aliases on Linux (`actions/open_app.py`):** netflix, instagram and tiktok open their URL in the default browser, and safari opens the default browser. explorer, file explorer and finder open the home folder with `xdg-open`, and "task manager" opens btop, instead of pointing at Firefox and Nautilus, which may not be installed.
 - **CI runs on `ubuntu-24.04` (`.github/workflows/ci.yml`):** the PortAudio package on Ubuntu 26.04 has a PulseAudio backend that fails at import when no audio server runs, which stopped test collection on `ubuntu-latest`.
 - **Knowledge vault tool reads the current vault (`actions/vault_knowledge.py`, `core/context.py`):** `vault_knowledge` now defaults to `~/dev/nodaysidle/nodaysidle-vault` instead of the archived `nodaysidle-knowledge`. The project overview is `wiki/hot.md` (then `wiki/index.md`), note names match case-insensitively ("cascade v3" finds `Cascade-V3`), and `read` and `search` only touch `wiki/` (minus `wiki/meta`) and `inbox/`, never `plans/`, `graft/`, `tools/` or hidden folders. The X / social-media promo notes are gone from the tool text and the system prompt block, since the new vault does not have them.
+- **Vault captures commit themselves (`actions/vault_knowledge.py`):** `add_inbox` commits only the new `inbox/` file (path-limited, hooks on) when the vault is a git repo, so the vault no longer reports an uncommitted capture at the end of every session. The reply says whether the commit succeeded; if it fails or times out, the file stays on disk and the reply says it is uncommitted.
 
 ### Fixed
 - **"Open btop" and "open htop" (`actions/open_app.py`):** they were started without a terminal, so nothing appeared while Kurek reported success. A terminal program that is not installed now reports failure.

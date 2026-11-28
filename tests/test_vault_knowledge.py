@@ -1,7 +1,9 @@
 """Vault knowledge path safety, short-query search, and resolver hygiene."""
 from __future__ import annotations
 
+import re
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -226,3 +228,85 @@ def test_search_skips_missing_folders(vault_tmp: Path, monkeypatch: pytest.Monke
 def test_search_finds_inbox_capture(vault_tmp: Path) -> None:
     vault_knowledge({"action": "add_inbox", "title": "Idea", "content": "pangolin thoughts"})
     assert "inbox/" in vault_knowledge({"action": "search", "query": "pangolin"})
+
+
+# --- add_inbox commits its own capture ----------------------------------------
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=True).stdout
+
+
+@pytest.fixture()
+def git_vault(vault_tmp: Path) -> Path:
+    _git(vault_tmp, "init", "-q")
+    _git(vault_tmp, "config", "user.name", "test")
+    _git(vault_tmp, "config", "user.email", "test@example.invalid")
+    _git(vault_tmp, "config", "commit.gpgsign", "false")
+    _git(vault_tmp, "config", "core.hooksPath", ".git/hooks")  # a global hooksPath must not leak into the test
+    _git(vault_tmp, "add", "-A")
+    _git(vault_tmp, "commit", "-q", "-m", "base")
+    return vault_tmp
+
+
+def _capture(title: str = "My Idea") -> tuple[str, str]:
+    from datetime import datetime
+
+    reply = vault_knowledge({"action": "add_inbox", "title": title, "content": "hello"})
+    return reply, f"inbox/{datetime.now().strftime('%Y-%m-%d')}-{re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')[:40]}.md"
+
+
+def test_add_inbox_commits_only_the_capture(git_vault: Path) -> None:
+    _write(git_vault / "wiki" / "index.md", "# Index\n\nmodified, unstaged\n")
+    _write(git_vault / "staged.md", "staged\n")
+    _git(git_vault, "add", "staged.md")
+    reply, rel = _capture()
+    assert reply == f"Saved to vault inbox and committed: {rel}"
+    assert _git(git_vault, "log", "--format=%s", "--", "inbox/").splitlines() == ["inbox: My Idea (Kurek capture)"]
+    assert _git(git_vault, "show", "--name-only", "--format=", "HEAD").split() == [rel]
+    status = _git(git_vault, "status", "--porcelain").splitlines()
+    assert sorted(status) == [" M wiki/index.md", "A  staged.md"]
+
+
+def test_add_inbox_in_clean_repo_leaves_clean_tree(git_vault: Path) -> None:
+    _capture()
+    assert _git(git_vault, "status", "--porcelain") == ""
+
+
+def test_add_inbox_without_git_repo_is_plain_success(vault_tmp: Path) -> None:
+    reply, rel = _capture()
+    assert reply == f"Successfully saved to vault inbox: {rel}"
+    assert (vault_tmp / rel).is_file()
+
+
+def test_add_inbox_failed_commit_keeps_file_and_reports(git_vault: Path) -> None:
+    hook = git_vault / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\necho 'vault-check: bad shape' >&2\necho second line >&2\nexit 1\n")
+    hook.chmod(0o755)
+    reply, rel = _capture()
+    assert (git_vault / rel).is_file()
+    assert reply == (
+        f"Saved to vault inbox: {rel}, but the commit failed (vault-check: bad shape). "
+        "The file is on disk and uncommitted."
+    )
+
+
+def test_add_inbox_commit_subject_is_one_capped_line(git_vault: Path) -> None:
+    _capture("Line one\nline two " + "x" * 200)
+    subject = _git(git_vault, "log", "-1", "--format=%s")
+    assert subject.startswith("inbox: Line one line two xxx") and subject.rstrip().endswith(" (Kurek capture)")
+    assert len(subject.strip()) <= len("inbox:  (Kurek capture)") + 60
+    assert len(_git(git_vault, "log", "-1", "--format=%B").strip().splitlines()) == 1
+
+
+@pytest.mark.parametrize("exc", [subprocess.TimeoutExpired("git", 10), FileNotFoundError("git")])
+def test_add_inbox_git_timeout_or_missing_is_a_failed_commit(
+    vault_tmp: Path, monkeypatch: pytest.MonkeyPatch, exc: Exception
+) -> None:
+    def boom(*_a, **_k):
+        raise exc
+
+    monkeypatch.setattr("actions.vault_knowledge.subprocess.run", boom)
+    reply, rel = _capture()
+    assert (vault_tmp / rel).is_file()
+    assert reply.startswith(f"Saved to vault inbox: {rel}, but the commit failed (")
+    assert reply.endswith("The file is on disk and uncommitted.")

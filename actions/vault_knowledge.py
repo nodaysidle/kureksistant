@@ -120,6 +120,25 @@ def _cap(text: str) -> str:
     return text
 
 
+def _commit_capture(vault_dir: Path, rel: str, title: str) -> str | None:
+    """Commit only `rel` in the vault's git repo. None: not a git repo. "": committed. Else: the error line."""
+    def git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(vault_dir), *args], capture_output=True, text=True, timeout=10)
+
+    try:
+        if git("rev-parse", "--is-inside-work-tree").returncode != 0:
+            return None
+        subject = " ".join(title.split())[:60] or "Voice Capture"
+        for args in (("add", "--", rel), ("commit", "-m", f"inbox: {subject} (Kurek capture)", "--", rel)):
+            res = git(*args)
+            if res.returncode != 0:
+                lines = (res.stderr.strip() or res.stdout.strip()).splitlines()
+                return (lines[0] if lines else f"git {args[0]} exited {res.returncode}")[:160]
+        return ""
+    except Exception as exc:  # timeout, git missing, ...: the capture stays on disk, uncommitted
+        return (str(exc).splitlines() or [type(exc).__name__])[0][:160] or type(exc).__name__
+
+
 def vault_knowledge(parameters: dict | None = None, **kwargs) -> str:
     params = parameters or {}
     action = (params.get("action") or "list_projects").lower().strip()
@@ -300,7 +319,13 @@ def vault_knowledge(parameters: dict | None = None, **kwargs) -> str:
             except FileExistsError:
                 n += 1
 
-        return f"Successfully saved to vault inbox: inbox/{target_file.name}"
+        rel = f"inbox/{target_file.name}"
+        err = _commit_capture(vault_dir, rel, title)
+        if err is None:
+            return f"Successfully saved to vault inbox: {rel}"
+        if not err:
+            return f"Saved to vault inbox and committed: {rel}"
+        return f"Saved to vault inbox: {rel}, but the commit failed ({err}). The file is on disk and uncommitted."
 
     return f"Unknown action: '{action}'. Supported actions: 'list_projects', 'read', 'search', 'add_inbox'."
 
