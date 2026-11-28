@@ -7,6 +7,9 @@ and this project approximates [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Jev triage on the Liquid server (`memory/config_manager.py`):** when `TYPESAFE_BASE_URL` points at `api.liquid.ai`, the client uses `LIQUID_API_KEY` and the model from `TYPESAFE_DEFAULT_MODEL` or `TYPESAFE_MODEL`. A TypeSafe key got 401 there and the SDK's default model 404, so memory proposals from speech were silently off.
+
 ## [0.2.6] - 2026-11-28
 
 ### Added

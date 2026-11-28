@@ -15,6 +15,7 @@ import pytest
 _LIVE_ENV = (
     "DEEPSEEK_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY",
     "DEEPGRAM_API_KEY", "TYPESAFE_API_KEY",
+    "LIQUID_API_KEY", "TYPESAFE_BASE_URL", "TYPESAFE_MODEL", "TYPESAFE_DEFAULT_MODEL",
 )
 
 # Import-time constants (e.g. MAX_RECORD_SECONDS) are read before fixtures run, so scrub at import too.

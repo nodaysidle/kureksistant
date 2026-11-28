@@ -1726,13 +1726,11 @@ class KurekEngine:
     def _consolidate_with_jev(self, user_prompt: str):
         """Snap-judgment triage of single conversation turn using TypeSafe Jev."""
         try:
-            import os
-            from memory.config_manager import load_api_keys
-            load_api_keys()
-            if not os.environ.get("TYPESAFE_API_KEY"):
+            from memory.config_manager import typesafe_client
+            client = typesafe_client()
+            if client is None:
                 return
-            from typesafe_sdk import TypeSafeClient, Noul, Choice, Score
-            client = TypeSafeClient()
+            from typesafe_sdk import Noul, Choice, Score
             resp = client.system_one(
                 state={"prompt": user_prompt},
                 questions={
