@@ -1,11 +1,16 @@
 """
-actions/vault_knowledge.py — NODAYSIDLE Knowledge Vault & LLM-Wiki Tool for Kurek.
+actions/vault_knowledge.py — NODAYSIDLE knowledge vault tool for Kurek (the nodaysidle-vault Obsidian vault).
 Auto-discovered by core/action_loader.py.
 
+Vault layout used: wiki/hot.md (current context and project list), wiki/index.md (catalog),
+wiki/concepts|sessions|sources|entities/<Title-Case-Name>.md, and inbox/. Only wiki/ (minus wiki/meta)
+and inbox/ count as knowledge; plans/, graft/, tools/ and hidden folders such as .raw are never read or
+searched. A vault in the old layout (wiki/MOC, briefs, artifacts, sources/index, sessions) still works.
+
 Capabilities:
-  • 'list_projects': Instant structured overview of active portfolio projects, releases, and status.
-  • 'read': Reads specific project concept notes, PRDs, architectural overviews, or social media / X promo strategies.
-  • 'search': Fast keyword search across all notes in the vault.
+  • 'list_projects': Overview of the active portfolio projects, branches, heads and releases (wiki/hot.md).
+  • 'read': Reads one note (project page, owner rule, session) by name, case-insensitive, or by vault path.
+  • 'search': Fast keyword search across the knowledge notes.
   • 'add_inbox': Captures an idea, task, or note into vault inbox (YYYY-MM-DD-slug.md).
 """
 from __future__ import annotations
@@ -37,7 +42,7 @@ def _resolve_vault_dir() -> Path | None:
 
     # 3. Expanduser fallbacks (no hardcoded absolute home paths)
     candidates = [
-        Path.home() / "dev" / "nodaysidle" / "nodaysidle-knowledge",
+        Path.home() / "dev" / "nodaysidle" / "nodaysidle-vault",
     ]
     for cand in candidates:
         if cand.exists() and cand.is_dir():
@@ -65,6 +70,56 @@ def _clean_markdown(text: str) -> str:
     return text.strip()
 
 
+# Folders that hold knowledge; the old-layout ones come last so an old vault set by env var still works.
+_NOTE_FOLDERS = (
+    "wiki/concepts", "wiki/sessions", "wiki/sources", "wiki/entities", "inbox",
+    "wiki/MOC", "briefs", "artifacts", "sources/index", "sessions",
+)
+_KNOWLEDGE_ROOTS = ("wiki", "inbox", "briefs", "artifacts", "sources", "sessions")
+_SEARCH_ROOTS = ("wiki", "inbox")
+_MAX_CHARS = 8000
+
+
+def _norm(name: str) -> str:
+    """'Cascade V3', 'cascade_v3' and 'Cascade-V3.md' all become 'cascade-v3'."""
+    return re.sub(r"[\s_-]+", "-", name.strip().lower().removesuffix(".md")).strip("-")
+
+
+def _is_knowledge_path(vault_dir: Path, path: Path) -> bool:
+    """True if the resolved path is a note inside a knowledge folder (not plans/, .raw/, wiki/meta/ ...)."""
+    try:
+        parts = path.resolve().relative_to(vault_dir.resolve()).parts
+    except ValueError:
+        return False
+    return (
+        len(parts) > 1
+        and parts[0] in _KNOWLEDGE_ROOTS
+        and not any(p.startswith(".") for p in parts)
+        and parts[:2] != ("wiki", "meta")
+    )
+
+
+def _knowledge_files(vault_dir: Path) -> list[Path]:
+    """Every .md under wiki/ (minus wiki/meta) and inbox/, skipping hidden entries and symlink escapes."""
+    out: list[Path] = []
+    for root in _SEARCH_ROOTS:
+        base = vault_dir / root
+        for dirpath, dirnames, filenames in os.walk(base):
+            at_wiki_top = Path(dirpath) == base and root == "wiki"
+            dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and not (at_wiki_top and d == "meta"))
+            out.extend(
+                Path(dirpath) / f for f in sorted(filenames)
+                if f.endswith(".md") and not f.startswith(".") and _is_knowledge_path(vault_dir, Path(dirpath) / f)
+            )
+    return out
+
+
+def _cap(text: str) -> str:
+    if len(text) > _MAX_CHARS:
+        return text[:_MAX_CHARS] + "\n\n... [Truncated for voice/context brevity. Request specific sections if needed.]"
+    return text
+
+
 def vault_knowledge(parameters: dict | None = None, **kwargs) -> str:
     params = parameters or {}
     action = (params.get("action") or "list_projects").lower().strip()
@@ -76,28 +131,28 @@ def vault_knowledge(parameters: dict | None = None, **kwargs) -> str:
     vault_dir = _resolve_vault_dir()
     if not vault_dir:
         return (
-            "Error: nodaysidle-knowledge vault directory not found. "
-            "Please ensure ~/dev/nodaysidle/nodaysidle-knowledge exists or set KUREK_VAULT_DIR."
+            "Error: NODAYSIDLE knowledge vault directory not found. "
+            "Please ensure ~/dev/nodaysidle/nodaysidle-vault exists or set KUREK_VAULT_DIR."
         )
 
     # -------------------------------------------------------------
     # Action: list_projects
     # -------------------------------------------------------------
     if action in ("list_projects", "projects", "status"):
-        moc_file = vault_dir / "wiki" / "MOC" / "moc-nodaysidle-knowledge.md"
-        if not moc_file.exists():
-            return f"Vault found at {vault_dir}, but MOC index wiki/MOC/moc-nodaysidle-knowledge.md is missing."
-
-        raw = moc_file.read_text(encoding="utf-8")
-        clean = _clean_markdown(raw)
-        return f"[NODAYSIDLE PORTFOLIO OVERVIEW from {vault_dir.name}]\n{clean}"
+        wanted = ("wiki/hot.md", "wiki/index.md", "wiki/MOC/moc-nodaysidle-knowledge.md")
+        for rel in wanted:
+            overview = vault_dir / rel
+            if overview.is_file() and _path_within_vault(vault_dir, overview):
+                clean = _clean_markdown(overview.read_text(encoding="utf-8"))
+                return f"[NODAYSIDLE PORTFOLIO OVERVIEW from {vault_dir.name}]\n{_cap(clean)}"
+        return f"Vault found at {vault_dir}, but none of {', '.join(wanted)} exists."
 
     # -------------------------------------------------------------
     # Action: read
     # -------------------------------------------------------------
     elif action == "read":
         if not note_name:
-            return "Error: note_name parameter is required when action='read' (e.g. 'kureksistant-overview' or 'x-promo-strategy')."
+            return "Error: note_name parameter is required when action='read' (e.g. 'Kureksistant' or 'Cascade-V3')."
 
         note_path = Path(note_name)
         if note_path.is_absolute() or ".." in note_path.parts:
@@ -106,38 +161,37 @@ def vault_knowledge(parameters: dict | None = None, **kwargs) -> str:
                 "absolute paths and '..' traversal are not allowed."
             )
 
-        slug = note_name.lower().replace(".md", "").strip()
+        slug = _norm(note_path.name)
         found_file: Path | None = None
 
         # 1. Exact relative path
-        candidate = vault_dir / f"{note_name}.md" if not note_name.endswith(".md") else vault_dir / note_name
-        if candidate.exists() and candidate.is_file() and _path_within_vault(vault_dir, candidate):
+        candidate = vault_dir / (note_name if note_name.endswith(".md") else f"{note_name}.md")
+        if candidate.is_file() and _is_knowledge_path(vault_dir, candidate):
             found_file = candidate
 
-        # 2. Search common subfolders
-        if not found_file:
-            search_folders = ["wiki/concepts", "wiki/MOC", "briefs", "artifacts", "sources/index", "inbox", "sessions"]
-            for s_folder in search_folders:
-                c = vault_dir / s_folder / f"{slug}.md"
-                if c.exists() and c.is_file() and _path_within_vault(vault_dir, c):
-                    found_file = c
+        # 2. Exact name (case, spaces, hyphens, underscores ignored) in the note folders, in order
+        if not found_file and slug:
+            for s_folder in _NOTE_FOLDERS:
+                folder = vault_dir / s_folder
+                if not folder.is_dir():
+                    continue
+                for c in sorted(folder.glob("*.md")):
+                    if _norm(c.stem) == slug and c.is_file() and _is_knowledge_path(vault_dir, c):
+                        found_file = c
+                        break
+                if found_file:
                     break
 
-        # 3. Fuzzy search for filename across vault
-        if not found_file:
-            for p in vault_dir.rglob("*.md"):
-                if p.name.startswith("."):
-                    continue
-                if slug in p.stem.lower() and _path_within_vault(vault_dir, p):
-                    found_file = p
-                    break
+        # 3. Contains-match on the file name, knowledge folders only; shortest name first
+        if not found_file and slug:
+            hits = [p for p in _knowledge_files(vault_dir) if slug in _norm(p.stem)]
+            if hits:
+                found_file = min(hits, key=lambda p: len(p.stem))
 
         if not found_file:
             # Suggest matching notes
-            matches = [
-                p.stem for p in vault_dir.rglob("*.md")
-                if not p.name.startswith(".") and any(w in p.stem.lower() for w in slug.split("-"))
-            ][:5]
+            words = [w for w in slug.split("-") if len(w) > 2]
+            matches = [p.stem for p in _knowledge_files(vault_dir) if any(w in _norm(p.stem) for w in words)][:5]
             suggestion = f" Matching candidates: {', '.join(matches)}" if matches else ""
             return f"Note '{note_name}' not found in {vault_dir.name}.{suggestion}"
 
@@ -153,11 +207,7 @@ def vault_knowledge(parameters: dict | None = None, **kwargs) -> str:
         cleaned = _clean_markdown(text)
         rel_path = found_resolved.relative_to(vault_resolved)
 
-        # Cap length if excessively large
-        if len(cleaned) > 8000:
-            cleaned = cleaned[:8000] + "\n\n... [Truncated for voice/context brevity. Request specific sections if needed.]"
-
-        return f"[VAULT NOTE: {rel_path}]\n{cleaned}"
+        return f"[VAULT NOTE: {rel_path}]\n{_cap(cleaned)}"
 
     # -------------------------------------------------------------
     # Action: search
@@ -168,7 +218,8 @@ def vault_knowledge(parameters: dict | None = None, **kwargs) -> str:
 
         results = []
         # Prefer fast ripgrep if available
-        if shutil.which("rg"):
+        roots = [r for r in _SEARCH_ROOTS if (vault_dir / r).is_dir()]
+        if roots and shutil.which("rg"):
             try:
                 cmd = [
                     "rg",
@@ -176,18 +227,18 @@ def vault_knowledge(parameters: dict | None = None, **kwargs) -> str:
                     "-i",
                     "--max-count", "3",
                     "--glob", "!.*",
-                    "--glob", "!_audit/*",
+                    "--glob", "!wiki/meta/**",  # relative to cwd=vault_dir
                     "-e", query,  # after -e, a query starting with "-" is text, never an option
-                    str(vault_dir),
+                    *roots,
                 ]
-                res = subprocess.run(cmd, capture_output=True, text=True, timeout=3.0)
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=3.0, cwd=vault_dir)
                 if res.returncode == 0 and res.stdout.strip():
                     lines = res.stdout.strip().splitlines()[:15]
                     formatted_matches = []
                     for line in lines:
                         if ":" in line:
                             path_str, text_str = line.split(":", 1)
-                            rel = Path(path_str).relative_to(vault_dir)
+                            rel = Path(path_str)
                             formatted_matches.append(f"• [{rel}]: {text_str.strip()[:140]}")
                     if formatted_matches:
                         return f"[VAULT SEARCH: '{query}'] Found {len(formatted_matches)} occurrences:\n" + "\n".join(formatted_matches)
@@ -200,9 +251,7 @@ def vault_knowledge(parameters: dict | None = None, **kwargs) -> str:
         if not words:
             return f"No notes found matching '{query}' in vault {vault_dir.name}."
 
-        for p in vault_dir.rglob("*.md"):
-            if any(part.startswith(".") for part in p.parts):
-                continue
+        for p in _knowledge_files(vault_dir):
             try:
                 content_lower = p.read_text(encoding="utf-8").lower()
                 if all(w in content_lower for w in words):
@@ -259,9 +308,9 @@ def vault_knowledge(parameters: dict | None = None, **kwargs) -> str:
 TOOL = {
     "name": "vault_knowledge",
     "description": (
-        "Interacts with the nodaysidle-knowledge llm-wiki and Obsidian vault. "
-        "Allows searching project documentation, reading concept notes (architecture, PRD, status, roadmaps), "
-        "listing active portfolio projects, reading social media / X promotion strategies, "
+        "Interacts with the NODAYSIDLE knowledge vault (Obsidian llm-wiki). "
+        "Allows searching project documentation, reading project notes (architecture, status, roadmaps, owner rules), "
+        "listing active portfolio projects with their branches and releases, "
         "and capturing ideas into the vault inbox."
     ),
     "parameters": {
@@ -280,8 +329,8 @@ TOOL = {
                 "type": "STRING",
                 "description": (
                     "Name or slug of the note to read when action='read' "
-                    "(e.g. 'kureksistant-overview', 'cascade-v3-overview', 'nodaysrammar-overview', "
-                    "'x-promo-strategy-2026-10-12', 'moc-x-promo', 'nodaysidle-sonora-overview', 'x-promo-strategy')."
+                    "(e.g. 'Kureksistant', 'Cascade-V3', 'Reverseuno', 'Nodaysidle-Ecosystem-Overview'). "
+                    "Case, spaces and hyphens do not matter."
                 ),
             },
             "query": {

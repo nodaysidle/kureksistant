@@ -61,10 +61,9 @@ def build_messages(
         sys_prompt += f"\n\n{rules_block}"
     sys_prompt += (
         "\n\n[NODAYSIDLE PORTFOLIO & KNOWLEDGE VAULT]\n"
-        "Vault: nodaysidle-knowledge (Obsidian llm-wiki)\n"
+        "Vault: nodaysidle-vault (Obsidian llm-wiki)\n"
         f"The user's projects (git repos in ~/dev/nodaysidle): {', '.join(project_names()) or 'none found'}.\n"
-        "Social Media / X Strategy: wiki/concepts/x-promo-strategy.md, moc-x-promo.md, reel-clip-workflow.md.\n"
-        "Whenever asked about portfolio projects, roadmap, what must be done, what is done, or social media strategy, ALWAYS call vault_knowledge(action='read'|'list_projects'|'search') to retrieve ground truth."
+        "Whenever asked about portfolio projects, roadmap, what must be done, or what is done, ALWAYS call vault_knowledge(action='read'|'list_projects'|'search') to retrieve ground truth."
     )
     mem_parts = [reference.prompt_block(), ledger.prompt_block(reference.MEMORY_FILE_MAX_CHARS)]
     if mem_block := "\n\n".join(p for p in mem_parts if p).strip():
