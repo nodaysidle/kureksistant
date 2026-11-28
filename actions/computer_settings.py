@@ -28,6 +28,7 @@ except ImportError:
 from core import confirm
 from core.undo import push_undo
 from actions import _wtype
+from actions._hypr import hypr_dispatch
 
 _OS = platform.system()  # "Darwin" | "Linux"
 
@@ -179,11 +180,15 @@ def brightness_down():
         if res.returncode != 0:
             raise RuntimeError(f"brightnessctl failed: {(res.stderr or '').strip()}")
 
+def _hypr_close_active() -> None:
+    if not hypr_dispatch("hl.dsp.window.close()", ["killactive"]):
+        raise RuntimeError("Hyprland did not accept the close-window request")
+
 def close_app():
     if _OS == "Darwin":
         _hk("command", "q")
     elif _OS == "Linux" and _is_hyprland():
-        subprocess.run(["hyprctl", "dispatch", "killactive"], capture_output=True, timeout=10)
+        _hypr_close_active()
     else:
         _hk("alt", "f4")
 
@@ -193,7 +198,7 @@ def close_window():
     if _OS == "Darwin":
         _hk("command", "w")
     elif _OS == "Linux" and _is_hyprland():
-        subprocess.run(["hyprctl", "dispatch", "killactive"], capture_output=True, timeout=10)
+        _hypr_close_active()
     else:
         _hk("ctrl", "w")
 
@@ -214,11 +219,13 @@ def _hypr_toggle_fullscreen() -> None:
         is_full = state is True or (isinstance(state, int)
                                     and not isinstance(state, bool) and state >= 2)
         target = "0" if is_full else "2"
-        subprocess.run(["hyprctl", "dispatch", "fullscreenstate", target, "-1"],
-                       capture_output=True, timeout=2.0)
     except Exception as e:
         print(f"[computer_settings] Hyprland fullscreen toggle failed: {e}")
         _key("f11")
+        return
+    if not hypr_dispatch(f"hl.dsp.window.fullscreen_state({{ internal = {target}, client = -1 }})",
+                         ["fullscreenstate", target, "-1"]):
+        raise RuntimeError("Hyprland did not accept the fullscreen request")
 
 def full_screen():
     if _OS == "Darwin":
@@ -239,7 +246,8 @@ def maximize_window():
             'using {control down, command down}'],
             capture_output=True, timeout=10)
     elif _OS == "Linux" and _is_hyprland():
-        subprocess.run(["hyprctl", "dispatch", "fullscreen", "1"], capture_output=True, timeout=10)
+        if not hypr_dispatch('hl.dsp.window.fullscreen({ mode = "maximized" })', ["fullscreen", "1"]):
+            raise RuntimeError("Hyprland did not accept the maximize request")
     else:
         try:
             subprocess.run(["wmctrl", "-r", ":ACTIVE:", "-b", "add,maximized_vert,maximized_horz"],
@@ -267,11 +275,12 @@ def _hypr_snap_half(side: str) -> bool:
         half = width // 2
         x = int(mon.get("x", 0)) + rl + (half if side == "right" else 0)
         y = int(mon.get("y", 0)) + rt
-        batch = (f"dispatch setfloating active ; "
-                 f"dispatch resizeactive exact {half} {height} ; "
-                 f"dispatch moveactive exact {x} {y}")
-        subprocess.run(["hyprctl", "--batch", batch], capture_output=True, timeout=2.0)
-        return True
+        # One dispatch per step: `--batch` replies cannot be told apart per command.
+        return (hypr_dispatch('hl.dsp.window.float({ action = "set" })', ["setfloating", "active"])
+                and hypr_dispatch(f"hl.dsp.window.resize({{ x = {half}, y = {height} }})",
+                                  ["resizeactive", "exact", str(half), str(height)])
+                and hypr_dispatch(f"hl.dsp.window.move({{ x = {x}, y = {y} }})",
+                                  ["moveactive", "exact", str(x), str(y)]))
     except Exception as e:
         print(f"[computer_settings] Hyprland snap failed: {e}")
         return False
@@ -285,7 +294,8 @@ def snap_left():
             pass
         _hk("ctrl", "option", "left")
     elif _OS == "Linux" and _is_hyprland():
-        _hypr_snap_half("left")
+        if not _hypr_snap_half("left"):
+            raise RuntimeError("Hyprland did not accept the snap-left request")
     else:  # Linux
         try:
             subprocess.run(["wmctrl", "-r", ":ACTIVE:", "-e", "0,0,0,960,1080"],
@@ -301,7 +311,8 @@ def snap_right():
             pass
         _hk("ctrl", "option", "right")
     elif _OS == "Linux" and _is_hyprland():
-        _hypr_snap_half("right")
+        if not _hypr_snap_half("right"):
+            raise RuntimeError("Hyprland did not accept the snap-right request")
     else:  # Linux
         try:
             subprocess.run(["wmctrl", "-r", ":ACTIVE:", "-e", "0,960,0,960,1080"],
@@ -313,7 +324,8 @@ def switch_window():
     if _OS == "Darwin":
         _hk("command", "tab")
     elif _OS == "Linux" and _is_hyprland():
-        subprocess.run(["hyprctl", "dispatch", "cyclenext"], capture_output=True, timeout=10)
+        if not hypr_dispatch("hl.dsp.window.cycle_next()", ["cyclenext"]):
+            raise RuntimeError("Hyprland did not accept the switch-window request")
     else:
         _hk("alt", "tab")
 
@@ -325,8 +337,8 @@ def open_task_manager():
     if _OS == "Darwin":
         subprocess.Popen(["open", "-a", "Activity Monitor"])
     else:
-        # Ghostty is the user's terminal; the rest are fallbacks
-        for term in ["ghostty", "herdr", "alacritty", "kitty", "foot"]:
+        # xdg-terminal-exec picks the user's default terminal; the rest are fallbacks
+        for term in ["xdg-terminal-exec", "monstar", "ghostty", "alacritty", "kitty", "foot"]:
             if shutil.which(term):
                 for mon in ["btop", "htop"]:
                     if shutil.which(mon):
@@ -516,7 +528,8 @@ def sleep_display():
     if _OS == "Darwin":
         subprocess.run(["pmset", "displaysleepnow"], capture_output=True, timeout=10)
     elif _OS == "Linux" and _is_hyprland():
-        subprocess.run(["hyprctl", "dispatch", "dpms", "off"], capture_output=True, timeout=10)
+        if not hypr_dispatch('hl.dsp.dpms({ action = "disable" })', ["dpms", "off"]):
+            raise RuntimeError("Hyprland did not accept the screen-off request")
     else:
         subprocess.run(["xset", "dpms", "force", "off"], capture_output=True, timeout=10)
 
